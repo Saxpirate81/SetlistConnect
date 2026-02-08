@@ -268,6 +268,8 @@ function App() {
   } | null>(null)
   const [songFormError, setSongFormError] = useState('')
   const [docFormError, setDocFormError] = useState('')
+  const [loginPhase, setLoginPhase] = useState<'login' | 'transition' | 'app'>('login')
+  const loginTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     const standaloneMatch = window.matchMedia('(display-mode: standalone)').matches
@@ -635,19 +637,38 @@ function App() {
 
   const handleLogin = () => {
     if (loginInput === ADMIN_PASSWORD) {
-      setRole('admin')
-      localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()))
+      if (loginTimerRef.current) {
+        window.clearTimeout(loginTimerRef.current)
+      }
+      setLoginPhase('transition')
+      loginTimerRef.current = window.setTimeout(() => {
+        setRole('admin')
+        setLoginPhase('app')
+        localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()))
+      }, 300)
       return
     }
     if (loginInput === USER_PASSWORD) {
-      setRole('user')
-      localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()))
+      if (loginTimerRef.current) {
+        window.clearTimeout(loginTimerRef.current)
+      }
+      setLoginPhase('transition')
+      loginTimerRef.current = window.setTimeout(() => {
+        setRole('user')
+        setLoginPhase('app')
+        localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()))
+      }, 300)
       return
     }
   }
 
   const handleLogout = () => {
+    if (loginTimerRef.current) {
+      window.clearTimeout(loginTimerRef.current)
+      loginTimerRef.current = null
+    }
     setRole(null)
+    setLoginPhase('login')
     setLoginInput('')
     localStorage.removeItem(LAST_ACTIVE_KEY)
   }
@@ -2077,6 +2098,21 @@ function App() {
     }
   }, [supabase])
 
+  const loadNowPlaying = useCallback(async () => {
+    if (!supabase) return
+    const { data, error } = await supabase.from('SetlistGigNowPlaying').select('*')
+    if (error) {
+      setSupabaseError(error.message)
+      return
+    }
+    const nowPlayingMap =
+      data?.reduce<Record<string, string | null>>((acc, row) => {
+        acc[row.gig_id] = row.song_id ?? null
+        return acc
+      }, {}) ?? {}
+    setNowPlayingByGig(nowPlayingMap)
+  }, [supabase])
+
   const addSongToLibrary = () => {
     const title = pendingSpecialSong.trim()
     if (!title) return
@@ -2136,7 +2172,7 @@ function App() {
             <h1 className="text-lg font-semibold text-white">Gig Center</h1>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-300">
-            {installPrompt && !isInstalled && (
+            {screen === 'setlists' && installPrompt && !isInstalled && (
               <button
                 className="min-w-[110px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                 onClick={handleInstallClick}
@@ -2193,32 +2229,40 @@ function App() {
           }}
         >
           <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-4 text-base font-semibold">
-            <span className="whitespace-nowrap text-base">Up next</span>
-            <span className="flex-1 text-center text-lg font-semibold">
-              {appState.songs.find((song) => song.id === appState.currentSongId)?.title}
-            </span>
-            <span className="text-sm">
-              {getGigKeysText(
-                appState.currentSongId,
-                currentSetlist?.id ?? activeGigId,
-              ) || 'Key: —'}
-            </span>
-            <button
-              className="rounded-full bg-slate-950/30 px-4 py-2 text-sm"
-              onClick={(event) => {
-                event.stopPropagation()
-                if (appState.currentSongId) {
-                  logPlayedSong(appState.currentSongId)
-                }
-                if (isAdmin) {
-                  setGigCurrentSong(null)
-                } else if (appState.currentSongId) {
-                  setDismissedUpNextId(appState.currentSongId)
-                }
-              }}
-            >
-              Clear
-            </button>
+            <div className="pointer-events-none flex flex-1 items-center justify-between gap-3">
+              <span className="whitespace-nowrap text-base">Up next</span>
+              <span className="flex-1 text-center text-lg font-semibold">
+                {appState.songs.find((song) => song.id === appState.currentSongId)?.title}
+              </span>
+              <span className="text-sm">
+                {getGigKeysText(
+                  appState.currentSongId,
+                  currentSetlist?.id ?? activeGigId,
+                ) || 'Key: —'}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="pointer-events-none inline-flex items-center gap-1 rounded-full bg-slate-950/30 px-3 py-2 text-xs text-slate-950/90 sm:hidden">
+                <span className="text-base">↔</span>
+                <span>Swipe</span>
+              </div>
+              <button
+                className="relative z-10 hidden rounded-full bg-slate-950/30 px-4 py-2 text-sm sm:inline-flex"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  if (appState.currentSongId) {
+                    logPlayedSong(appState.currentSongId)
+                  }
+                  if (isAdmin) {
+                    setGigCurrentSong(null)
+                  } else if (appState.currentSongId) {
+                    setDismissedUpNextId(appState.currentSongId)
+                  }
+                }}
+              >
+                Clear
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -2256,6 +2300,15 @@ function App() {
     if (!isSupabaseEnabled || !supabase) return
     void loadSupabaseData()
   }, [loadSupabaseData])
+
+  useEffect(() => {
+    if (!isSupabaseEnabled || !supabase) return
+    void loadNowPlaying()
+    const interval = window.setInterval(() => {
+      void loadNowPlaying()
+    }, 4000)
+    return () => window.clearInterval(interval)
+  }, [loadNowPlaying])
 
   useEffect(() => {
     if (!editingSongId) return
@@ -2447,9 +2500,13 @@ function App() {
     editingSongId,
   ])
 
-  if (!role) {
+  if (!role && loginPhase !== 'app') {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
+      <div
+        className={`min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white transition-opacity duration-300 ${
+          loginPhase === 'transition' ? 'pointer-events-none opacity-0' : 'opacity-100'
+        }`}
+      >
         <div className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
           <p className="text-sm uppercase tracking-[0.3em] text-teal-300/80">
             Setlist Connect
@@ -2492,7 +2549,7 @@ function App() {
   }
 
   return (
-    <div className="relative min-h-screen bg-slate-950 text-white">
+    <div className="relative min-h-screen bg-slate-950 text-white fade-in">
       {gigMode && (
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-slate-950 via-yellow-900/50 to-slate-950" />
       )}
@@ -2516,36 +2573,38 @@ function App() {
 
       {appState.instrument === null && role !== 'admin' && (
         <div
-          className="fixed inset-0 z-40 flex items-center bg-slate-950/80"
+          className="fixed inset-0 z-[80] flex items-center bg-slate-950/80 py-6"
           onClick={() => setAppState((prev) => ({ ...prev, instrument: 'All' }))}
         >
           <div
-            className="mx-auto w-full max-w-md rounded-t-3xl bg-slate-900 p-6 sm:rounded-3xl"
+            className="mx-auto w-full max-w-md max-h-[85vh] overflow-hidden rounded-t-3xl bg-slate-900 sm:rounded-3xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <h2 className="text-lg font-semibold">Select your instrument</h2>
-            <p className="mt-1 text-sm text-slate-300">
-              Charts and lead sheets will filter to your part.
-            </p>
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              {INSTRUMENTS.map((instrument) => (
-                <button
-                  key={instrument}
-                  className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm"
-                  onClick={() =>
-                    setAppState((prev) => ({ ...prev, instrument }))
-                  }
-                >
-                  {instrument}
-                </button>
-              ))}
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
+              <h2 className="text-lg font-semibold">Select your instrument</h2>
+              <p className="mt-1 text-sm text-slate-300">
+                Charts and lead sheets will filter to your part.
+              </p>
             </div>
-            <button
-              className="mt-4 w-full rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
-              onClick={() => setAppState((prev) => ({ ...prev, instrument: 'All' }))}
-            >
-              Skip for now
-            </button>
+            <div className="max-h-[calc(85vh-92px)] overflow-auto px-6 pb-6">
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {INSTRUMENTS.map((instrument) => (
+                  <button
+                    key={instrument}
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm"
+                    onClick={() => setAppState((prev) => ({ ...prev, instrument }))}
+                  >
+                    {instrument}
+                  </button>
+                ))}
+              </div>
+              <button
+                className="mt-4 w-full rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
+                onClick={() => setAppState((prev) => ({ ...prev, instrument: 'All' }))}
+              >
+                Skip for now
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -2593,7 +2652,22 @@ function App() {
                           </span>
                         )}
                       </div>
-                      <div className="h-7 w-7" />
+                      {setlist.venueAddress ? (
+                        <a
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
+                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                            setlist.venueAddress,
+                          )}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Open address"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          📍
+                        </a>
+                      ) : (
+                        <div className="h-7 w-7" />
+                      )}
                     </div>
                     {isAdmin && (
                       <div className="mt-3 flex items-center gap-3 text-xs">
@@ -3993,52 +4067,56 @@ function App() {
 
       {showInstrumentPrompt && pendingDocSongId && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 px-4"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
           onClick={() => {
             setShowInstrumentPrompt(false)
             setPendingDocSongId(null)
           }}
         >
           <div
-            className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900 p-5"
+            className="w-full max-w-sm max-h-[80vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold">Choose instrument</h3>
-            <p className="mt-1 text-sm text-slate-300">
-              Pick your instrument to open the right chart or lyrics.
-            </p>
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              {INSTRUMENTS.map((instrument) => (
-                <button
-                  key={instrument}
-                  className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm"
-                  onClick={() => {
-                    setAppState((prev) => ({ ...prev, instrument }))
-                    setShowInstrumentPrompt(false)
-                    setDocModalSongId(pendingDocSongId)
-                    setPendingDocSongId(null)
-                  }}
-                >
-                  {instrument}
-                </button>
-              ))}
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Choose instrument</h3>
+              <p className="mt-1 text-sm text-slate-300">
+                Pick your instrument to open the right chart or lyrics.
+              </p>
             </div>
-            <button
-              className="mt-4 w-full rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
-              onClick={() => {
-                setShowInstrumentPrompt(false)
-                setPendingDocSongId(null)
-              }}
-            >
-              Cancel
-            </button>
+            <div className="max-h-[calc(80vh-92px)] overflow-auto px-5 pb-5">
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {INSTRUMENTS.map((instrument) => (
+                  <button
+                    key={instrument}
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm"
+                    onClick={() => {
+                      setAppState((prev) => ({ ...prev, instrument }))
+                      setShowInstrumentPrompt(false)
+                      setDocModalSongId(pendingDocSongId)
+                      setPendingDocSongId(null)
+                    }}
+                  >
+                    {instrument}
+                  </button>
+                ))}
+              </div>
+              <button
+                className="mt-4 w-full rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
+                onClick={() => {
+                  setShowInstrumentPrompt(false)
+                  setPendingDocSongId(null)
+                }}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {docModalSongId && (
         <div
-          className="fixed inset-0 z-40 flex items-center bg-slate-950/80"
+          className="fixed inset-0 z-[80] flex items-center bg-slate-950/80 py-6"
           onClick={() => {
             setDocModalSongId(null)
             setDocModalContent(null)
@@ -4120,14 +4198,14 @@ function App() {
 
       {audioModalUrl && (
         <div
-          className="fixed inset-0 z-40 flex items-center bg-slate-950/80"
+          className="fixed inset-0 z-[80] flex items-center bg-slate-950/80 py-6"
           onClick={() => setAudioModalUrl(null)}
         >
           <div
-            className="mx-auto w-full max-w-md rounded-3xl bg-slate-900 p-6"
+            className="mx-auto w-full max-w-md max-h-[80vh] overflow-hidden rounded-3xl bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">{audioModalLabel}</h3>
               <button
                 className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
@@ -4136,48 +4214,50 @@ function App() {
                 Close
               </button>
             </div>
-            <div className="mt-4 w-full overflow-hidden rounded-2xl border border-white/10 bg-black">
-              {isSpotifyUrl(audioModalUrl) ? (
-                <iframe
-                  className="h-20 w-full"
-                  src={getSpotifyEmbedUrl(audioModalUrl)}
-                  title="Spotify player"
-                  allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                  loading="lazy"
-                />
-              ) : isAudioFileUrl(audioModalUrl) ? (
-                <div className="bg-slate-950/60 p-4">
-                  <audio className="w-full" controls src={audioModalUrl} />
-                </div>
-              ) : (
-                <div className="aspect-video w-full">
+            <div className="max-h-[calc(80vh-72px)] overflow-auto px-6 pb-6">
+              <div className="mt-4 w-full overflow-hidden rounded-2xl border border-white/10 bg-black">
+                {isSpotifyUrl(audioModalUrl) ? (
                   <iframe
-                    className="h-full w-full"
-                    src={getYouTubeEmbedUrl(audioModalUrl)}
-                    title="YouTube audio player"
-                    allow="autoplay; encrypted-media"
-                    allowFullScreen
+                    className="h-20 w-full"
+                    src={getSpotifyEmbedUrl(audioModalUrl)}
+                    title="Spotify player"
+                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                    loading="lazy"
                   />
-                </div>
-              )}
+                ) : isAudioFileUrl(audioModalUrl) ? (
+                  <div className="bg-slate-950/60 p-4">
+                    <audio className="w-full" controls src={audioModalUrl} />
+                  </div>
+                ) : (
+                  <div className="aspect-video w-full">
+                    <iframe
+                      className="h-full w-full"
+                      src={getYouTubeEmbedUrl(audioModalUrl)}
+                      title="YouTube audio player"
+                      allow="autoplay; encrypted-media"
+                      allowFullScreen
+                    />
+                  </div>
+                )}
+              </div>
+              <p className="mt-3 text-xs text-slate-400">
+                Audio opens inside the app for practice.
+              </p>
             </div>
-            <p className="mt-3 text-xs text-slate-400">
-              Audio opens inside the app for practice.
-            </p>
           </div>
         </div>
       )}
 
       {isAdmin && editingMusicianId && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 px-4"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
           onClick={cancelEditMusician}
         >
           <div
             className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Musician</p>
                 <h3 className="text-lg font-semibold">Edit musician</h3>
@@ -4309,30 +4389,34 @@ function App() {
 
       {showDeleteGigConfirm && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 px-4"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
           onClick={cancelDeleteGig}
         >
           <div
-            className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900 p-5"
+            className="w-full max-w-sm max-h-[80vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold">Delete this gig?</h3>
-            <p className="mt-2 text-sm text-slate-300">
-              This will remove the gig, assignments, and special requests.
-            </p>
-            <div className="mt-4 flex items-center gap-2">
-              <button
-                className="flex-1 rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-200"
-                onClick={cancelDeleteGig}
-              >
-                Cancel
-              </button>
-              <button
-                className="flex-1 rounded-xl bg-red-500/80 px-3 py-2 text-sm font-semibold text-white"
-                onClick={confirmDeleteGig}
-              >
-                Delete gig
-              </button>
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Delete this gig?</h3>
+            </div>
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-5">
+              <p className="mt-2 text-sm text-slate-300">
+                This will remove the gig, assignments, and special requests.
+              </p>
+              <div className="mt-4 flex items-center gap-2">
+                <button
+                  className="flex-1 rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-200"
+                  onClick={cancelDeleteGig}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="flex-1 rounded-xl bg-red-500/80 px-3 py-2 text-sm font-semibold text-white"
+                  onClick={confirmDeleteGig}
+                >
+                  Delete gig
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -4340,25 +4424,29 @@ function App() {
 
       {showSingerWarning && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 px-4"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
           onClick={() => setShowSingerWarning(false)}
         >
           <div
-            className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900 p-5"
+            className="w-full max-w-sm max-h-[80vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold">Assign musicians first</h3>
-            <p className="mt-2 text-sm text-slate-300">
-              Add vocalists to this gig and mark the Musicians section complete before
-              assigning singers and keys to songs.
-            </p>
-            <div className="mt-4">
-              <button
-                className="w-full rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                onClick={() => setShowSingerWarning(false)}
-              >
-                Got it
-              </button>
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Assign musicians first</h3>
+            </div>
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-5">
+              <p className="mt-2 text-sm text-slate-300">
+                Add vocalists to this gig and mark the Musicians section complete before
+                assigning singers and keys to songs.
+              </p>
+              <div className="mt-4">
+                <button
+                  className="w-full rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                  onClick={() => setShowSingerWarning(false)}
+                >
+                  Got it
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -4366,14 +4454,14 @@ function App() {
 
       {editingSongId && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 px-4"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
           onClick={cancelEditSong}
         >
           <div
             className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Song</p>
                 <h3 className="text-lg font-semibold">Edit song</h3>
@@ -4590,14 +4678,14 @@ function App() {
 
       {isAdmin && activeBuildPanel && currentSetlist && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 px-4"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
           onClick={() => setActiveBuildPanel(null)}
         >
           <div
-            className={`w-full max-w-3xl overflow-hidden rounded-3xl border border-white/10 bg-slate-900 bg-gradient-to-br ${buildPanelGradient}`}
+            className={`w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900 bg-gradient-to-br ${buildPanelGradient}`}
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">
                 {activeBuildPanel === 'musicians'
                   ? 'Assign Musicians'
@@ -4611,7 +4699,7 @@ function App() {
                           ? 'Latin Set'
                           : 'Dance Set'}
               </h3>
-              <div className="flex flex-col items-end gap-2">
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                   <button
                     className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
@@ -4657,7 +4745,7 @@ function App() {
                 </div>
               </div>
             </div>
-            <div className="max-h-[75vh] overflow-auto px-5 py-4">
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 py-4">
               {gigMode && appState.currentSongId && (
                 <button
                   className="liquid-button mb-4 w-full animate-pulse rounded-2xl bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 shadow-[0_0_18px_rgba(74,222,128,0.45)]"
@@ -5613,7 +5701,7 @@ function NavButton({
 }) {
   return (
     <button
-      className={`rounded-full px-4 py-2.5 text-base font-semibold ${
+      className={`rounded-full px-4 py-3.5 text-base font-semibold ${
         active ? 'bg-teal-400/20 text-teal-200' : 'text-slate-300'
       }`}
       onClick={onClick}

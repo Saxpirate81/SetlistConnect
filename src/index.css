@@ -14,6 +14,7 @@ body {
   color: #e6edf3;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  overflow-x: hidden;
 }
 
 #root,
@@ -29,6 +30,7 @@ body {
 
 #root {
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
 button,
@@ -70,6 +72,10 @@ a:hover {
   animation: upnext-flash 4.2s ease-in-out infinite;
 }
 
+.fade-in {
+  animation: fadeIn 0.35s ease;
+}
+
 @keyframes upnext-flash {
   0%,
   100% {
@@ -99,5 +105,14 @@ a:hover {
   }
   50% {
     transform: translate(10%, 10%) rotate(-6deg);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }

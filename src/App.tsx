@@ -79,6 +79,11 @@ type Document = {
   content?: string
 }
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
+}
+
 type AppState = {
   songs: Song[]
   setlists: Setlist[]
@@ -187,6 +192,8 @@ function App() {
   const [docModalContent, setDocModalContent] = useState<Document | null>(null)
   const [pendingDocSongId, setPendingDocSongId] = useState<string | null>(null)
   const [showInstrumentPrompt, setShowInstrumentPrompt] = useState(false)
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
+  const [isInstalled, setIsInstalled] = useState(false)
   const [audioModalUrl, setAudioModalUrl] = useState<string | null>(null)
   const [audioModalLabel, setAudioModalLabel] = useState('Audio player')
   const [activeGigId, setActiveGigId] = useState(initialSetlistId)
@@ -260,6 +267,30 @@ function App() {
   } | null>(null)
   const [songFormError, setSongFormError] = useState('')
   const [docFormError, setDocFormError] = useState('')
+
+  useEffect(() => {
+    const standaloneMatch = window.matchMedia('(display-mode: standalone)').matches
+    const iosStandalone = (window.navigator as Navigator & { standalone?: boolean }).standalone
+    if (standaloneMatch || iosStandalone) {
+      setIsInstalled(true)
+    }
+
+    const handleBeforeInstall = (event: Event) => {
+      event.preventDefault()
+      setInstallPrompt(event as BeforeInstallPromptEvent)
+    }
+    const handleInstalled = () => {
+      setIsInstalled(true)
+      setInstallPrompt(null)
+    }
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall)
+    window.addEventListener('appinstalled', handleInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall)
+      window.removeEventListener('appinstalled', handleInstalled)
+    }
+  }, [])
 
   const isAdmin = role === 'admin'
 
@@ -2084,6 +2115,15 @@ function App() {
     setPendingSpecialSong('')
   }
 
+  const handleInstallClick = async () => {
+    if (!installPrompt) return
+    await installPrompt.prompt()
+    const choice = await installPrompt.userChoice
+    if (choice.outcome === 'accepted') {
+      setInstallPrompt(null)
+    }
+  }
+
   const screenHeader = (
     <div className="sticky top-0 z-[70]">
       <header className="border-b border-white/10 bg-slate-950/90 backdrop-blur-md">
@@ -2095,6 +2135,14 @@ function App() {
             <h1 className="text-lg font-semibold text-white">Gig Control Center</h1>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-300">
+            {installPrompt && !isInstalled && (
+              <button
+                className="min-w-[110px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                onClick={handleInstallClick}
+              >
+                Install App
+              </button>
+            )}
             {screen === 'builder' && (
               <button
                 className={`liquid-button rounded-full px-4 py-2 text-sm font-semibold ${

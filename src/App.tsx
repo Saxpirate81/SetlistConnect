@@ -252,6 +252,8 @@ function App() {
   const [showKeyResolveModal, setShowKeyResolveModal] = useState(false)
   const [resolveSongId, setResolveSongId] = useState<string | null>(null)
   const [showGigMusiciansModal, setShowGigMusiciansModal] = useState(false)
+  const [showSetlistModal, setShowSetlistModal] = useState(false)
+  const [showPrintPreview, setShowPrintPreview] = useState(false)
   const [activeBuildPanel, setActiveBuildPanel] = useState<
     | 'musicians'
     | 'addSongs'
@@ -640,6 +642,11 @@ function App() {
         [panel]: value,
       },
     }))
+  }
+
+  const handlePrintSetlist = () => {
+    if (!currentSetlist) return
+    setShowPrintPreview(true)
   }
 
   const logPlayedSong = (songId: string) => {
@@ -2439,7 +2446,7 @@ function App() {
   }
 
   const screenHeader = (
-    <div className="sticky top-0 z-[70]">
+    <div className="fixed top-0 left-0 right-0 z-[70]">
       <header className="border-b border-white/10 bg-slate-950/90 backdrop-blur-md">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-4">
           <div>
@@ -2546,9 +2553,10 @@ function App() {
     </div>
   )
 
-  const hasTodayGig = appState.setlists.some(
-    (setlist) => setlist.date === new Date().toISOString().slice(0, 10),
-  )
+  const todayISO = new Date().toISOString().slice(0, 10)
+  const hasTodayGig = appState.setlists.some((setlist) => setlist.date === todayISO)
+  const upcomingGigs = appState.setlists.filter((setlist) => setlist.date >= todayISO)
+  const pastGigs = appState.setlists.filter((setlist) => setlist.date < todayISO)
 
   useEffect(() => {
     if (!role) return
@@ -2767,7 +2775,9 @@ function App() {
       showDuplicateSongConfirm ||
       showAddSongModal ||
       showGigMusiciansModal ||
-      showMissingSingerWarning
+      showMissingSingerWarning ||
+      showSetlistModal ||
+      showPrintPreview
     document.body.style.overflow = hasPopup ? 'hidden' : ''
     return () => {
       document.body.style.overflow = ''
@@ -2787,6 +2797,8 @@ function App() {
     showAddSongModal,
     showGigMusiciansModal,
     showMissingSingerWarning,
+    showSetlistModal,
+    showPrintPreview,
   ])
 
   if (!role && loginPhase !== 'app') {
@@ -2843,22 +2855,29 @@ function App() {
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-slate-950 via-yellow-900/50 to-slate-950" />
       )}
       <div className="relative">
-      {screenHeader}
-      {(!isSupabaseEnabled || supabaseError) && (
-        <div className="mx-auto w-full max-w-3xl px-4 pt-3">
-          <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-200">
-            {!isSupabaseEnabled
-              ? `Supabase offline: ${
-                  supabaseEnvStatus.hasUrl ? 'URL ok' : 'missing VITE_SUPABASE_URL'
-                }, ${
-                  supabaseEnvStatus.hasAnonKey
-                    ? 'anon key ok'
-                    : 'missing VITE_SUPABASE_ANON_KEY'
-                }. Restart the dev server after updating .env.`
-              : `Supabase sync error: ${supabaseError}`}
+        {screenHeader}
+        <div
+          className={
+            appState.currentSongId && appState.currentSongId !== dismissedUpNextId
+              ? 'h-[140px]'
+              : 'h-[92px]'
+          }
+        />
+        {(!isSupabaseEnabled || supabaseError) && (
+          <div className="mx-auto w-full max-w-3xl px-4 pt-3">
+            <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-200">
+              {!isSupabaseEnabled
+                ? `Supabase offline: ${
+                    supabaseEnvStatus.hasUrl ? 'URL ok' : 'missing VITE_SUPABASE_URL'
+                  }, ${
+                    supabaseEnvStatus.hasAnonKey
+                      ? 'anon key ok'
+                      : 'missing VITE_SUPABASE_ANON_KEY'
+                  }. Restart the dev server after updating .env.`
+                : `Supabase sync error: ${supabaseError}`}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
       {appState.instrument === null && role !== 'admin' && (
         <div
@@ -2907,8 +2926,8 @@ function App() {
                 Duplicate a previous setlist, or jump straight into editing.
               </p>
               <div className="mt-4 flex flex-col gap-3">
-                {appState.setlists.map((setlist) => {
-                  const isToday = setlist.date === new Date().toISOString().slice(0, 10)
+                {upcomingGigs.map((setlist) => {
+                  const isToday = setlist.date === todayISO
                   return (
                   <div
                     key={setlist.id}
@@ -2922,12 +2941,18 @@ function App() {
                     onClick={() => {
                       setSelectedSetlistId(setlist.id)
                       setScreen('builder')
+                      if (!isAdmin) {
+                        setShowSetlistModal(true)
+                      }
                     }}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault()
                         setSelectedSetlistId(setlist.id)
                         setScreen('builder')
+                        if (!isAdmin) {
+                          setShowSetlistModal(true)
+                        }
                       }
                     }}
                   >
@@ -3014,6 +3039,81 @@ function App() {
               </div>
             </div>
 
+            <div className="rounded-3xl border border-white/10 bg-slate-900/50 p-5">
+              <h3 className="font-semibold">Past gigs</h3>
+              <p className="mt-1 text-xs text-slate-400">Tap a gig to view the setlist.</p>
+              <div className="mt-4 flex flex-col gap-3">
+                {pastGigs.map((setlist) => (
+                  <div
+                    key={setlist.id}
+                    role="button"
+                    tabIndex={0}
+                    className="rounded-2xl border border-white/10 bg-slate-950/40 p-4"
+                    onClick={() => {
+                      setSelectedSetlistId(setlist.id)
+                      setScreen('builder')
+                      if (!isAdmin) {
+                        setShowSetlistModal(true)
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        setSelectedSetlistId(setlist.id)
+                        setScreen('builder')
+                        if (!isAdmin) {
+                          setShowSetlistModal(true)
+                        }
+                      }
+                    }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="font-semibold">{setlist.gigName}</h3>
+                        <p className="text-xs text-slate-400">
+                          {formatGigDate(setlist.date)}
+                        </p>
+                      </div>
+                      {setlist.venueAddress ? (
+                        <a
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
+                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                            setlist.venueAddress,
+                          )}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Open address"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          📍
+                        </a>
+                      ) : (
+                        <div className="h-7 w-7" />
+                      )}
+                    </div>
+                    {isAdmin && (
+                      <div className="mt-3 flex items-center gap-3 text-xs">
+                        <button
+                          className="text-teal-300"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            duplicateGig(setlist.id)
+                          }}
+                        >
+                          Duplicate gig
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {pastGigs.length === 0 && (
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm text-slate-300">
+                    No past gigs yet.
+                  </div>
+                )}
+              </div>
+            </div>
+
           </section>
         )}
 
@@ -3059,7 +3159,7 @@ function App() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.3em] text-slate-400">
-                    {isAdmin ? 'Setlist' : 'Gig'}
+                    {isAdmin ? 'Setlist' : 'Gig Info'}
                   </p>
                   {isAdmin ? (
                     <div className="mt-3 flex flex-col gap-1">
@@ -3202,6 +3302,12 @@ function App() {
                   </p>
                 </div>
                 <div className="flex flex-col items-end gap-2">
+                  <button
+                    className="whitespace-nowrap rounded-full bg-teal-400/90 px-3 py-1 text-xs font-semibold text-slate-950"
+                    onClick={handlePrintSetlist}
+                  >
+                    Download setlist PDF
+                  </button>
                   {isAdmin && (
                     <button
                       className="whitespace-nowrap rounded-full border border-red-400/40 px-3 py-1 text-xs text-red-200"
@@ -3299,6 +3405,15 @@ function App() {
                   </div>
                   <span className="text-sm font-semibold">Musicians</span>
                 </button>
+                <button
+                  className="flex min-h-[96px] flex-col items-start justify-between rounded-3xl border border-white/10 bg-gradient-to-br from-emerald-500/30 via-slate-900/40 to-slate-900/60 px-4 py-4 text-left text-white shadow-[0_0_18px_rgba(15,23,42,0.35)]"
+                  onClick={() => setShowSetlistModal(true)}
+                >
+                  <div className="flex w-full items-start justify-between">
+                    <span className="text-2xl">🎶</span>
+                  </div>
+                  <span className="text-sm font-semibold">Gig Info</span>
+                </button>
               </div>
             )}
 
@@ -3383,10 +3498,10 @@ function App() {
               </div>
             )}
 
-            {!isAdmin && (
+            {false && (
             <div
               className={`rounded-3xl border p-5 ${
-                currentSetlist.date === new Date().toISOString().slice(0, 10)
+                currentSetlist?.date === new Date().toISOString().slice(0, 10)
                   ? 'border-teal-300/60 bg-teal-400/10 shadow-[0_0_24px_rgba(45,212,191,0.25)]'
                   : 'border-white/10 bg-slate-900/60'
               }`}
@@ -3417,7 +3532,7 @@ function App() {
                   <span>Info</span>
                 </div>
                 {appState.specialRequests
-                  .filter((request) => request.gigId === currentSetlist.id)
+                  .filter((request) => request.gigId === currentSetlist?.id)
                   .map((request) => {
                     const song = appState.songs.find((item) => item.id === request.songId)
                     return (
@@ -3810,184 +3925,6 @@ function App() {
               </div>
             )}
 
-            {!isAdmin && (
-            <div className="grid gap-4 md:grid-cols-3">
-              {['Dinner', 'Latin', 'Dance'].map((section) => (
-                <div
-                  key={section}
-                  className={`rounded-3xl border p-5 ${
-                    currentSetlist.date === new Date().toISOString().slice(0, 10)
-                      ? 'border-teal-300/60 bg-teal-400/10 shadow-[0_0_24px_rgba(45,212,191,0.25)]'
-                      : 'border-white/10 bg-slate-900/60'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-3 min-w-0">
-                    <h3 className="text-sm font-semibold whitespace-nowrap">{section} Set</h3>
-                    {isAdmin && (
-                      <select
-                        className="w-[170px] shrink-0 rounded-xl border border-white/10 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-200"
-                        onChange={(event) => {
-                          if (event.target.value) {
-                            importSectionFromGig(section, event.target.value)
-                            event.target.value = ''
-                          }
-                        }}
-                      >
-                        <option value="">Import Previous Gig</option>
-                        {recentGigs.map((gig) => (
-                          <option key={gig.id} value={gig.id}>
-                            {gig.gigName} · {gig.date}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Songs tagged for {section.toLowerCase()}.
-                  </p>
-                  {isAdmin && (
-                    <details className="mt-3">
-                      <summary className="inline-flex cursor-pointer items-center rounded-xl border border-white/10 px-2 py-1 text-[10px] text-slate-200">
-                        Add song
-                      </summary>
-                        {!gigMode && (
-                          <div className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950 p-2 text-[10px] text-slate-200 shadow-xl">
-                            <input
-                              className="w-full rounded-lg border border-white/10 bg-slate-900/70 px-2 py-1 text-slate-200"
-                              placeholder="Choose a song"
-                              list={`section-song-${section}`}
-                              onChange={(event) => {
-                                const value = event.currentTarget.value
-                                const match = appState.songs.find(
-                                  (song) =>
-                                    song.title.toLowerCase() === value.trim().toLowerCase(),
-                                )
-                                if (match) {
-                                  addSongToSection(section, match.title)
-                                  event.currentTarget.value = ''
-                                }
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key !== 'Enter') return
-                                event.preventDefault()
-                                const value = (event.currentTarget as HTMLInputElement).value
-                                const match = appState.songs.find(
-                                  (song) =>
-                                    song.title.toLowerCase() === value.trim().toLowerCase(),
-                                )
-                                if (match) {
-                                  addSongToSection(section, match.title)
-                                  ;(event.currentTarget as HTMLInputElement).value = ''
-                                  return
-                                }
-                                openAddSongForSection(section, value)
-                                ;(event.currentTarget as HTMLInputElement).value = ''
-                              }}
-                              onBlur={(event) => {
-                                const value = event.currentTarget.value.trim()
-                                if (!value) return
-                                const match = appState.songs.find(
-                                  (song) =>
-                                    song.title.toLowerCase() === value.toLowerCase(),
-                                )
-                                if (!match) {
-                                  openAddSongForSection(section, value)
-                                  event.currentTarget.value = ''
-                                }
-                              }}
-                            />
-                            <datalist id={`section-song-${section}`}>
-                              {appState.songs
-                                .filter((song) => song.tags.includes(section))
-                                .map((song) => (
-                                  <option key={song.id} value={song.title} />
-                                ))}
-                            </datalist>
-                          </div>
-                        )}
-                    </details>
-                  )}
-                  <div className="mt-3 space-y-2">
-                    {currentSetlist.songIds
-                      .map((songId) => appState.songs.find((song) => song.id === songId))
-                      .filter((song): song is Song => Boolean(song))
-                      .filter((song) => song.tags.includes(section))
-                      .map((song) => (
-                        <div
-                          key={song.id}
-                          className={`rounded-2xl border px-3 py-2 text-xs ${
-                            gigMode ? 'cursor-pointer' : ''
-                          } ${
-                            appState.currentSongId === song.id
-                              ? 'border-emerald-300/70 bg-emerald-400/15 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
-                              : 'border-white/10 bg-slate-950/40'
-                          }`}
-                          onClick={() => {
-                              if (gigMode) {
-                                setGigCurrentSong(song.id)
-                                return
-                              }
-                              openSingerModal(song.id)
-                          }}
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <div className="text-base font-semibold md:text-lg">
-                                {song.title}
-                              </div>
-                              <div className="text-[10px] text-slate-400">{song.artist}</div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {song.youtubeUrl && (
-                                <button
-                                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200"
-                                  onClick={() =>
-                                    openAudioForUrl(song.youtubeUrl ?? '', 'YouTube audio')
-                                  }
-                                  aria-label="Audio"
-                                  title="Audio"
-                                >
-                                  🔊
-                                </button>
-                              )}
-                              {hasDocsForSong(song.id) && (
-                                <button
-                                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200"
-                                  onClick={() => openDocsForSong(song.id)}
-                                  aria-label="Documents"
-                                  title="Documents"
-                                >
-                                  📄
-                                </button>
-                              )}
-                              {isAdmin &&
-                                !gigMode &&
-                                !buildCompletion[
-                                  section.toLowerCase() as 'dinner' | 'latin' | 'dance'
-                                ] && (
-                                <button
-                                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px] text-red-200"
-                                  onClick={() => requestRemoveSong(song.id)}
-                                  aria-label="Remove song"
-                                  title="Remove song"
-                                >
-                                  ✕
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    {currentSetlist.songIds.length === 0 && (
-                      <div className="text-xs text-slate-500">
-                        Add songs to this setlist first.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-            )}
           </section>
         )}
 
@@ -4358,7 +4295,7 @@ function App() {
             Home
           </NavButton>
           <NavButton active={screen === 'builder'} onClick={() => setScreen('builder')}>
-            {isAdmin ? 'Build' : 'Setlist'}
+            {isAdmin ? 'Build' : 'Gig Info'}
           </NavButton>
           <NavButton active={screen === 'song'} onClick={() => setScreen('song')}>
             Songs
@@ -4370,6 +4307,219 @@ function App() {
           )}
         </div>
       </nav>
+
+      {currentSetlist && (
+        <div id="printable-setlist" className="print-only">
+          <div className="print-container">
+            <div className="print-header">
+              <div>
+                <div className="print-title">{currentSetlist.gigName}</div>
+                <div className="print-subtitle">{formatGigDate(currentSetlist.date)}</div>
+                {currentSetlist.venueAddress && (
+                  <div className="print-subtitle">{currentSetlist.venueAddress}</div>
+                )}
+              </div>
+              <div className="print-badge">Setlist</div>
+            </div>
+
+            <div className="print-layout">
+              <div className="print-section-box print-special">
+                <div className="print-section-title">Special Requests</div>
+                <div className="print-list">
+                  {appState.specialRequests
+                    .filter((request) => request.gigId === currentSetlist.id)
+                    .map((request) => {
+                      const song = appState.songs.find((item) => item.id === request.songId)
+                      return (
+                      <div key={request.id} className="print-row">
+                        <div className="print-row-title">
+                          {(request.externalAudioUrl || song?.youtubeUrl) ? (
+                            <a
+                              className="print-link"
+                              href={request.externalAudioUrl ?? song?.youtubeUrl ?? ''}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {request.songTitle}
+                            </a>
+                          ) : (
+                            request.songTitle
+                          )}{' '}
+                          {request.djOnly ? <span className="print-pill">DJ Only</span> : null}
+                        </div>
+                        <div className="print-row-subtitle">
+                          {request.type} ·{' '}
+                          {request.djOnly
+                            ? 'DJ'
+                            : request.singers.length
+                              ? request.singers.join(', ')
+                              : 'No singers'}{' '}
+                          · {request.djOnly ? '—' : request.key || 'No key'}
+                        </div>
+                        {request.note && <div className="print-row-note">{request.note}</div>}
+                      </div>
+                    )})}
+                  {appState.specialRequests.filter(
+                    (request) => request.gigId === currentSetlist.id,
+                  ).length === 0 && <div className="print-empty">No special requests.</div>}
+                </div>
+              </div>
+
+              <div className="print-section-box print-musicians">
+                <div className="print-section-title">Musicians</div>
+                <div className="print-grid">
+                  {appState.gigMusicians
+                    .filter((row) => row.gigId === currentSetlist.id)
+                    .map((row) =>
+                      appState.musicians.find((musician) => musician.id === row.musicianId),
+                    )
+                    .filter((musician): musician is Musician => Boolean(musician))
+                    .sort((a, b) => {
+                      const aCore = a.roster === 'core'
+                      const bCore = b.roster === 'core'
+                      if (aCore !== bCore) return aCore ? -1 : 1
+                      return a.name.localeCompare(b.name)
+                    })
+                    .map((musician) => (
+                      <div key={musician.id} className="print-card">
+                        <div className="print-card-title">{musician.name}</div>
+                        <div className="print-card-subtitle">
+                          {(musician.instruments ?? []).join(', ') || 'No instruments'}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              <div className="print-section-box print-latin">
+                <div className="print-section-title">Latin Set</div>
+                <div className="print-list">
+                  {currentSetlist.songIds
+                    .map((songId) => appState.songs.find((song) => song.id === songId))
+                    .filter((song): song is Song => Boolean(song))
+                    .filter((song) => song.tags.includes('Latin'))
+                    .map((song) => {
+                      const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
+                      const singers = assignments.map((entry) => entry.singer)
+                      const keys = Array.from(new Set(assignments.map((entry) => entry.key)))
+                      const keyLabel =
+                        keys.length === 0 ? 'No key' : keys.length === 1 ? keys[0] : 'Multi'
+                      return (
+                        <div key={song.id} className="print-row">
+                          <div className="print-row-title">
+                            {song.youtubeUrl ? (
+                              <a
+                                className="print-link"
+                                href={song.youtubeUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {song.title}
+                              </a>
+                            ) : (
+                              song.title
+                            )}
+                          </div>
+                          <div className="print-row-subtitle">
+                            {song.artist || 'Unknown'} ·{' '}
+                            {singers.length ? singers.join(', ') : 'No singers'} · {keyLabel}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  {currentSetlist.songIds.filter((songId) =>
+                    appState.songs.find((song) => song.id === songId)?.tags.includes('Latin'),
+                  ).length === 0 && <div className="print-empty">No songs.</div>}
+                </div>
+              </div>
+
+              <div className="print-section-box print-dinner">
+                <div className="print-section-title">Dinner Set</div>
+                <div className="print-list">
+                  {currentSetlist.songIds
+                    .map((songId) => appState.songs.find((song) => song.id === songId))
+                    .filter((song): song is Song => Boolean(song))
+                    .filter((song) => song.tags.includes('Dinner'))
+                    .map((song) => {
+                      const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
+                      const singers = assignments.map((entry) => entry.singer)
+                      const keys = Array.from(new Set(assignments.map((entry) => entry.key)))
+                      const keyLabel =
+                        keys.length === 0 ? 'No key' : keys.length === 1 ? keys[0] : 'Multi'
+                      return (
+                        <div key={song.id} className="print-row">
+                          <div className="print-row-title">
+                            {song.youtubeUrl ? (
+                              <a
+                                className="print-link"
+                                href={song.youtubeUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {song.title}
+                              </a>
+                            ) : (
+                              song.title
+                            )}
+                          </div>
+                          <div className="print-row-subtitle">
+                            {song.artist || 'Unknown'} ·{' '}
+                            {singers.length ? singers.join(', ') : 'No singers'} · {keyLabel}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  {currentSetlist.songIds.filter((songId) =>
+                    appState.songs.find((song) => song.id === songId)?.tags.includes('Dinner'),
+                  ).length === 0 && <div className="print-empty">No songs.</div>}
+                </div>
+              </div>
+
+              <div className="print-section-box print-dance">
+                <div className="print-section-title">Dance Set</div>
+                <div className="print-list">
+                  {currentSetlist.songIds
+                    .map((songId) => appState.songs.find((song) => song.id === songId))
+                    .filter((song): song is Song => Boolean(song))
+                    .filter((song) => song.tags.includes('Dance'))
+                    .map((song) => {
+                      const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
+                      const singers = assignments.map((entry) => entry.singer)
+                      const keys = Array.from(new Set(assignments.map((entry) => entry.key)))
+                      const keyLabel =
+                        keys.length === 0 ? 'No key' : keys.length === 1 ? keys[0] : 'Multi'
+                      return (
+                        <div key={song.id} className="print-row">
+                          <div className="print-row-title">
+                            {song.youtubeUrl ? (
+                              <a
+                                className="print-link"
+                                href={song.youtubeUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {song.title}
+                              </a>
+                            ) : (
+                              song.title
+                            )}
+                          </div>
+                          <div className="print-row-subtitle">
+                            {song.artist || 'Unknown'} ·{' '}
+                            {singers.length ? singers.join(', ') : 'No singers'} · {keyLabel}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  {currentSetlist.songIds.filter((songId) =>
+                    appState.songs.find((song) => song.id === songId)?.tags.includes('Dance'),
+                  ).length === 0 && <div className="print-empty">No songs.</div>}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showInstrumentPrompt && pendingDocSongId && (
         <div
@@ -5188,6 +5338,528 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {showSetlistModal && currentSetlist && (
+        <div
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowSetlistModal(false)}
+        >
+          <div
+            className="w-full max-w-4xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Gig Info</h3>
+              <div className="mt-1 text-sm text-slate-300">
+                <span className="font-semibold text-slate-100">{currentSetlist.gigName}</span>
+                <span className="mx-2 text-slate-500">•</span>
+                <span>{formatGigDate(currentSetlist.date)}</span>
+              </div>
+              {currentSetlist.venueAddress && (
+                <a
+                  className="mt-2 inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1 text-xs text-slate-200"
+                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                    currentSetlist.venueAddress,
+                  )}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  📍 {currentSetlist.venueAddress}
+                </a>
+              )}
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => setShowSetlistModal(false)}
+                >
+                  Close
+                </button>
+                <button
+                  className="min-w-[160px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                  onClick={handlePrintSetlist}
+                >
+                  Download setlist PDF
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4">
+              <div
+                className={`rounded-3xl border p-5 ${
+                  currentSetlist.date === new Date().toISOString().slice(0, 10)
+                    ? 'border-teal-300/60 bg-teal-400/10 shadow-[0_0_24px_rgba(45,212,191,0.25)]'
+                    : 'border-white/10 bg-slate-900/60'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-semibold">Special Requests</h3>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Track request type, song, singers, key, and notes.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 space-y-3">
+                  <div className="grid gap-2 text-[10px] uppercase tracking-wide text-slate-400 md:grid-cols-[.9fr_1.4fr_1fr_.6fr_.4fr]">
+                    <span>Category</span>
+                    <span>Song</span>
+                    <span>Vocal</span>
+                    <span>Key</span>
+                    <span>Info</span>
+                  </div>
+                  {appState.specialRequests
+                    .filter((request) => request.gigId === currentSetlist.id)
+                    .map((request) => {
+                      const song = appState.songs.find((item) => item.id === request.songId)
+                      return (
+                        <div
+                          key={request.id}
+                          className="grid items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm md:grid-cols-[.9fr_1.4fr_1fr_.6fr_.4fr]"
+                        >
+                          <div className="text-xs text-teal-300">
+                            Special Request
+                            <div className="text-[10px] text-slate-400">{request.type}</div>
+                            {request.djOnly && (
+                              <div className="mt-1 inline-flex items-center rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-red-200">
+                                DJ Only
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <div className="text-base font-semibold md:text-lg">
+                              {request.songTitle}
+                            </div>
+                            {song?.artist && (
+                              <div className="text-[10px] text-slate-400">{song.artist}</div>
+                            )}
+                            <div className="mt-2 flex items-center gap-2 text-[10px]">
+                              {(request.externalAudioUrl || song?.youtubeUrl) && (
+                                <button
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-slate-200"
+                                  onClick={() =>
+                                    openAudioForUrl(
+                                      request.externalAudioUrl ?? song?.youtubeUrl ?? '',
+                                      request.externalAudioUrl
+                                        ? 'External audio'
+                                        : 'YouTube audio',
+                                    )
+                                  }
+                                  aria-label="Audio"
+                                  title="Audio"
+                                >
+                                  🔊
+                                </button>
+                              )}
+                              {hasDocsForSong(song?.id) && (
+                                <button
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-slate-200"
+                                  onClick={() => openDocsForSong(song?.id)}
+                                  aria-label="Documents"
+                                  title="Documents"
+                                >
+                                  📄
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-xs text-slate-300">
+                            {request.djOnly ? 'DJ' : request.singers.join(', ')}
+                          </div>
+                          <div className="text-xs text-slate-200">
+                            {request.djOnly ? '—' : request.key}
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {request.note ? 'ℹ️' : ''}
+                          </div>
+                        </div>
+                      )
+                    })}
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-3">
+                {['Dinner', 'Latin', 'Dance'].map((section) => (
+                  <div
+                    key={section}
+                    className={`rounded-3xl border p-5 ${
+                      currentSetlist.date === new Date().toISOString().slice(0, 10)
+                        ? 'border-teal-300/60 bg-teal-400/10 shadow-[0_0_24px_rgba(45,212,191,0.25)]'
+                        : 'border-white/10 bg-slate-900/60'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-3 min-w-0">
+                      <h3 className="text-sm font-semibold whitespace-nowrap">
+                        {section} Set
+                      </h3>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Songs tagged for {section.toLowerCase()}.
+                    </p>
+                    <div className="mt-4 space-y-2">
+                      {currentSetlist.songIds
+                        .map((songId) => appState.songs.find((song) => song.id === songId))
+                        .filter((song): song is Song => Boolean(song))
+                        .filter((song) => song.tags.includes(section))
+                        .map((song) => (
+                          <div
+                            key={song.id}
+                            className="rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <div className="text-base font-semibold md:text-lg">
+                                  {song.title}
+                                </div>
+                                <div className="text-[10px] text-slate-400">{song.artist}</div>
+                                {currentSetlist && (() => {
+                                  const assignments = getGigSingerAssignments(
+                                    song.id,
+                                    currentSetlist.id,
+                                  )
+                                  const singers = assignments.map((entry) => entry.singer)
+                                  const keys = Array.from(
+                                    new Set(assignments.map((entry) => entry.key)),
+                                  )
+                                  const label = !assignments.length
+                                    ? 'No singers assigned?'
+                                    : keys.length === 1
+                                      ? `${singers.join(', ')} · Key: ${keys[0]}`
+                                      : `${singers.join(', ')} · Multiple keys`
+                                  return (
+                                    <div
+                                      className={`mt-2 text-[10px] ${
+                                        assignments.length === 0
+                                          ? 'text-red-300'
+                                          : 'text-teal-200'
+                                      }`}
+                                    >
+                                      {label}
+                                    </div>
+                                  )
+                                })()}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {song.youtubeUrl && (
+                                  <button
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
+                                    onClick={() =>
+                                      openAudioForUrl(song.youtubeUrl ?? '', 'YouTube audio')
+                                    }
+                                    aria-label="Audio"
+                                    title="Audio"
+                                  >
+                                    🎧
+                                  </button>
+                                )}
+                                {hasDocsForSong(song.id) && (
+                                  <button
+                                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200"
+                                    onClick={() => openDocsForSong(song.id)}
+                                    aria-label="Documents"
+                                    title="Documents"
+                                  >
+                                    📄
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPrintPreview && currentSetlist && (
+        <div
+          className="fixed inset-0 z-[99] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowPrintPreview(false)}
+        >
+          <div
+            className="w-full max-w-5xl max-h-[90vh] overflow-hidden rounded-3xl border border-white/10 bg-white text-slate-950"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex flex-col">
+              <div className="border-b border-slate-200 bg-white px-5 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-semibold">Setlist PDF Preview</h3>
+                    <div className="text-xs text-slate-500">
+                      {currentSetlist.gigName} · {formatGigDate(currentSetlist.date)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="min-w-[120px] rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700"
+                      onClick={() => setShowPrintPreview(false)}
+                    >
+                      Close
+                    </button>
+                    <button
+                      className="min-w-[140px] rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700"
+                      onClick={() => window.print()}
+                    >
+                      Print
+                    </button>
+                    <button
+                      className="min-w-[160px] rounded-xl bg-teal-500 px-4 py-2 text-sm font-semibold text-white"
+                      onClick={() => window.print()}
+                    >
+                      Download PDF
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="max-h-[calc(90vh-96px)] overflow-auto bg-slate-100 p-6">
+                <div className="mx-auto w-full max-w-[900px] rounded-[24px] bg-white p-6 shadow-[0_20px_60px_rgba(15,23,42,0.15)]">
+                  <div id="printable-setlist" className="print-container">
+                <div className="print-header">
+                  <div>
+                    <div className="print-title">{currentSetlist.gigName}</div>
+                    <div className="print-subtitle">{formatGigDate(currentSetlist.date)}</div>
+                    {currentSetlist.venueAddress && (
+                      <div className="print-subtitle">{currentSetlist.venueAddress}</div>
+                    )}
+                  </div>
+                  <div className="print-badge">Setlist</div>
+                </div>
+
+                <div className="print-layout">
+                  <div className="print-section-box print-special">
+                    <div className="print-section-title">Special Requests</div>
+                    <div className="print-list">
+                      {appState.specialRequests
+                        .filter((request) => request.gigId === currentSetlist.id)
+                        .map((request) => {
+                          const song = appState.songs.find((item) => item.id === request.songId)
+                          return (
+                            <div key={request.id} className="print-row">
+                              <div className="print-row-title">
+                                {(request.externalAudioUrl || song?.youtubeUrl) ? (
+                                  <a
+                                    className="print-link"
+                                    href={request.externalAudioUrl ?? song?.youtubeUrl ?? ''}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    {request.songTitle}
+                                  </a>
+                                ) : (
+                                  request.songTitle
+                                )}{' '}
+                                {request.djOnly ? <span className="print-pill">DJ Only</span> : null}
+                              </div>
+                              <div className="print-row-subtitle">
+                                {request.type} ·{' '}
+                                {request.djOnly
+                                  ? 'DJ'
+                                  : request.singers.length
+                                    ? request.singers.join(', ')
+                                    : 'No singers'}{' '}
+                                · {request.djOnly ? '—' : request.key || 'No key'}
+                              </div>
+                              {request.note && (
+                                <div className="print-row-note">{request.note}</div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      {appState.specialRequests.filter(
+                        (request) => request.gigId === currentSetlist.id,
+                      ).length === 0 && <div className="print-empty">No special requests.</div>}
+                    </div>
+                  </div>
+
+                  <div className="print-section-box print-musicians">
+                    <div className="print-section-title">Musicians</div>
+                    <div className="print-grid">
+                      {appState.gigMusicians
+                        .filter((row) => row.gigId === currentSetlist.id)
+                        .map((row) =>
+                          appState.musicians.find((musician) => musician.id === row.musicianId),
+                        )
+                        .filter((musician): musician is Musician => Boolean(musician))
+                        .sort((a, b) => {
+                          const aCore = a.roster === 'core'
+                          const bCore = b.roster === 'core'
+                          if (aCore !== bCore) return aCore ? -1 : 1
+                          return a.name.localeCompare(b.name)
+                        })
+                        .map((musician) => (
+                          <div key={musician.id} className="print-card">
+                            <div className="print-card-title">{musician.name}</div>
+                            <div className="print-card-subtitle">
+                              {(musician.instruments ?? []).join(', ') || 'No instruments'}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+
+                  <div className="print-section-box print-latin">
+                    <div className="print-section-title">Latin Set</div>
+                    <div className="print-list">
+                      {currentSetlist.songIds
+                        .map((songId) => appState.songs.find((song) => song.id === songId))
+                        .filter((song): song is Song => Boolean(song))
+                        .filter((song) => song.tags.includes('Latin'))
+                        .map((song) => {
+                          const assignments = getGigSingerAssignments(
+                            song.id,
+                            currentSetlist.id,
+                          )
+                          const singers = assignments.map((entry) => entry.singer)
+                          const keys = Array.from(
+                            new Set(assignments.map((entry) => entry.key)),
+                          )
+                          const keyLabel =
+                            keys.length === 0
+                              ? 'No key'
+                              : keys.length === 1
+                                ? keys[0]
+                                : 'Multi'
+                          return (
+                            <div key={song.id} className="print-row">
+                              <div className="print-row-title">
+                                {song.youtubeUrl ? (
+                                  <a
+                                    className="print-link"
+                                    href={song.youtubeUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    {song.title}
+                                  </a>
+                                ) : (
+                                  song.title
+                                )}
+                              </div>
+                              <div className="print-row-subtitle">
+                                {song.artist || 'Unknown'} ·{' '}
+                                {singers.length ? singers.join(', ') : 'No singers'} · {keyLabel}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      {currentSetlist.songIds.filter((songId) =>
+                        appState.songs.find((song) => song.id === songId)?.tags.includes('Latin'),
+                      ).length === 0 && <div className="print-empty">No songs.</div>}
+                    </div>
+                  </div>
+
+                  <div className="print-section-box print-dinner">
+                    <div className="print-section-title">Dinner Set</div>
+                    <div className="print-list">
+                      {currentSetlist.songIds
+                        .map((songId) => appState.songs.find((song) => song.id === songId))
+                        .filter((song): song is Song => Boolean(song))
+                        .filter((song) => song.tags.includes('Dinner'))
+                        .map((song) => {
+                          const assignments = getGigSingerAssignments(
+                            song.id,
+                            currentSetlist.id,
+                          )
+                          const singers = assignments.map((entry) => entry.singer)
+                          const keys = Array.from(
+                            new Set(assignments.map((entry) => entry.key)),
+                          )
+                          const keyLabel =
+                            keys.length === 0
+                              ? 'No key'
+                              : keys.length === 1
+                                ? keys[0]
+                                : 'Multi'
+                          return (
+                            <div key={song.id} className="print-row">
+                              <div className="print-row-title">
+                                {song.youtubeUrl ? (
+                                  <a
+                                    className="print-link"
+                                    href={song.youtubeUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    {song.title}
+                                  </a>
+                                ) : (
+                                  song.title
+                                )}
+                              </div>
+                              <div className="print-row-subtitle">
+                                {song.artist || 'Unknown'} ·{' '}
+                                {singers.length ? singers.join(', ') : 'No singers'} · {keyLabel}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      {currentSetlist.songIds.filter((songId) =>
+                        appState.songs.find((song) => song.id === songId)?.tags.includes('Dinner'),
+                      ).length === 0 && <div className="print-empty">No songs.</div>}
+                    </div>
+                  </div>
+
+                  <div className="print-section-box print-dance">
+                    <div className="print-section-title">Dance Set</div>
+                    <div className="print-list">
+                      {currentSetlist.songIds
+                        .map((songId) => appState.songs.find((song) => song.id === songId))
+                        .filter((song): song is Song => Boolean(song))
+                        .filter((song) => song.tags.includes('Dance'))
+                        .map((song) => {
+                          const assignments = getGigSingerAssignments(
+                            song.id,
+                            currentSetlist.id,
+                          )
+                          const singers = assignments.map((entry) => entry.singer)
+                          const keys = Array.from(
+                            new Set(assignments.map((entry) => entry.key)),
+                          )
+                          const keyLabel =
+                            keys.length === 0
+                              ? 'No key'
+                              : keys.length === 1
+                                ? keys[0]
+                                : 'Multi'
+                          return (
+                            <div key={song.id} className="print-row">
+                              <div className="print-row-title">
+                                {song.youtubeUrl ? (
+                                  <a
+                                    className="print-link"
+                                    href={song.youtubeUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    {song.title}
+                                  </a>
+                                ) : (
+                                  song.title
+                                )}
+                              </div>
+                              <div className="print-row-subtitle">
+                                {song.artist || 'Unknown'} ·{' '}
+                                {singers.length ? singers.join(', ') : 'No singers'} · {keyLabel}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      {currentSetlist.songIds.filter((songId) =>
+                        appState.songs.find((song) => song.id === songId)?.tags.includes('Dance'),
+                      ).length === 0 && <div className="print-empty">No songs.</div>}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+          </div>
+        </div>
+      </div>
       )}
 
       {showKeyResolveModal && resolveSongId && currentSetlist && (

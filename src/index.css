@@ -116,3 +116,201 @@ a:hover {
     opacity: 1;
   }
 }
+
+.print-only {
+  display: none;
+}
+
+.print-container {
+  display: grid;
+  gap: 10px;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  font-size: 11px;
+  color: #0b0f14;
+}
+
+.print-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+  border-radius: 16px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  background: linear-gradient(135deg, #0f172a 0%, #0b1220 45%, #0b1320 100%);
+  color: #f8fafc;
+}
+
+.print-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.print-subtitle {
+  font-size: 11px;
+  color: #cbd5f5;
+  margin-top: 2px;
+}
+
+.print-badge {
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.print-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas:
+    "special musicians"
+    "special latin"
+    "dinner dance";
+  gap: 10px;
+}
+
+.print-section-box {
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 12px;
+  background: #f8fafc;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+}
+
+.print-special {
+  grid-area: special;
+}
+
+.print-musicians {
+  grid-area: musicians;
+}
+
+.print-latin {
+  grid-area: latin;
+}
+
+.print-dinner {
+  grid-area: dinner;
+}
+
+.print-dance {
+  grid-area: dance;
+}
+
+.print-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  margin-bottom: 8px;
+  color: #0f172a;
+}
+
+.print-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.print-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: #ffffff;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
+}
+
+.print-card-title {
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.print-card-subtitle {
+  font-size: 10px;
+  color: #475569;
+  margin-top: 2px;
+}
+
+.print-list {
+  display: grid;
+  gap: 6px;
+}
+
+.print-row {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: #ffffff;
+}
+
+.print-row-title {
+  font-weight: 600;
+}
+
+.print-link {
+  color: #0f172a;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.print-row-subtitle {
+  font-size: 10px;
+  color: #475569;
+  margin-top: 2px;
+}
+
+.print-row-note {
+  font-size: 10px;
+  color: #1f2937;
+  margin-top: 4px;
+}
+
+.print-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 9px;
+  border: 1px solid #f59e0b;
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.print-empty {
+  font-size: 10px;
+  color: #64748b;
+}
+
+@media print {
+  @page {
+    size: letter;
+    margin: 0.4in;
+  }
+
+  body {
+    background: #ffffff;
+    color: #0b0f14;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  #printable-setlist,
+  #printable-setlist * {
+    visibility: visible;
+  }
+
+  #printable-setlist {
+    position: absolute;
+    inset: 0;
+    display: block;
+  }
+
+}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isSupabaseEnabled, supabase, supabaseEnvStatus } from './lib/supabaseClient'
 
 type Role = 'admin' | 'user' | null
-type Screen = 'setlists' | 'builder' | 'song' | 'gig' | 'musicians'
+type Screen = 'setlists' | 'builder' | 'song' | 'musicians'
 
 type SongKey = {
   singer: string
@@ -194,6 +194,7 @@ function App() {
   const [showInstrumentPrompt, setShowInstrumentPrompt] = useState(false)
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [isInstalled, setIsInstalled] = useState(false)
+  const [dismissedUpNextId, setDismissedUpNextId] = useState<string | null>(null)
   const [audioModalUrl, setAudioModalUrl] = useState<string | null>(null)
   const [audioModalLabel, setAudioModalLabel] = useState('Audio player')
   const [activeGigId, setActiveGigId] = useState(initialSetlistId)
@@ -2132,7 +2133,7 @@ function App() {
             <p className="text-xs uppercase tracking-[0.3em] text-teal-300/80">
               Setlist Connect
             </p>
-            <h1 className="text-lg font-semibold text-white">Gig Control Center</h1>
+            <h1 className="text-lg font-semibold text-white">Gig Center</h1>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-300">
             {installPrompt && !isInstalled && (
@@ -2145,7 +2146,7 @@ function App() {
             )}
             {screen === 'builder' && (
               <button
-                className={`liquid-button rounded-full px-4 py-2 text-sm font-semibold ${
+                className={`liquid-button whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold ${
                   gigMode
                     ? 'bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950'
                     : 'border border-white/10 text-slate-200'
@@ -2166,10 +2167,18 @@ function App() {
           </div>
         </div>
       </header>
-      {appState.currentSongId && (
-        <button
-          className="liquid-button upnext-flash w-full bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_18px_rgba(74,222,128,0.45)]"
+      {appState.currentSongId && appState.currentSongId !== dismissedUpNextId && (
+        <div
+          role="button"
+          tabIndex={0}
+          className="liquid-button upnext-flash w-full cursor-pointer bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_18px_rgba(74,222,128,0.45)]"
           onClick={() => openDocsForSong(appState.currentSongId ?? undefined)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              openDocsForSong(appState.currentSongId ?? undefined)
+            }
+          }}
           onTouchStart={(event) => setBannerTouchStartX(event.touches[0]?.clientX ?? null)}
           onTouchEnd={(event) => {
             if (bannerTouchStartX === null) return
@@ -2177,37 +2186,41 @@ function App() {
             if (endX - bannerTouchStartX > 60) {
               if (appState.currentSongId) {
                 logPlayedSong(appState.currentSongId)
+                setDismissedUpNextId(appState.currentSongId)
               }
-              setGigCurrentSong(null)
             }
             setBannerTouchStartX(null)
           }}
         >
-          <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-2 text-sm font-semibold">
-            <span className="whitespace-nowrap">Up next</span>
-            <span className="flex-1 text-center">
+          <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-4 text-base font-semibold">
+            <span className="whitespace-nowrap text-base">Up next</span>
+            <span className="flex-1 text-center text-lg font-semibold">
               {appState.songs.find((song) => song.id === appState.currentSongId)?.title}
             </span>
-            <span className="text-xs">
+            <span className="text-sm">
               {getGigKeysText(
                 appState.currentSongId,
                 currentSetlist?.id ?? activeGigId,
               ) || 'Key: —'}
             </span>
             <button
-              className="rounded-full bg-slate-950/30 px-3 py-1 text-xs"
+              className="rounded-full bg-slate-950/30 px-4 py-2 text-sm"
               onClick={(event) => {
                 event.stopPropagation()
                 if (appState.currentSongId) {
                   logPlayedSong(appState.currentSongId)
                 }
-                setGigCurrentSong(null)
+                if (isAdmin) {
+                  setGigCurrentSong(null)
+                } else if (appState.currentSongId) {
+                  setDismissedUpNextId(appState.currentSongId)
+                }
               }}
             >
               Clear
             </button>
           </div>
-        </button>
+        </div>
       )}
     </div>
   )
@@ -2307,6 +2320,13 @@ function App() {
       currentSongId: nowPlayingByGig[activeGigId] ?? null,
     }))
   }, [activeGigId, nowPlayingByGig])
+
+  useEffect(() => {
+    if (!appState.currentSongId) return
+    if (appState.currentSongId !== dismissedUpNextId) {
+      setDismissedUpNextId(null)
+    }
+  }, [appState.currentSongId, dismissedUpNextId])
 
   useEffect(() => {
     const client = supabase
@@ -3733,40 +3753,6 @@ function App() {
           </section>
         )}
 
-        {screen === 'gig' && (
-          <section className="flex flex-col gap-6">
-            <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-5">
-              <h2 className="text-xl font-semibold">Gig mode</h2>
-              <p className="mt-1 text-sm text-slate-300">
-                Tap a song to flash it at the top for the band.
-              </p>
-              <div className="mt-4 space-y-3">
-                {currentSetlist?.songIds.map((songId) => {
-                  const song = appState.songs.find((item) => item.id === songId)
-                  if (!song) return null
-                  return (
-                    <button
-                      key={song.id}
-                      className="flex w-full items-center justify-between rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-left"
-                      onClick={() =>
-                        setAppState((prev) => ({ ...prev, currentSongId: song.id }))
-                      }
-                    >
-                      <div>
-                        <div className="font-semibold">{song.title}</div>
-                        <div className="text-xs text-slate-400">{song.artist}</div>
-                      </div>
-                      <span className="rounded-full bg-white/10 px-3 py-1 text-xs">
-                        Highlight
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          </section>
-        )}
-
         {screen === 'musicians' && (
           <section className="flex flex-col gap-6">
             <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-5">
@@ -3996,9 +3982,6 @@ function App() {
           </NavButton>
           <NavButton active={screen === 'song'} onClick={() => setScreen('song')}>
             Songs
-          </NavButton>
-          <NavButton active={screen === 'gig'} onClick={() => setScreen('gig')}>
-            Gig
           </NavButton>
           {isAdmin && (
             <NavButton active={screen === 'musicians'} onClick={() => setScreen('musicians')}>

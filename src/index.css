@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+:root {
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #0b0f14;
+  color: #e6edf3;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+#root,
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button,
+[role="button"],
+a {
+  cursor: pointer;
+  transition: background-color 150ms ease, box-shadow 150ms ease;
+}
+
+button:hover,
+[role="button"]:hover,
+a:hover {
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.2), 0 8px 20px rgba(0, 0, 0, 0.25);
+}
+
+.liquid-button {
+  position: relative;
+  overflow: hidden;
+  background-size: 200% 200%;
+  animation: liquid-shift 4s ease infinite;
+}
+
+.liquid-button::after {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.35), transparent 55%);
+  opacity: 0.5;
+  transform: rotate(8deg);
+  animation: liquid-glow 6s ease-in-out infinite;
+}
+
+.liquid-button > span {
+  position: relative;
+  z-index: 1;
+}
+
+.upnext-flash {
+  animation: upnext-flash 4.2s ease-in-out infinite;
+}
+
+@keyframes upnext-flash {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes liquid-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes liquid-glow {
+  0%,
+  100% {
+    transform: translate(-10%, -10%) rotate(8deg);
+  }
+  50% {
+    transform: translate(10%, 10%) rotate(-6deg);
+  }
+}

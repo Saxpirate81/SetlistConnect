@@ -197,6 +197,8 @@ function App() {
   const [dismissedUpNextId, setDismissedUpNextId] = useState<string | null>(null)
   const [audioModalUrl, setAudioModalUrl] = useState<string | null>(null)
   const [audioModalLabel, setAudioModalLabel] = useState('Audio player')
+  const [audioPlaybackRate, setAudioPlaybackRate] = useState(1)
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null)
   const [activeGigId, setActiveGigId] = useState(initialSetlistId)
   const [nowPlayingByGig, setNowPlayingByGig] = useState<Record<string, string | null>>({})
   const [newMusicianName, setNewMusicianName] = useState('')
@@ -220,6 +222,8 @@ function App() {
   const [instrumentFilter, setInstrumentFilter] = useState('')
   const [newInstrumentInput, setNewInstrumentInput] = useState('')
   const [newSubSinger, setNewSubSinger] = useState<'male' | 'female' | 'other' | ''>('')
+  const [subSearchInput, setSubSearchInput] = useState('')
+  const [showSubModal, setShowSubModal] = useState(false)
   const [bannerTouchStartX, setBannerTouchStartX] = useState<number | null>(null)
   const [newDocSongId, setNewDocSongId] = useState('')
   const [newDocSongTitle, setNewDocSongTitle] = useState('')
@@ -231,6 +235,23 @@ function App() {
   const [newDocLyrics, setNewDocLyrics] = useState('')
   const [showDeleteGigConfirm, setShowDeleteGigConfirm] = useState(false)
   const [pendingDeleteGigId, setPendingDeleteGigId] = useState<string | null>(null)
+  const [showRemoveSongConfirm, setShowRemoveSongConfirm] = useState(false)
+  const [pendingRemoveSongId, setPendingRemoveSongId] = useState<string | null>(null)
+  const [singerModalSongId, setSingerModalSongId] = useState<string | null>(null)
+  const [showAddSongModal, setShowAddSongModal] = useState(false)
+  const [songLibraryTags, setSongLibraryTags] = useState<string[]>([])
+  const [showDuplicateSongConfirm, setShowDuplicateSongConfirm] = useState(false)
+  const [pendingSongDraft, setPendingSongDraft] = useState<{
+    title: string
+    artist: string
+    originalKey: string
+    audioUrl: string
+    tags: string[]
+  } | null>(null)
+  const [similarSongMatches, setSimilarSongMatches] = useState<Song[]>([])
+  const [showKeyResolveModal, setShowKeyResolveModal] = useState(false)
+  const [resolveSongId, setResolveSongId] = useState<string | null>(null)
+  const [showGigMusiciansModal, setShowGigMusiciansModal] = useState(false)
   const [activeBuildPanel, setActiveBuildPanel] = useState<
     | 'musicians'
     | 'addSongs'
@@ -245,6 +266,7 @@ function App() {
     Record<string, { singer: string; key: string }[]>
   >({})
   const [showSingerWarning, setShowSingerWarning] = useState(false)
+  const [showMissingSingerWarning, setShowMissingSingerWarning] = useState(false)
   const [starterPasteBySection, setStarterPasteBySection] = useState<{
     Dinner: string
     Latin: string
@@ -270,6 +292,7 @@ function App() {
   const [docFormError, setDocFormError] = useState('')
   const [loginPhase, setLoginPhase] = useState<'login' | 'transition' | 'app'>('login')
   const loginTimerRef = useRef<number | null>(null)
+  const dateInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     const standaloneMatch = window.matchMedia('(display-mode: standalone)').matches
@@ -304,6 +327,10 @@ function App() {
   const currentSetlist = useMemo(
     () => appState.setlists.find((setlist) => setlist.id === selectedSetlistId),
     [appState.setlists, selectedSetlistId],
+  )
+  const singerModalSong = useMemo(
+    () => (singerModalSongId ? appState.songs.find((song) => song.id === singerModalSongId) : null),
+    [appState.songs, singerModalSongId],
   )
 
   const gigVocalists = useMemo(() => {
@@ -448,6 +475,14 @@ function App() {
     }
   }, [appState.gigMusicians, appState.specialRequests, appState.songs, currentSetlist])
 
+  const filteredSongLibrary = useMemo(() => {
+    const base = appState.songs.filter((song) => {
+      if (songLibraryTags.length === 0) return true
+      return songLibraryTags.every((tag) => song.tags.includes(tag))
+    })
+    return [...base].sort((a, b) => a.title.localeCompare(b.title))
+  }, [appState.songs, songLibraryTags])
+
   const getGigKeysText = (songId: string, gigId: string) => {
     const song = appState.songs.find((item) => item.id === songId)
     if (!song) return ''
@@ -461,6 +496,77 @@ function App() {
     return entries
       .map((entry) => `${entry.singer}: ${entry.key}`)
       .join(' · ')
+  }
+
+  const getGigSingerAssignments = (songId: string, gigId: string) => {
+    const song = appState.songs.find((item) => item.id === songId)
+    if (!song) return []
+    return song.keys
+      .map((key) => ({
+        singer: key.singer,
+        key: key.gigOverrides[gigId] ?? '',
+      }))
+      .filter((entry) => entry.key)
+  }
+
+  const resolveGigKeyForSong = (songId: string, keyValue: string) => {
+    if (!currentSetlist) return
+    const assignments = getGigSingerAssignments(songId, currentSetlist.id)
+    if (!assignments.length) return
+    commitChange('Resolve gig key', (prev) => ({
+      ...prev,
+      songs: prev.songs.map((song) => {
+        if (song.id !== songId) return song
+        return {
+          ...song,
+          keys: song.keys.map((key) => {
+            if (!assignments.find((entry) => entry.singer === key.singer)) {
+              return key
+            }
+            return {
+              ...key,
+              gigOverrides: {
+                ...key.gigOverrides,
+                [currentSetlist.id]: keyValue,
+              },
+            }
+          }),
+        }
+      }),
+    }))
+    if (supabase) {
+      runSupabase(
+        supabase
+          .from('SetlistGigSingerKeys')
+          .delete()
+          .eq('gig_id', currentSetlist.id)
+          .eq('song_id', songId),
+      )
+      runSupabase(
+        supabase.from('SetlistGigSingerKeys').insert(
+          assignments.map((entry) => ({
+            id: createId(),
+            gig_id: currentSetlist.id,
+            song_id: songId,
+            singer_name: entry.singer,
+            gig_key: keyValue,
+          })),
+        ),
+      )
+    }
+    setShowKeyResolveModal(false)
+    setResolveSongId(null)
+  }
+
+  const formatGigDate = (dateValue: string) => {
+    if (!dateValue) return ''
+    const parsed = new Date(`${dateValue}T00:00:00`)
+    if (Number.isNaN(parsed.getTime())) return dateValue
+    return parsed.toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    })
   }
 
   const setGigCurrentSong = (songId: string | null) => {
@@ -503,6 +609,29 @@ function App() {
     value: boolean,
   ) => {
     if (!currentSetlist) return
+    if (value && ['special', 'dinner', 'latin', 'dance'].includes(panel)) {
+      const hasMissingSingers =
+        panel === 'special'
+          ? appState.specialRequests.some(
+              (request) =>
+                request.gigId === currentSetlist.id &&
+                !request.djOnly &&
+                (!request.singers || request.singers.length === 0),
+            )
+          : currentSetlist.songIds
+              .map((songId) => appState.songs.find((song) => song.id === songId))
+              .filter((song): song is Song => Boolean(song))
+              .filter((song) =>
+                song.tags.includes(
+                  panel === 'dinner' ? 'Dinner' : panel === 'latin' ? 'Latin' : 'Dance',
+                ),
+              )
+              .some((song) => getGigSingerAssignments(song.id, currentSetlist.id).length === 0)
+      if (hasMissingSingers) {
+        setShowMissingSingerWarning(true)
+        return
+      }
+    }
     setBuildPanelDirty(true)
     setBuildCompleteOverrides((prev) => ({
       ...prev,
@@ -620,6 +749,7 @@ function App() {
         index === rowIndex ? { singer: '', key: '' } : row,
       ),
     }))
+    setSingerModalSongId(null)
   }
 
   const commitChange = (label: string, updater: (prev: AppState) => AppState) => {
@@ -683,18 +813,45 @@ function App() {
     setShowUndoToast(false)
   }
 
-  const duplicateSetlist = (setlistId: string) => {
+  const duplicateGig = (setlistId: string) => {
     const source = appState.setlists.find((setlist) => setlist.id === setlistId)
     if (!source) return
     const newId = createId()
-    commitChange('Duplicate setlist', (prev) => {
+    commitChange('Duplicate gig', (prev) => {
       const duplicate: Setlist = {
         ...source,
         id: newId,
         gigName: `${source.gigName} (Copy)`,
         date: new Date().toISOString().slice(0, 10),
       }
-      return { ...prev, setlists: [duplicate, ...prev.setlists] }
+      const sourceGigMusicians = prev.gigMusicians.filter((gm) => gm.gigId === source.id)
+      const clonedGigMusicians = sourceGigMusicians.map((gm) => ({
+        ...gm,
+        gigId: newId,
+      }))
+      const clonedSongs = prev.songs.map((song) => {
+        const keys = song.keys.map((key) => {
+          const sourceKey = key.gigOverrides[source.id]
+          if (!sourceKey) return key
+          return {
+            ...key,
+            gigOverrides: {
+              ...key.gigOverrides,
+              [newId]: sourceKey,
+            },
+          }
+        })
+        return { ...song, keys }
+      })
+      return {
+        ...prev,
+        setlists: [duplicate, ...prev.setlists],
+        gigMusicians: [
+          ...prev.gigMusicians.filter((gm) => gm.gigId !== newId),
+          ...clonedGigMusicians,
+        ],
+        songs: clonedSongs,
+      }
     })
     if (supabase) {
       runSupabase(
@@ -702,6 +859,7 @@ function App() {
           id: newId,
           gig_name: `${source.gigName} (Copy)`,
           gig_date: new Date().toISOString().slice(0, 10),
+          venue_address: source.venueAddress ?? '',
         }),
       )
       if (source.songIds.length) {
@@ -715,6 +873,34 @@ function App() {
             })),
           ),
         )
+      }
+      const gigMusicianRows = appState.gigMusicians
+        .filter((gm) => gm.gigId === source.id)
+        .map((gm) => ({
+          id: createId(),
+          gig_id: newId,
+          musician_id: gm.musicianId,
+          status: gm.status,
+          note: gm.note ?? null,
+        }))
+      if (gigMusicianRows.length) {
+        runSupabase(supabase.from('SetlistGigMusicians').insert(gigMusicianRows))
+      }
+      const gigSingerRows = source.songIds.flatMap((songId) => {
+        const song = appState.songs.find((item) => item.id === songId)
+        if (!song) return []
+        return song.keys
+          .filter((key) => key.gigOverrides[source.id])
+          .map((key) => ({
+            id: createId(),
+            gig_id: newId,
+            song_id: songId,
+            singer_name: key.singer,
+            gig_key: key.gigOverrides[source.id],
+          }))
+      })
+      if (gigSingerRows.length) {
+        runSupabase(supabase.from('SetlistGigSingerKeys').insert(gigSingerRows))
       }
     }
   }
@@ -827,6 +1013,28 @@ function App() {
           .eq('song_id', songId),
       )
     }
+  }
+
+  const requestRemoveSong = (songId: string) => {
+    setPendingRemoveSongId(songId)
+    setShowRemoveSongConfirm(true)
+  }
+
+  const openSingerModal = (songId: string) => {
+    if (!currentSetlist) return
+    setSingerModalSongId(songId)
+  }
+
+  const confirmRemoveSong = () => {
+    if (!pendingRemoveSongId) return
+    removeSongFromSetlist(pendingRemoveSongId)
+    setPendingRemoveSongId(null)
+    setShowRemoveSongConfirm(false)
+  }
+
+  const cancelRemoveSong = () => {
+    setPendingRemoveSongId(null)
+    setShowRemoveSongConfirm(false)
   }
 
   const importSectionFromGig = (section: string, gigId: string) => {
@@ -1125,11 +1333,12 @@ function App() {
   const importRosterToGig = () => {
     if (!activeGigId) return
     setBuildPanelDirty(true)
+    const coreMusicians = appState.musicians.filter((musician) => musician.roster === 'core')
     commitChange('Import roster', (prev) => ({
       ...prev,
       gigMusicians: [
         ...prev.gigMusicians.filter((gm) => gm.gigId !== activeGigId),
-        ...prev.musicians.map((musician) => ({
+        ...coreMusicians.map((musician) => ({
           gigId: activeGigId,
           musicianId: musician.id,
           status: 'active' as const,
@@ -1142,7 +1351,7 @@ function App() {
       )
       runSupabase(
         supabase.from('SetlistGigMusicians').insert(
-          appState.musicians.map((musician) => ({
+          coreMusicians.map((musician) => ({
             id: createId(),
             gig_id: activeGigId,
             musician_id: musician.id,
@@ -1442,6 +1651,65 @@ function App() {
     await saveDocumentFromEditor(true)
   }
 
+  const addSongDraft = (
+    draft: {
+      title: string
+      artist: string
+      originalKey: string
+      audioUrl: string
+      tags: string[]
+    },
+    openEditor = false,
+  ) => {
+    const id = createId()
+    const createdSong: Song = {
+      id,
+      title: draft.title,
+      artist: draft.artist,
+      originalKey: draft.originalKey,
+      youtubeUrl: draft.audioUrl || '',
+      tags: draft.tags,
+      keys: [],
+      specialPlayedCount: 0,
+    }
+    commitChange('Add song', (prev) => ({
+      ...prev,
+      songs: [createdSong, ...prev.songs],
+      tagsCatalog: Array.from(new Set([...prev.tagsCatalog, ...draft.tags])),
+    }))
+    if (supabase) {
+      runSupabase(
+        supabase.from('SetlistSongs').insert({
+          id,
+          title: draft.title,
+          artist: draft.artist || null,
+          audio_url: draft.audioUrl || null,
+          original_key: draft.originalKey || null,
+        }),
+      )
+      if (draft.tags.length) {
+        runSupabase(
+          supabase.from('SetlistSongTags').insert(
+            draft.tags.map((tag) => ({
+              id: createId(),
+              song_id: id,
+              tag,
+            })),
+          ),
+        )
+      }
+    }
+    if (openEditor) {
+      openSongEditor(createdSong)
+    }
+    setNewSongTitle('')
+    setNewSongArtist('')
+    setNewSongAudio('')
+    setNewSongOriginalKey('')
+    setNewSongTags([])
+    setShowAddSongModal(false)
+  }
+
   const addSongFromAdmin = (openEditor = false) => {
     const title = newSongTitle.trim()
     if (!title) {
@@ -1465,54 +1733,63 @@ function App() {
       }
       return
     }
-    setSongFormError('')
-    const id = createId()
-    const tags = newSongTags
-    const createdSong: Song = {
-      id,
-      title,
-      artist,
-      originalKey: newSongOriginalKey.trim(),
-      youtubeUrl: newSongAudio.trim() || '',
-      tags,
-      keys: [],
-      specialPlayedCount: 0,
-    }
-    commitChange('Add song', (prev) => ({
-      ...prev,
-      songs: [createdSong, ...prev.songs],
-      tagsCatalog: Array.from(new Set([...prev.tagsCatalog, ...tags])),
-    }))
-    if (supabase) {
-      runSupabase(
-        supabase.from('SetlistSongs').insert({
-          id,
-          title,
-          artist: artist || null,
-          audio_url: newSongAudio.trim() || null,
-          original_key: newSongOriginalKey.trim() || null,
-        }),
-      )
-      if (tags.length) {
-        runSupabase(
-          supabase.from('SetlistSongTags').insert(
-            tags.map((tag) => ({
-              id: createId(),
-              song_id: id,
-              tag,
-            })),
-          ),
-        )
+    const similar = appState.songs.filter((song) => {
+      const existingTitle = normalize(song.title)
+      if (!existingTitle) return false
+      if (existingTitle.includes(titleKey) || titleKey.includes(existingTitle)) {
+        return true
       }
+      const words = titleKey.split(' ').filter(Boolean)
+      const overlap = words.filter((word) => existingTitle.includes(word))
+      return overlap.length >= Math.min(2, words.length)
+    })
+    if (similar.length) {
+      setSongFormError('')
+      setPendingSongDraft({
+        title,
+        artist,
+        originalKey: newSongOriginalKey.trim(),
+        audioUrl: newSongAudio.trim(),
+        tags: newSongTags,
+      })
+      setSimilarSongMatches(similar)
+      setShowDuplicateSongConfirm(true)
+      return
     }
-    if (openEditor) {
-      openSongEditor(createdSong)
-    }
-    setNewSongTitle('')
-    setNewSongArtist('')
-    setNewSongAudio('')
-    setNewSongOriginalKey('')
-    setNewSongTags([])
+    setSongFormError('')
+    addSongDraft(
+      {
+        title,
+        artist,
+        originalKey: newSongOriginalKey.trim(),
+        audioUrl: newSongAudio.trim(),
+        tags: newSongTags,
+      },
+      openEditor,
+    )
+  }
+
+  const confirmDuplicateSong = () => {
+    if (!pendingSongDraft) return
+    addSongDraft(pendingSongDraft, false)
+    setPendingSongDraft(null)
+    setSimilarSongMatches([])
+    setShowDuplicateSongConfirm(false)
+  }
+
+  const cancelDuplicateSong = () => {
+    setPendingSongDraft(null)
+    setSimilarSongMatches([])
+    setShowDuplicateSongConfirm(false)
+  }
+
+  const openAddSongForSection = (section: string, title: string) => {
+    const trimmed = title.trim()
+    if (!trimmed) return
+    setNewSongTitle(trimmed)
+    setNewSongTags([section])
+    setSongFormError('')
+    setShowAddSongModal(true)
   }
 
   const startEditSong = (song: Song) => {
@@ -2484,7 +2761,13 @@ function App() {
       Boolean(audioModalUrl) ||
       showDeleteGigConfirm ||
       Boolean(activeBuildPanel) ||
-      Boolean(editingSongId)
+      Boolean(editingSongId) ||
+      Boolean(singerModalSongId) ||
+      showSubModal ||
+      showDuplicateSongConfirm ||
+      showAddSongModal ||
+      showGigMusiciansModal ||
+      showMissingSingerWarning
     document.body.style.overflow = hasPopup ? 'hidden' : ''
     return () => {
       document.body.style.overflow = ''
@@ -2498,6 +2781,12 @@ function App() {
     showDeleteGigConfirm,
     activeBuildPanel,
     editingSongId,
+    singerModalSongId,
+    showSubModal,
+    showDuplicateSongConfirm,
+    showAddSongModal,
+    showGigMusiciansModal,
+    showMissingSingerWarning,
   ])
 
   if (!role && loginPhase !== 'app') {
@@ -2586,7 +2875,7 @@ function App() {
                 Charts and lead sheets will filter to your part.
               </p>
             </div>
-            <div className="max-h-[calc(85vh-92px)] overflow-auto px-6 pb-6">
+            <div className="max-h-[calc(85vh-92px)] overflow-auto px-6 pb-10">
               <div className="mt-4 grid grid-cols-2 gap-2">
                 {INSTRUMENTS.map((instrument) => (
                   <button
@@ -2645,7 +2934,9 @@ function App() {
                     <div className="flex items-center justify-between">
                       <div>
                         <h3 className="font-semibold">{setlist.gigName}</h3>
-                        <p className="text-xs text-slate-400">{setlist.date}</p>
+                        <p className="text-xs text-slate-400">
+                          {formatGigDate(setlist.date)}
+                        </p>
                         {isToday && (
                           <span className="mt-2 inline-flex items-center gap-2 rounded-full bg-teal-400/20 px-2 py-1 text-[10px] uppercase tracking-wide text-teal-200">
                             Today’s gig
@@ -2671,15 +2962,15 @@ function App() {
                     </div>
                     {isAdmin && (
                       <div className="mt-3 flex items-center gap-3 text-xs">
-                        <button
-                          className="text-teal-300"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            duplicateSetlist(setlist.id)
-                          }}
-                        >
-                          Duplicate setlist
-                        </button>
+                          <button
+                            className="text-teal-300"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              duplicateGig(setlist.id)
+                            }}
+                          >
+                            Duplicate gig
+                          </button>
                       </div>
                     )}
                   </div>
@@ -2771,9 +3062,9 @@ function App() {
                     {isAdmin ? 'Setlist' : 'Gig'}
                   </p>
                   {isAdmin ? (
-                    <div className="mt-3 flex flex-col gap-2">
+                    <div className="mt-3 flex flex-col gap-1">
                       <input
-                        className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-lg font-semibold text-white"
+                        className="w-full border-b border-white/10 bg-transparent py-1 text-2xl font-semibold text-white outline-none focus:border-teal-300"
                         value={currentSetlist.gigName}
                         onChange={(event) => {
                           const value = event.target.value
@@ -2797,65 +3088,101 @@ function App() {
                           }
                         }}
                       />
-                      <div className="flex flex-col gap-2 md:flex-row">
-                        <input
-                          className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-xs text-slate-300 md:w-[180px]"
-                          type="date"
-                          value={currentSetlist.date}
-                          onChange={(event) => {
-                            const value = event.target.value
-                            commitChange('Update gig date', (prev) => ({
-                              ...prev,
-                              setlists: prev.setlists.map((setlist) =>
-                                setlist.id === currentSetlist.id
-                                  ? { ...setlist, date: value }
-                                  : setlist,
-                              ),
-                            }))
-                          }}
-                          onBlur={(event) => {
-                            if (supabase) {
-                              runSupabase(
-                                supabase
-                                  .from('SetlistGigs')
-                                  .update({ gig_date: event.target.value })
-                                  .eq('id', currentSetlist.id),
-                              )
-                            }
-                          }}
-                        />
-                        <input
-                          className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-200"
-                          placeholder="Venue address"
-                          value={currentSetlist.venueAddress ?? ''}
-                          onChange={(event) => {
-                            const value = event.target.value
-                            commitChange('Update venue address', (prev) => ({
-                              ...prev,
-                              setlists: prev.setlists.map((setlist) =>
-                                setlist.id === currentSetlist.id
-                                  ? { ...setlist, venueAddress: value }
-                                  : setlist,
-                              ),
-                            }))
-                          }}
-                          onBlur={(event) => {
-                            if (supabase) {
-                              runSupabase(
-                                supabase
-                                  .from('SetlistGigs')
-                                  .update({ venue_address: event.target.value })
-                                  .eq('id', currentSetlist.id),
-                              )
-                            }
-                          }}
-                        />
+                      <div className="flex flex-col gap-1 md:flex-row md:items-center">
+                        <div className="flex items-center gap-2 md:w-[200px]">
+                          <button
+                            type="button"
+                            className="w-full border-b border-white/10 bg-transparent py-1 text-left text-sm text-slate-200 outline-none focus:border-teal-300"
+                            onClick={() => {
+                              const input = dateInputRef.current
+                              if (!input) return
+                              if (typeof input.showPicker === 'function') {
+                                input.showPicker()
+                              } else {
+                                input.focus()
+                              }
+                            }}
+                          >
+                            {formatGigDate(currentSetlist.date)}
+                          </button>
+                          <input
+                            ref={dateInputRef}
+                            className="sr-only"
+                            type="date"
+                            value={currentSetlist.date}
+                            onChange={(event) => {
+                              const value = event.target.value
+                              commitChange('Update gig date', (prev) => ({
+                                ...prev,
+                                setlists: prev.setlists.map((setlist) =>
+                                  setlist.id === currentSetlist.id
+                                    ? { ...setlist, date: value }
+                                    : setlist,
+                                ),
+                              }))
+                            }}
+                            onBlur={(event) => {
+                              if (supabase) {
+                                runSupabase(
+                                  supabase
+                                    .from('SetlistGigs')
+                                    .update({ gig_date: event.target.value })
+                                    .eq('id', currentSetlist.id),
+                                )
+                              }
+                            }}
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            className="w-full border-b border-white/10 bg-transparent py-1 text-sm text-slate-200 outline-none focus:border-teal-300"
+                            placeholder="Venue address"
+                            value={currentSetlist.venueAddress ?? ''}
+                            onChange={(event) => {
+                              const value = event.target.value
+                              commitChange('Update venue address', (prev) => ({
+                                ...prev,
+                                setlists: prev.setlists.map((setlist) =>
+                                  setlist.id === currentSetlist.id
+                                    ? { ...setlist, venueAddress: value }
+                                    : setlist,
+                                ),
+                              }))
+                            }}
+                            onBlur={(event) => {
+                              if (supabase) {
+                                runSupabase(
+                                  supabase
+                                    .from('SetlistGigs')
+                                    .update({ venue_address: event.target.value })
+                                    .eq('id', currentSetlist.id),
+                                )
+                              }
+                            }}
+                          />
+                          {currentSetlist.venueAddress && (
+                            <a
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
+                              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                                currentSetlist.venueAddress,
+                              )}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              title="Open address"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              📍
+                            </a>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ) : (
                     <>
                       <h2 className="text-xl font-semibold">{currentSetlist.gigName}</h2>
-                      <p className="text-xs text-slate-400">{currentSetlist.date}</p>
+                      <p className="text-xs text-slate-400">
+                        {formatGigDate(currentSetlist.date)}
+                      </p>
                       {currentSetlist.venueAddress && (
                         <a
                           className="mt-2 inline-flex rounded-full border border-white/10 px-3 py-1 text-xs text-slate-200"
@@ -2961,6 +3288,19 @@ function App() {
                 ))}
               </div>
             )}
+            {!isAdmin && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <button
+                  className="flex min-h-[96px] flex-col items-start justify-between rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-500/30 via-slate-900/40 to-slate-900/60 px-4 py-4 text-left text-white shadow-[0_0_18px_rgba(15,23,42,0.35)]"
+                  onClick={() => setShowGigMusiciansModal(true)}
+                >
+                  <div className="flex w-full items-start justify-between">
+                    <span className="text-2xl">🎤</span>
+                  </div>
+                  <span className="text-sm font-semibold">Musicians</span>
+                </button>
+              </div>
+            )}
 
             {false && (
               <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-5">
@@ -3060,7 +3400,7 @@ function App() {
                 </div>
                 {isAdmin && (
                   <button
-                    className="rounded-full border border-white/10 px-3 py-1 text-xs"
+                    className="rounded-full border border-white/10 px-3 py-1 text-center text-xs"
                     onClick={addSpecialRequest}
                   >
                     Add song
@@ -3152,7 +3492,7 @@ function App() {
                         Request type
                       </label>
                     <input
-                      className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                      className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm text-slate-200"
                       placeholder="Type a request type"
                       list="special-type-list"
                       value={pendingSpecialType}
@@ -3169,7 +3509,7 @@ function App() {
                         Song title
                       </label>
                     <input
-                      className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                      className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm text-slate-200"
                       placeholder="Type a song title"
                       list="special-song-list"
                       value={pendingSpecialSong}
@@ -3186,7 +3526,8 @@ function App() {
                         Singers
                       </label>
                     <div className="flex flex-wrap gap-2">
-                        {appState.singersCatalog.map((singer) => {
+                        {gigVocalists.map((musician) => {
+                          const singer = musician.name
                           const active = pendingSpecialSingers.includes(singer)
                           return (
                             <button
@@ -3216,7 +3557,7 @@ function App() {
                         Key
                       </label>
                       <input
-                        className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                        className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm text-slate-200"
                         placeholder="e.g. F#m"
                         value={pendingSpecialKey}
                         onChange={(event) => setPendingSpecialKey(event.target.value)}
@@ -3226,7 +3567,7 @@ function App() {
                         Info note
                       </label>
                       <input
-                        className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                        className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm text-slate-200"
                         placeholder="Optional note"
                         value={pendingSpecialNote}
                         onChange={(event) => setPendingSpecialNote(event.target.value)}
@@ -3246,7 +3587,7 @@ function App() {
                       Audio link
                     </label>
                     <input
-                      className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                      className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm text-slate-200"
                       placeholder="YouTube, Spotify, or MP3 link"
                       value={pendingSpecialExternalUrl}
                       onChange={(event) => setPendingSpecialExternalUrl(event.target.value)}
@@ -3512,12 +3853,45 @@ function App() {
                         {!gigMode && (
                           <div className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950 p-2 text-[10px] text-slate-200 shadow-xl">
                             <input
-                              className="w-full rounded-lg border border-white/10 bg-slate-900/70 px-2 py-1"
+                              className="w-full rounded-lg border border-white/10 bg-slate-900/70 px-2 py-1 text-slate-200"
                               placeholder="Choose a song"
                               list={`section-song-${section}`}
                               onChange={(event) => {
-                                if (event.target.value) {
-                                  addSongToSection(section, event.target.value)
+                                const value = event.currentTarget.value
+                                const match = appState.songs.find(
+                                  (song) =>
+                                    song.title.toLowerCase() === value.trim().toLowerCase(),
+                                )
+                                if (match) {
+                                  addSongToSection(section, match.title)
+                                  event.currentTarget.value = ''
+                                }
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter') return
+                                event.preventDefault()
+                                const value = (event.currentTarget as HTMLInputElement).value
+                                const match = appState.songs.find(
+                                  (song) =>
+                                    song.title.toLowerCase() === value.trim().toLowerCase(),
+                                )
+                                if (match) {
+                                  addSongToSection(section, match.title)
+                                  ;(event.currentTarget as HTMLInputElement).value = ''
+                                  return
+                                }
+                                openAddSongForSection(section, value)
+                                ;(event.currentTarget as HTMLInputElement).value = ''
+                              }}
+                              onBlur={(event) => {
+                                const value = event.currentTarget.value.trim()
+                                if (!value) return
+                                const match = appState.songs.find(
+                                  (song) =>
+                                    song.title.toLowerCase() === value.toLowerCase(),
+                                )
+                                if (!match) {
+                                  openAddSongForSection(section, value)
                                   event.currentTarget.value = ''
                                 }
                               }}
@@ -3549,9 +3923,11 @@ function App() {
                               : 'border-white/10 bg-slate-950/40'
                           }`}
                           onClick={() => {
-                            if (gigMode) {
-                              setGigCurrentSong(song.id)
-                            }
+                              if (gigMode) {
+                                setGigCurrentSong(song.id)
+                                return
+                              }
+                              openSingerModal(song.id)
                           }}
                         >
                           <div className="flex items-start justify-between gap-2">
@@ -3591,7 +3967,7 @@ function App() {
                                 ] && (
                                 <button
                                   className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px] text-red-200"
-                                  onClick={() => removeSongFromSetlist(song.id)}
+                                  onClick={() => requestRemoveSong(song.id)}
                                   aria-label="Remove song"
                                   title="Remove song"
                                 >
@@ -3627,6 +4003,14 @@ function App() {
                   <p className="mt-2 text-xs text-slate-400">
                     Tap a song in Gig mode to flash it at the top for the band.
                   </p>
+                  {isAdmin && (
+                    <button
+                      className="mt-3 w-full rounded-xl bg-teal-400/90 py-2 text-sm font-semibold text-slate-950"
+                      onClick={() => setShowAddSongModal(true)}
+                    >
+                      Add New Song
+                    </button>
+                  )}
                 </div>
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
@@ -3637,118 +4021,39 @@ function App() {
               </div>
             </div>
 
-            {isAdmin && (
-              <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-5">
-                <div className="mt-4 space-y-2">
-                  <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
-                    <h3 className="text-sm font-semibold">Add new song</h3>
-                    <div className="mt-3 grid gap-2 md:grid-cols-2">
-                      <input
-                        className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                        placeholder="Song title"
-                        list="song-title-suggestions"
-                        value={newSongTitle}
-                        onChange={(event) => setNewSongTitle(event.target.value)}
-                      />
-                      <input
-                        className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                        placeholder="Artist (optional)"
-                        list="song-artist-suggestions"
-                        value={newSongArtist}
-                        onChange={(event) => setNewSongArtist(event.target.value)}
-                      />
-                      <datalist id="song-title-suggestions">
-                        {Array.from(
-                          new Set(
-                            appState.songs
-                              .map((song) => song.title.trim())
-                              .filter(Boolean),
-                          ),
-                        ).map((title) => (
-                          <option key={title} value={title} />
-                        ))}
-                      </datalist>
-                      <datalist id="song-artist-suggestions">
-                        {Array.from(
-                          new Set(
-                            appState.songs
-                              .map((song) => song.artist?.trim() ?? '')
-                              .filter(Boolean),
-                          ),
-                        ).map((artist) => (
-                          <option key={artist} value={artist} />
-                        ))}
-                      </datalist>
-                      <input
-                        className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                        placeholder="Original key (optional)"
-                        value={newSongOriginalKey}
-                        onChange={(event) => setNewSongOriginalKey(event.target.value)}
-                      />
-                      <input
-                        className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm md:col-span-2"
-                        placeholder="Audio link (YouTube, Spotify, MP3)"
-                        value={newSongAudio}
-                        onChange={(event) => setNewSongAudio(event.target.value)}
-                      />
-                      <div className="md:col-span-2">
-                        <div className="text-[10px] uppercase tracking-wide text-slate-400">
-                          Setlist tags
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {appState.tagsCatalog.map((tag) => {
-                            const active = newSongTags.includes(tag)
-                            return (
-                              <button
-                                key={tag}
-                                className={`rounded-full border px-4 py-2 text-sm font-semibold ${
-                                  active
-                                    ? 'border-teal-300 bg-teal-400/10 text-teal-200'
-                                    : 'border-white/10 text-slate-300'
-                                }`}
-                                onClick={() =>
-                                  setNewSongTags((current) =>
-                                    current.includes(tag)
-                                      ? current.filter((item) => item !== tag)
-                                      : [...current, tag],
-                                  )
-                                }
-                              >
-                                {tag}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="mt-3 grid gap-2 md:grid-cols-2">
-                      <button
-                        type="button"
-                        className="w-full rounded-xl bg-teal-400/90 py-2 text-sm font-semibold text-slate-950"
-                        onClick={() => addSongFromAdmin(false)}
-                      >
-                        Add song
-                      </button>
-                      <button
-                        type="button"
-                        className="w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
-                        onClick={() => addSongFromAdmin(true)}
-                      >
-                        Add + attach charts/lyrics
-                      </button>
-                      {songFormError && (
-                        <div className="md:col-span-2 text-xs text-red-200">
-                          {songFormError}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
+            <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-5">
+              <div className="text-[10px] uppercase tracking-[0.3em] text-slate-400">
+                Setlist tags
               </div>
-            )}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {DEFAULT_TAGS.map((tag) => {
+                  const active = songLibraryTags.includes(tag)
+                  return (
+                    <button
+                      key={tag}
+                      className={`rounded-full border px-4 py-2 text-sm font-semibold ${
+                        active
+                          ? 'border-teal-300 bg-teal-400/10 text-teal-200'
+                          : 'border-white/10 text-slate-300'
+                      }`}
+                      onClick={() =>
+                        setSongLibraryTags((current) =>
+                          current.includes(tag)
+                            ? current.filter((item) => item !== tag)
+                            : [...current, tag],
+                        )
+                      }
+                    >
+                      {tag}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
 
             <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-5">
-              {appState.songs.map((song) => (
+              <div className="space-y-2">
+                {filteredSongLibrary.map((song) => (
                 <div
                   key={song.id}
                   role="button"
@@ -3822,7 +4127,8 @@ function App() {
                     </div>
                   </div>
                 </div>
-              ))}
+                ))}
+              </div>
             </div>
           </section>
         )}
@@ -4083,7 +4389,7 @@ function App() {
                 Pick your instrument to open the right chart or lyrics.
               </p>
             </div>
-            <div className="max-h-[calc(80vh-92px)] overflow-auto px-5 pb-5">
+            <div className="max-h-[calc(80vh-92px)] overflow-auto px-5 pb-10">
               <div className="mt-4 grid grid-cols-2 gap-2">
                 {INSTRUMENTS.map((instrument) => (
                   <button
@@ -4126,21 +4432,23 @@ function App() {
             className="mx-auto w-full max-w-md overflow-hidden rounded-t-3xl bg-slate-900 sm:rounded-3xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">
                 {docModalContent ? 'Song Lyrics' : 'Song documents'}
               </h3>
-              <button
-                className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                onClick={() => {
-                  setDocModalSongId(null)
-                  setDocModalContent(null)
-                }}
-              >
-                Close
-              </button>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => {
+                    setDocModalSongId(null)
+                    setDocModalContent(null)
+                  }}
+                >
+                  Close
+                </button>
+              </div>
             </div>
-            <div className="max-h-[70vh] overflow-auto px-6 pb-6">
+            <div className="max-h-[70vh] overflow-auto px-6 pb-10">
               {!docModalContent && (
                 <div className="mt-4 space-y-2">
                   {appState.documents
@@ -4205,44 +4513,99 @@ function App() {
             className="mx-auto w-full max-w-md max-h-[80vh] overflow-hidden rounded-3xl bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">{audioModalLabel}</h3>
-              <button
-                className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                onClick={() => setAudioModalUrl(null)}
-              >
-                Close
-              </button>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => setAudioModalUrl(null)}
+                >
+                  Close
+                </button>
+              </div>
             </div>
-            <div className="max-h-[calc(80vh-72px)] overflow-auto px-6 pb-6">
-              <div className="mt-4 w-full overflow-hidden rounded-2xl border border-white/10 bg-black">
-                {isSpotifyUrl(audioModalUrl) ? (
-                  <iframe
-                    className="h-20 w-full"
-                    src={getSpotifyEmbedUrl(audioModalUrl)}
-                    title="Spotify player"
-                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                    loading="lazy"
-                  />
-                ) : isAudioFileUrl(audioModalUrl) ? (
-                  <div className="bg-slate-950/60 p-4">
-                    <audio className="w-full" controls src={audioModalUrl} />
+            <div className="max-h-[calc(80vh-72px)] overflow-auto px-6 pb-10 pt-4">
+              <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold">{audioModalLabel}</div>
+                    <div className="text-xs text-slate-400">
+                      {isSpotifyUrl(audioModalUrl)
+                        ? 'Spotify'
+                        : isAudioFileUrl(audioModalUrl)
+                          ? 'Audio file'
+                          : 'YouTube'}
+                    </div>
+                  </div>
+                  <div className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-[10px] uppercase tracking-wide text-slate-300">
+                    Practice
+                  </div>
+                </div>
+                <div className="mt-4 w-full overflow-hidden rounded-2xl border border-white/10 bg-black">
+                  {isSpotifyUrl(audioModalUrl) ? (
+                    <iframe
+                      className="h-20 w-full"
+                      src={getSpotifyEmbedUrl(audioModalUrl)}
+                      title="Spotify player"
+                      allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                      loading="lazy"
+                    />
+                  ) : isAudioFileUrl(audioModalUrl) ? (
+                    <div className="bg-slate-950/60 p-4">
+                      <audio
+                        ref={audioPlayerRef}
+                        className="w-full"
+                        controls
+                        src={audioModalUrl}
+                        onPlay={() => {
+                          if (audioPlayerRef.current) {
+                            audioPlayerRef.current.playbackRate = audioPlaybackRate
+                          }
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="aspect-video w-full">
+                      <iframe
+                        className="h-full w-full"
+                        src={getYouTubeEmbedUrl(audioModalUrl)}
+                        title="YouTube audio player"
+                        allow="autoplay; encrypted-media"
+                        allowFullScreen
+                      />
+                    </div>
+                  )}
+                </div>
+                {isAudioFileUrl(audioModalUrl) ? (
+                  <div className="mt-4 flex items-center justify-between rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-xs text-slate-300">
+                    <span>Playback speed</span>
+                    <div className="flex items-center gap-2">
+                      {([0.75, 1, 1.25, 1.5] as const).map((rate) => (
+                        <button
+                          key={rate}
+                          className={`rounded-full border px-2 py-1 text-[10px] ${
+                            audioPlaybackRate === rate
+                              ? 'border-teal-300 bg-teal-400/10 text-teal-200'
+                              : 'border-white/10 text-slate-300'
+                          }`}
+                          onClick={() => {
+                            setAudioPlaybackRate(rate)
+                            if (audioPlayerRef.current) {
+                              audioPlayerRef.current.playbackRate = rate
+                            }
+                          }}
+                        >
+                          {rate}x
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ) : (
-                  <div className="aspect-video w-full">
-                    <iframe
-                      className="h-full w-full"
-                      src={getYouTubeEmbedUrl(audioModalUrl)}
-                      title="YouTube audio player"
-                      allow="autoplay; encrypted-media"
-                      allowFullScreen
-                    />
-                  </div>
+                  <p className="mt-4 text-[10px] text-slate-400">
+                    To slow down YouTube or Spotify, use their built-in playback controls.
+                  </p>
                 )}
               </div>
-              <p className="mt-3 text-xs text-slate-400">
-                Audio opens inside the app for practice.
-              </p>
             </div>
           </div>
         </div>
@@ -4257,12 +4620,12 @@ function App() {
             className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Musician</p>
                 <h3 className="text-lg font-semibold">Edit musician</h3>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="mt-3 flex items-center gap-2">
                 <button
                   className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                   onClick={saveEditMusician}
@@ -4284,7 +4647,7 @@ function App() {
               </div>
             </div>
 
-            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-5">
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-10">
               <div className="mt-4 grid gap-2 md:grid-cols-2">
                 <input
                   className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
@@ -4399,7 +4762,7 @@ function App() {
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">Delete this gig?</h3>
             </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-5">
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10">
               <p className="mt-2 text-sm text-slate-300">
                 This will remove the gig, assignments, and special requests.
               </p>
@@ -4434,7 +4797,7 @@ function App() {
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">Assign musicians first</h3>
             </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-5">
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10">
               <p className="mt-2 text-sm text-slate-300">
                 Add vocalists to this gig and mark the Musicians section complete before
                 assigning singers and keys to songs.
@@ -4452,6 +4815,674 @@ function App() {
         </div>
       )}
 
+      {showMissingSingerWarning && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowMissingSingerWarning(false)}
+        >
+          <div
+            className="w-full max-w-sm max-h-[80vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Assign singers first</h3>
+            </div>
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10">
+              <p className="mt-2 text-sm text-slate-300">
+                Add singer assignments for every song in this set before marking it complete.
+              </p>
+              <div className="mt-4">
+                <button
+                  className="w-full rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                  onClick={() => setShowMissingSingerWarning(false)}
+                >
+                  Got it
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {singerModalSong && currentSetlist && (
+        <div
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setSingerModalSongId(null)}
+        >
+          <div
+            className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Assign singers</h3>
+              <div className="mt-2 text-sm text-slate-300">
+                {singerModalSong.title}
+                {singerModalSong.artist ? ` · ${singerModalSong.artist}` : ''}
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => setSingerModalSongId(null)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-10 pt-4">
+              <div className="rounded-2xl border border-white/10 bg-slate-950/50 p-4">
+                <div className="text-[10px] text-slate-400">
+                  Original key: {singerModalSong.originalKey || '—'}
+                </div>
+                {!buildCompletion.musicians && (
+                  <div className="mt-2 text-xs text-amber-200">
+                    Complete “Assign Musicians” before assigning singers.
+                  </div>
+                )}
+                {gigVocalists.length === 0 ? (
+                  <div className="mt-3 text-xs text-slate-400">
+                    No vocalists assigned to this gig yet.
+                  </div>
+                ) : (
+                  <>
+                    {singerModalSong.keys.some(
+                      (key) => key.gigOverrides[currentSetlist.id],
+                    ) && (
+                      <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-slate-300">
+                        {singerModalSong.keys
+                          .filter((key) => key.gigOverrides[currentSetlist.id])
+                          .map((key) => (
+                            <span
+                              key={key.singer}
+                              className="rounded-full border border-white/10 px-2 py-1"
+                            >
+                              {key.singer} · {key.gigOverrides[currentSetlist.id]}
+                            </span>
+                          ))}
+                      </div>
+                    )}
+                    <div className="mt-4 space-y-2">
+                      {(pendingSingerAssignments[singerModalSong.id] ?? [
+                        { singer: '', key: '' },
+                      ]).map((pending, index) => {
+                        const selectedKey = singerModalSong.keys.find(
+                          (key) => key.singer === pending.singer,
+                        )
+                        const suggestion =
+                          selectedKey?.defaultKey || singerModalSong.originalKey || ''
+                        return (
+                          <div
+                            key={`${singerModalSong.id}-${index}`}
+                            className="grid gap-2 md:grid-cols-[1.2fr_0.8fr_auto]"
+                          >
+                            <select
+                              className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-xs text-slate-200"
+                              value={pending.singer}
+                              onChange={(event) => {
+                                if (!ensureVocalistsReady()) return
+                                const singer = event.target.value
+                                const existing = singerModalSong.keys.find(
+                                  (key) => key.singer === singer,
+                                )
+                                const rows =
+                                  pendingSingerAssignments[singerModalSong.id] ?? [
+                                    { singer: '', key: '' },
+                                  ]
+                                setPendingSingerAssignments((prev) => {
+                                  const nextRows = [...rows]
+                                  nextRows[index] = {
+                                    singer,
+                                    key:
+                                      existing?.gigOverrides[currentSetlist.id] ??
+                                      existing?.defaultKey ??
+                                      singerModalSong.originalKey ??
+                                      '',
+                                  }
+                                  return { ...prev, [singerModalSong.id]: nextRows }
+                                })
+                              }}
+                            >
+                              <option value="">Select singer</option>
+                              {gigVocalists.map((musician) => (
+                                <option key={musician.id} value={musician.name}>
+                                  {musician.name}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-xs text-slate-200"
+                              placeholder={`Key ${suggestion ? `(${suggestion})` : ''}`}
+                              value={pending.key}
+                              onChange={(event) => {
+                                const rows =
+                                  pendingSingerAssignments[singerModalSong.id] ?? [
+                                    { singer: '', key: '' },
+                                  ]
+                                setPendingSingerAssignments((prev) => {
+                                  const nextRows = [...rows]
+                                  nextRows[index] = {
+                                    singer: pending.singer,
+                                    key: event.target.value,
+                                  }
+                                  return { ...prev, [singerModalSong.id]: nextRows }
+                                })
+                              }}
+                            />
+                            <button
+                              className="rounded-xl bg-teal-400/90 px-3 py-2 text-xs font-semibold text-slate-950"
+                              onClick={() =>
+                                saveSingerAssignment(
+                                  singerModalSong.id,
+                                  pending.singer,
+                                  pending.key,
+                                  index,
+                                )
+                              }
+                            >
+                              Save
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="mt-3 flex items-center justify-between text-[10px] text-slate-400">
+                      <span>Multiple vocalists supported.</span>
+                      <button
+                        className="rounded-full border border-white/10 px-2 py-1 text-[10px] text-slate-200"
+                        onClick={() =>
+                          setPendingSingerAssignments((prev) => ({
+                            ...prev,
+                            [singerModalSong.id]: [
+                              ...(prev[singerModalSong.id] ?? [{ singer: '', key: '' }]),
+                              { singer: '', key: '' },
+                            ],
+                          }))
+                        }
+                      >
+                        Add vocalist
+                      </button>
+                    </div>
+                    {(pendingSingerAssignments[singerModalSong.id] ?? []).some(
+                      (row) =>
+                        row.singer &&
+                        !singerModalSong.keys.find((key) => key.singer === row.singer),
+                    ) && (
+                      <div className="mt-2 text-[10px] text-amber-200">
+                        New singer for this song. Use the original key as a starting point.
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRemoveSongConfirm && (
+        <div
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={cancelRemoveSong}
+        >
+          <div
+            className="w-full max-w-sm max-h-[80vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Remove this song?</h3>
+            </div>
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10">
+              <p className="mt-2 text-sm text-slate-300">
+                This will remove the song from the gig setlist.
+              </p>
+              <div className="mt-4 flex items-center gap-2">
+                <button
+                  className="flex-1 rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-200"
+                  onClick={cancelRemoveSong}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="flex-1 rounded-xl bg-red-500/80 px-3 py-2 text-sm font-semibold text-white"
+                  onClick={confirmRemoveSong}
+                >
+                  Remove song
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDuplicateSongConfirm && (
+        <div
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={cancelDuplicateSong}
+        >
+          <div
+            className="w-full max-w-md max-h-[80vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Possible duplicate</h3>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={cancelDuplicateSong}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                  onClick={confirmDuplicateSong}
+                >
+                  Save anyway
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10">
+              <p className="mt-2 text-sm text-slate-300">
+                We found similar songs. Confirm before saving.
+              </p>
+              <div className="mt-3 space-y-2 text-sm">
+                {similarSongMatches.map((song) => (
+                  <div
+                    key={song.id}
+                    className="rounded-2xl border border-white/10 bg-slate-950/50 px-3 py-2"
+                  >
+                    <div className="font-semibold">{song.title}</div>
+                    <div className="text-xs text-slate-400">{song.artist || 'Unknown'}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showGigMusiciansModal && currentSetlist && (
+        <div
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowGigMusiciansModal(false)}
+        >
+          <div
+            className="w-full max-w-md max-h-[80vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Musicians on this gig</h3>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => setShowGigMusiciansModal(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10 pt-4">
+              {appState.gigMusicians.filter((row) => row.gigId === currentSetlist.id)
+                .map((row) => appState.musicians.find((musician) => musician.id === row.musicianId))
+                .filter((musician): musician is Musician => Boolean(musician))
+                .sort((a, b) => {
+                  const aCore = a.roster === 'core'
+                  const bCore = b.roster === 'core'
+                  if (aCore !== bCore) return aCore ? -1 : 1
+                  return a.name.localeCompare(b.name)
+                })
+                .map((musician) => (
+                  <div
+                    key={musician.id}
+                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-950/50 px-3 py-2 text-sm"
+                  >
+                    <div>
+                      <div className="font-semibold">{musician.name}</div>
+                      <div className="text-xs text-slate-400">
+                        {(musician.instruments ?? []).join(', ') || 'No instruments listed'}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {musician.email && (
+                        <a
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px]"
+                          href={`mailto:${musician.email}`}
+                          title="Email"
+                        >
+                          ✉️
+                        </a>
+                      )}
+                      {musician.phone && (
+                        <>
+                          <a
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px]"
+                            href={`tel:${musician.phone}`}
+                            title="Call"
+                          >
+                            📞
+                          </a>
+                          <a
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px]"
+                            href={`sms:${musician.phone}`}
+                            title="Text"
+                          >
+                            💬
+                          </a>
+                        </>
+                      )}
+                      <span
+                        className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
+                          musician.roster === 'core'
+                            ? 'bg-emerald-400/20 text-emerald-200'
+                            : 'bg-slate-600/40 text-slate-200'
+                        }`}
+                      >
+                        {musician.roster === 'core' ? 'Core' : 'Sub'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              {!appState.gigMusicians.some((row) => row.gigId === currentSetlist.id) && (
+                <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm text-slate-300">
+                  No musicians have been assigned yet.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showKeyResolveModal && resolveSongId && currentSetlist && (
+        <div
+          className="fixed inset-0 z-[99] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => {
+            setShowKeyResolveModal(false)
+            setResolveSongId(null)
+          }}
+        >
+          <div
+            className="w-full max-w-sm max-h-[80vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Resolve key</h3>
+              <div className="mt-2 text-sm text-slate-300">
+                Choose the correct key for all singers.
+              </div>
+            </div>
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10 pt-4">
+              <div className="flex flex-wrap gap-2">
+                {Array.from(
+                  new Set(
+                    getGigSingerAssignments(resolveSongId, currentSetlist.id).map(
+                      (entry) => entry.key,
+                    ),
+                  ),
+                ).map((key) => (
+                  <button
+                    key={key}
+                    className="rounded-full border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                    onClick={() => resolveGigKeyForSong(resolveSongId, key)}
+                  >
+                    {key}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-4 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => {
+                    setShowKeyResolveModal(false)
+                    setResolveSongId(null)
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAddSongModal && (
+        <div
+          className="fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowAddSongModal(false)}
+        >
+          <div
+            className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Add new song</h3>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] justify-center rounded-xl bg-teal-400/90 px-4 py-2 text-center text-sm font-semibold text-slate-950"
+                  onClick={() => addSongFromAdmin(false)}
+                >
+                  Add song
+                </button>
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => setShowAddSongModal(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-10 pt-4">
+              <div className="grid gap-2 md:grid-cols-2">
+                <input
+                  className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                  placeholder="Song title"
+                  list="song-title-suggestions"
+                  value={newSongTitle}
+                  onChange={(event) => setNewSongTitle(event.target.value)}
+                />
+                <input
+                  className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                  placeholder="Artist (optional)"
+                  list="song-artist-suggestions"
+                  value={newSongArtist}
+                  onChange={(event) => setNewSongArtist(event.target.value)}
+                />
+                <datalist id="song-title-suggestions">
+                  {Array.from(
+                    new Set(
+                      appState.songs
+                        .map((song) => song.title.trim())
+                        .filter(Boolean),
+                    ),
+                  ).map((title) => (
+                    <option key={title} value={title} />
+                  ))}
+                </datalist>
+                <datalist id="song-artist-suggestions">
+                  {Array.from(
+                    new Set(
+                      appState.songs
+                        .map((song) => song.artist?.trim() ?? '')
+                        .filter(Boolean),
+                    ),
+                  ).map((artist) => (
+                    <option key={artist} value={artist} />
+                  ))}
+                </datalist>
+                <input
+                  className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                  placeholder="Original key (optional)"
+                  value={newSongOriginalKey}
+                  onChange={(event) => setNewSongOriginalKey(event.target.value)}
+                />
+                <input
+                  className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm md:col-span-2"
+                  placeholder="Audio link (YouTube, Spotify, MP3)"
+                  value={newSongAudio}
+                  onChange={(event) => setNewSongAudio(event.target.value)}
+                />
+                <div className="md:col-span-2">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                    Setlist tags
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {appState.tagsCatalog.map((tag) => {
+                      const active = newSongTags.includes(tag)
+                      return (
+                        <button
+                          key={tag}
+                          className={`rounded-full border px-4 py-2 text-sm font-semibold ${
+                            active
+                              ? 'border-teal-300 bg-teal-400/10 text-teal-200'
+                              : 'border-white/10 text-slate-300'
+                          }`}
+                          onClick={() =>
+                            setNewSongTags((current) =>
+                              current.includes(tag)
+                                ? current.filter((item) => item !== tag)
+                                : [...current, tag],
+                            )
+                          }
+                        >
+                          {tag}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+              {songFormError && (
+                <div className="mt-3 text-xs text-red-200">{songFormError}</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSubModal && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowSubModal(false)}
+        >
+          <div
+            className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Sub musician</p>
+                <h3 className="text-lg font-semibold">Quick add new sub</h3>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                  onClick={() => {
+                    if (newSubName.trim() && activeGigId) {
+                      addSubAndAssign()
+                      setShowSubModal(false)
+                    }
+                  }}
+                >
+                  Add + assign
+                </button>
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => setShowSubModal(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-10 pt-4">
+              <div className="grid gap-2 md:grid-cols-2">
+                <input
+                  className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm"
+                  placeholder="Name"
+                  value={newSubName}
+                  onChange={(event) => setNewSubName(event.target.value)}
+                />
+                <div className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                    Instruments
+                  </div>
+                  <input
+                    className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs"
+                    placeholder="Filter instruments"
+                    value={instrumentFilter}
+                    onChange={(event) => setInstrumentFilter(event.target.value)}
+                  />
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {filteredInstruments.map((instrument) => {
+                      const active = newSubInstruments.includes(instrument)
+                      return (
+                        <button
+                          key={instrument}
+                          className={`rounded-full border px-3 py-1 text-xs ${
+                            active
+                              ? 'border-teal-300 bg-teal-400/10 text-teal-200'
+                              : 'border-white/10 text-slate-300'
+                          }`}
+                          onClick={() => {
+                            const next = newSubInstruments.includes(instrument)
+                              ? newSubInstruments.filter((item) => item !== instrument)
+                              : [...newSubInstruments, instrument]
+                            setNewSubInstruments(next)
+                            if (!next.includes('Vocals')) {
+                              setNewSubSinger('')
+                            }
+                          }}
+                        >
+                          {instrument}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      className="flex-1 rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs"
+                      placeholder="Add instrument"
+                      value={newInstrumentInput}
+                      onChange={(event) => setNewInstrumentInput(event.target.value)}
+                    />
+                    <button
+                      className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-200"
+                      onClick={addInstrumentToCatalog}
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+                <input
+                  className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm"
+                  placeholder="Email"
+                  value={newSubEmail}
+                  onChange={(event) => setNewSubEmail(event.target.value)}
+                />
+                <input
+                  className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm"
+                  placeholder="Phone"
+                  value={newSubPhone}
+                  onChange={(event) => setNewSubPhone(event.target.value)}
+                />
+                {newSubInstruments.includes('Vocals') && (
+                  <select
+                    className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm"
+                    value={newSubSinger}
+                    onChange={(event) =>
+                      setNewSubSinger(
+                        event.target.value as 'male' | 'female' | 'other' | '',
+                      )
+                    }
+                  >
+                    <option value="">Singer?</option>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                    <option value="other">Other</option>
+                  </select>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {editingSongId && (
         <div
           className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
@@ -4461,12 +5492,12 @@ function App() {
             className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Song</p>
                 <h3 className="text-lg font-semibold">Edit song</h3>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="mt-3 flex items-center gap-2">
                 <button
                   className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                   onClick={isEditSongDirty ? saveEditSong : cancelEditSong}
@@ -4482,7 +5513,7 @@ function App() {
               </div>
             </div>
 
-            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-5">
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-10">
               <div className="mt-4 grid gap-3 md:grid-cols-2">
               <input
                 className="rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm"
@@ -4745,7 +5776,7 @@ function App() {
                 </div>
               </div>
             </div>
-            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 py-4">
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4">
               {gigMode && appState.currentSongId && (
                 <button
                   className="liquid-button mb-4 w-full animate-pulse rounded-2xl bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 shadow-[0_0_18px_rgba(74,222,128,0.45)]"
@@ -4796,6 +5827,18 @@ function App() {
                           <div>
                             <div className="font-semibold">{song.title}</div>
                             <div className="text-xs text-slate-400">{song.artist}</div>
+                            {song.tags.length > 0 && (
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {song.tags.map((tag) => (
+                                  <span
+                                    key={`${song.id}-${tag}`}
+                                    className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-slate-300"
+                                  >
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
                           <input
                             type="checkbox"
@@ -4833,166 +5876,6 @@ function App() {
                     >
                       Add selected songs
                     </button>
-                    <div className="mt-6 rounded-2xl border border-white/10 bg-slate-900/60 p-4">
-                      <div className="text-sm font-semibold">Singers for this gig</div>
-                      <p className="mt-1 text-xs text-slate-400">
-                        Assign vocalists and keys per song. Original key is the reference.
-                      </p>
-                      {!buildCompletion.musicians && (
-                        <div className="mt-2 text-xs text-amber-200">
-                          Complete “Assign Musicians” before assigning singers.
-                        </div>
-                      )}
-                      {gigVocalists.length === 0 ? (
-                        <div className="mt-3 text-xs text-slate-400">
-                          No vocalists assigned to this gig yet.
-                        </div>
-                      ) : (
-                        <div className="mt-4 space-y-3">
-                          {currentSetlist.songIds
-                            .map((songId) => appState.songs.find((song) => song.id === songId))
-                            .filter((song): song is Song => Boolean(song))
-                            .map((song) => {
-                              const gigAssignments = song.keys.filter(
-                                (key) => key.gigOverrides[currentSetlist.id],
-                              )
-                              const pendingRows = pendingSingerAssignments[song.id] ?? [
-                                { singer: '', key: '' },
-                              ]
-                              return (
-                                <div
-                                  key={song.id}
-                                  className="rounded-2xl border border-white/10 bg-slate-950/50 p-3"
-                                >
-                                  <div className="flex items-center justify-between">
-                                    <div>
-                                      <div className="text-sm font-semibold">{song.title}</div>
-                                      <div className="text-[10px] text-slate-400">
-                                        Original key: {song.originalKey || '—'}
-                                      </div>
-                                    </div>
-                                  </div>
-                                  {gigAssignments.length > 0 && (
-                                    <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-slate-300">
-                                      {gigAssignments.map((key) => (
-                                        <span
-                                          key={key.singer}
-                                          className="rounded-full border border-white/10 px-2 py-1"
-                                        >
-                                          {key.singer} · {key.gigOverrides[currentSetlist.id]}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  )}
-                                  <div className="mt-3 space-y-2">
-                                    {pendingRows.map((pending, index) => {
-                                      const selectedKey = song.keys.find(
-                                        (key) => key.singer === pending.singer,
-                                      )
-                                      const suggestion =
-                                        selectedKey?.defaultKey || song.originalKey || ''
-                                      return (
-                                        <div
-                                          key={`${song.id}-${index}`}
-                                          className="grid gap-2 md:grid-cols-[1.2fr_0.8fr_auto]"
-                                        >
-                                          <select
-                                            className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-xs text-slate-200"
-                                            value={pending.singer}
-                                            onChange={(event) => {
-                                              if (!ensureVocalistsReady()) return
-                                              const singer = event.target.value
-                                              const existing = song.keys.find(
-                                                (key) => key.singer === singer,
-                                              )
-                                              setPendingSingerAssignments((prev) => {
-                                                const nextRows = [...pendingRows]
-                                                nextRows[index] = {
-                                                  singer,
-                                                  key:
-                                                    existing?.gigOverrides[currentSetlist.id] ??
-                                                    existing?.defaultKey ??
-                                                    song.originalKey ??
-                                                    '',
-                                                }
-                                                return { ...prev, [song.id]: nextRows }
-                                              })
-                                            }}
-                                          >
-                                            <option value="">Select singer</option>
-                                            {gigVocalists.map((musician) => (
-                                              <option key={musician.id} value={musician.name}>
-                                                {musician.name}
-                                              </option>
-                                            ))}
-                                          </select>
-                                          <input
-                                            className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-xs text-slate-200"
-                                            placeholder={`Key ${
-                                              suggestion ? `(${suggestion})` : ''
-                                            }`}
-                                            value={pending.key}
-                                            onChange={(event) =>
-                                              setPendingSingerAssignments((prev) => {
-                                                const nextRows = [...pendingRows]
-                                                nextRows[index] = {
-                                                  singer: pending.singer,
-                                                  key: event.target.value,
-                                                }
-                                                return { ...prev, [song.id]: nextRows }
-                                              })
-                                            }
-                                          />
-                                          <button
-                                            className="rounded-xl bg-teal-400/90 px-3 py-2 text-xs font-semibold text-slate-950"
-                                            onClick={() =>
-                                              saveSingerAssignment(
-                                                song.id,
-                                                pending.singer,
-                                                pending.key,
-                                                index,
-                                              )
-                                            }
-                                          >
-                                            Save
-                                          </button>
-                                        </div>
-                                      )
-                                    })}
-                                  </div>
-                                  <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400">
-                                    <span>Multiple vocalists supported.</span>
-                                    <button
-                                      className="rounded-full border border-white/10 px-2 py-1 text-[10px] text-slate-200"
-                                      onClick={() =>
-                                        setPendingSingerAssignments((prev) => ({
-                                          ...prev,
-                                          [song.id]: [
-                                            ...(prev[song.id] ?? pendingRows),
-                                            { singer: '', key: '' },
-                                          ],
-                                        }))
-                                      }
-                                    >
-                                      Add vocalist
-                                    </button>
-                                  </div>
-                                  {pendingRows.some(
-                                    (row) =>
-                                      row.singer &&
-                                      !song.keys.find((key) => key.singer === row.singer),
-                                  ) && (
-                                    <div className="mt-2 text-[10px] text-amber-200">
-                                      New singer for this song. Use the original key as a
-                                      starting point.
-                                    </div>
-                                  )}
-                                </div>
-                              )
-                            })}
-                        </div>
-                      )}
-                    </div>
                   </div>
                 </div>
               )}
@@ -5039,12 +5922,26 @@ function App() {
                         return (
                           <div
                             key={request.id}
+                            role="button"
+                            tabIndex={0}
                             className={`grid items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm md:grid-cols-[.9fr_1.4fr_1fr_.6fr_.4fr] ${
                               gigMode ? 'cursor-pointer' : ''
                             }`}
                             onClick={() => {
                               if (gigMode && request.songId) {
                                 setGigCurrentSong(request.songId)
+                                return
+                              }
+                              if (!gigMode && request.songId) {
+                                openSingerModal(request.songId)
+                              }
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                if (!gigMode && request.songId) {
+                                  openSingerModal(request.songId)
+                                }
                               }
                             }}
                           >
@@ -5072,14 +5969,15 @@ function App() {
                                 {(request.externalAudioUrl || song?.youtubeUrl) && (
                                   <button
                                     className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
-                                    onClick={() =>
+                                    onClick={(event) => {
+                                      event.stopPropagation()
                                       openAudioForUrl(
                                         request.externalAudioUrl ?? song?.youtubeUrl ?? '',
                                         request.externalAudioUrl
                                           ? 'External audio'
                                           : 'YouTube audio',
                                       )
-                                    }
+                                    }}
                                     aria-label="Audio"
                                     title="Audio"
                                   >
@@ -5089,7 +5987,10 @@ function App() {
                                 {hasDocsForSong(song?.id) && (
                                   <button
                                     className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-slate-200"
-                                    onClick={() => openDocsForSong(song?.id)}
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      openDocsForSong(song?.id)
+                                    }}
                                     aria-label="Documents"
                                     title="Documents"
                                   >
@@ -5248,25 +6149,71 @@ function App() {
                   <p className="mt-1 text-xs text-slate-400">
                     Import the full roster, then toggle out who is unavailable and add subs.
                   </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <select
-                      className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                      value={activeGigId}
-                      onChange={(event) => setActiveGigId(event.target.value)}
-                    >
-                      {appState.setlists.map((gig) => (
-                        <option key={gig.id} value={gig.id}>
-                          {gig.gigName} · {gig.date}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-200"
-                      onClick={importRosterToGig}
-                    >
-                      Import roster
-                    </button>
-                  </div>
+                  {!buildCompletion.musicians && (
+                    <>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-200"
+                          onClick={importRosterToGig}
+                        >
+                          Import roster
+                        </button>
+                        <select
+                          className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                          value={activeGigId}
+                          onChange={(event) => setActiveGigId(event.target.value)}
+                        >
+                          {appState.setlists.map((gig) => (
+                            <option key={gig.id} value={gig.id}>
+                              {gig.gigName} · {formatGigDate(gig.date)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="mt-4 rounded-2xl border border-white/10 bg-slate-900/70 p-4 text-xs">
+                        <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                          Add sub to gig
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <input
+                            className="w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm"
+                            placeholder="Select existing musician"
+                            list="gig-musician-list"
+                            value={subSearchInput}
+                            onChange={(event) => {
+                              const value = event.target.value
+                              setSubSearchInput(value)
+                              const match = appState.musicians.find(
+                                (musician) => musician.name.toLowerCase() === value.toLowerCase(),
+                              )
+                              if (match) {
+                                addMusicianToGig(match.id)
+                                setSubSearchInput('')
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="shrink-0 rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-200"
+                            onClick={() => {
+                              setNewSubName(subSearchInput.trim())
+                              setShowSubModal(true)
+                            }}
+                          >
+                            Add new sub
+                          </button>
+                        </div>
+                        <datalist id="gig-musician-list">
+                          {appState.musicians.map((musician) => (
+                            <option key={musician.id} value={musician.name} />
+                          ))}
+                        </datalist>
+                        <div className="mt-2 text-[10px] text-slate-400">
+                          If the sub is not listed, tap Add new sub.
+                        </div>
+                      </div>
+                    </>
+                  )}
                   <div className="mt-4 space-y-2">
                     {appState.musicians.map((musician) => {
                       const gigEntry = appState.gigMusicians.find(
@@ -5276,7 +6223,7 @@ function App() {
                       return (
                         <div
                           key={musician.id}
-                          className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-900/70 p-3 text-xs"
+                          className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-900/70 p-4 text-xs"
                         >
                           <div>
                             <div className="text-sm font-semibold">{musician.name}</div>
@@ -5291,150 +6238,25 @@ function App() {
                                   ? 'bg-teal-400/20 text-teal-200'
                                   : 'bg-red-500/20 text-red-200'
                               }`}
-                              onClick={() => toggleGigMusicianStatus(musician.id)}
+                              onClick={() => {
+                                if (buildCompletion.musicians) return
+                                toggleGigMusicianStatus(musician.id)
+                              }}
                             >
                               {gigEntry.status === 'active' ? 'Active' : 'Out'}
                             </button>
-                            <button
-                              className="rounded-full border border-white/10 px-3 py-1 text-[10px] text-slate-200"
-                              onClick={() => removeMusicianFromGig(musician.id)}
-                            >
-                              Remove
-                            </button>
+                            {!buildCompletion.musicians && (
+                              <button
+                                className="rounded-full border border-white/10 px-3 py-1 text-[10px] text-slate-200"
+                                onClick={() => removeMusicianFromGig(musician.id)}
+                              >
+                                Remove
+                              </button>
+                            )}
                           </div>
                         </div>
                       )
                     })}
-                  </div>
-                  <div className="mt-4 rounded-2xl border border-white/10 bg-slate-900/70 p-3 text-xs">
-                    <div className="text-[10px] uppercase tracking-wide text-slate-400">
-                      Add sub to gig
-                    </div>
-                    <input
-                      className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm"
-                      placeholder="Select existing musician"
-                      list="gig-musician-list"
-                      onChange={(event) => {
-                        const match = appState.musicians.find(
-                          (musician) =>
-                            musician.name.toLowerCase() ===
-                            event.target.value.toLowerCase(),
-                        )
-                        if (match) {
-                          addMusicianToGig(match.id)
-                          event.currentTarget.value = ''
-                        }
-                      }}
-                    />
-                    <datalist id="gig-musician-list">
-                      {appState.musicians.map((musician) => (
-                        <option key={musician.id} value={musician.name} />
-                      ))}
-                    </datalist>
-                    <p className="mt-2 text-[10px] text-slate-400">
-                      If the sub is not listed, add them to the roster above first.
-                    </p>
-                  </div>
-
-                  <div className="mt-4 rounded-2xl border border-white/10 bg-slate-900/70 p-3 text-xs">
-                    <div className="text-[10px] uppercase tracking-wide text-slate-400">
-                      Quick add new sub
-                    </div>
-                    <div className="mt-2 grid gap-2 md:grid-cols-2">
-                      <input
-                        className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm"
-                        placeholder="Name"
-                        value={newSubName}
-                        onChange={(event) => setNewSubName(event.target.value)}
-                      />
-                      <div className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm">
-                        <div className="text-[10px] uppercase tracking-wide text-slate-400">
-                          Instruments
-                        </div>
-                        <input
-                          className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs"
-                          placeholder="Filter instruments"
-                          value={instrumentFilter}
-                          onChange={(event) => setInstrumentFilter(event.target.value)}
-                        />
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {filteredInstruments.map((instrument) => {
-                            const active = newSubInstruments.includes(instrument)
-                            return (
-                              <button
-                                key={instrument}
-                                className={`rounded-full border px-3 py-1 text-xs ${
-                                  active
-                                    ? 'border-teal-300 bg-teal-400/10 text-teal-200'
-                                    : 'border-white/10 text-slate-300'
-                                }`}
-                                onClick={() => {
-                                  const next = newSubInstruments.includes(instrument)
-                                    ? newSubInstruments.filter(
-                                        (item) => item !== instrument,
-                                      )
-                                    : [...newSubInstruments, instrument]
-                                  setNewSubInstruments(next)
-                                  if (!next.includes('Vocals')) {
-                                    setNewSubSinger('')
-                                  }
-                                }}
-                              >
-                                {instrument}
-                              </button>
-                            )
-                          })}
-                        </div>
-                        <div className="mt-2 flex gap-2">
-                          <input
-                            className="flex-1 rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs"
-                            placeholder="Add instrument"
-                            value={newInstrumentInput}
-                            onChange={(event) => setNewInstrumentInput(event.target.value)}
-                          />
-                          <button
-                            className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-200"
-                            onClick={addInstrumentToCatalog}
-                          >
-                            Add
-                          </button>
-                        </div>
-                      </div>
-                      <input
-                        className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm"
-                        placeholder="Email"
-                        value={newSubEmail}
-                        onChange={(event) => setNewSubEmail(event.target.value)}
-                      />
-                      <input
-                        className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm"
-                        placeholder="Phone"
-                        value={newSubPhone}
-                        onChange={(event) => setNewSubPhone(event.target.value)}
-                      />
-                      {newSubInstruments.includes('Vocals') && (
-                        <select
-                          className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm"
-                          value={newSubSinger}
-                          onChange={(event) =>
-                            setNewSubSinger(
-                              event.target.value as 'male' | 'female' | 'other' | '',
-                            )
-                          }
-                        >
-                          <option value="">Singer?</option>
-                          <option value="male">Male</option>
-                          <option value="female">Female</option>
-                          <option value="other">Other</option>
-                        </select>
-                      )}
-                      <button
-                        className="rounded-lg bg-teal-400/90 px-3 py-2 text-sm font-semibold text-slate-950"
-                        onClick={addSubAndAssign}
-                      >
-                        Add + assign
-                      </button>
-                    </div>
                   </div>
                 </div>
               )}
@@ -5487,20 +6309,102 @@ function App() {
                       {!buildCompletion[
                         section.toLowerCase() as 'dinner' | 'latin' | 'dance'
                       ] && !gigMode && (
-                        <div className="mt-3">
-                          {!starterPasteOpen[section as 'Dinner' | 'Latin' | 'Dance'] ? (
-                            <button
-                              className="rounded-xl border border-white/10 px-2 py-1 text-[10px] text-slate-200"
-                              onClick={() =>
-                                setStarterPasteOpen((prev) => ({
-                                  ...prev,
-                                  [section]: true,
-                                }))
-                              }
-                            >
-                              Paste starter list
-                            </button>
-                          ) : (
+                        <div className="mt-3 space-y-3">
+                          <div className="flex items-center gap-2">
+                            {!starterPasteOpen[section as 'Dinner' | 'Latin' | 'Dance'] ? (
+                              <button
+                                className="min-w-[170px] whitespace-nowrap rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                                onClick={() =>
+                                  setStarterPasteOpen((prev) => ({
+                                    ...prev,
+                                    [section]: true,
+                                  }))
+                                }
+                              >
+                                Paste starter list
+                              </button>
+                            ) : (
+                              <button
+                                className="min-w-[170px] whitespace-nowrap rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                                onClick={() =>
+                                  setStarterPasteOpen((prev) => ({
+                                    ...prev,
+                                    [section]: false,
+                                  }))
+                                }
+                              >
+                                Close
+                              </button>
+                            )}
+                            <details className="w-auto">
+                              <summary
+                                className="inline-flex min-w-[130px] cursor-pointer items-center justify-center whitespace-nowrap rounded-xl border border-white/10 px-4 py-2 text-center text-sm font-semibold text-slate-200"
+                                onClick={() => {
+                                  const panel = document.getElementById(`section-add-${section}`)
+                                  panel?.classList.toggle('hidden')
+                                }}
+                              >
+                                Add song
+                              </summary>
+                            </details>
+                          </div>
+                          <div
+                            id={`section-add-${section}`}
+                            className="mt-2 hidden w-full rounded-2xl border border-white/10 bg-slate-950 p-2 text-[10px] text-slate-200 shadow-xl"
+                          >
+                              <input
+                                className="w-full rounded-lg border border-white/10 bg-slate-900/70 px-2 py-1 text-slate-200"
+                                placeholder="Choose a song"
+                                list={`section-song-${section}`}
+                                onChange={(event) => {
+                                  const value = event.currentTarget.value
+                                  const match = appState.songs.find(
+                                    (song) =>
+                                      song.title.toLowerCase() === value.trim().toLowerCase(),
+                                  )
+                                  if (match) {
+                                    addSongToSection(section, match.title)
+                                    event.currentTarget.value = ''
+                                  }
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key !== 'Enter') return
+                                  event.preventDefault()
+                                  const value = (event.currentTarget as HTMLInputElement).value
+                                  const match = appState.songs.find(
+                                    (song) =>
+                                      song.title.toLowerCase() === value.trim().toLowerCase(),
+                                  )
+                                  if (match) {
+                                    addSongToSection(section, match.title)
+                                    ;(event.currentTarget as HTMLInputElement).value = ''
+                                    return
+                                  }
+                                  openAddSongForSection(section, value)
+                                  ;(event.currentTarget as HTMLInputElement).value = ''
+                                }}
+                                onBlur={(event) => {
+                                  const value = event.currentTarget.value.trim()
+                                  if (!value) return
+                                  const match = appState.songs.find(
+                                    (song) =>
+                                      song.title.toLowerCase() === value.toLowerCase(),
+                                  )
+                                  if (!match) {
+                                    openAddSongForSection(section, value)
+                                    event.currentTarget.value = ''
+                                  }
+                                }}
+                              />
+                              <datalist id={`section-song-${section}`}>
+                                {appState.songs
+                                  .filter((song) => song.tags.includes(section))
+                                  .map((song) => (
+                                    <option key={song.id} value={song.title} />
+                                  ))}
+                              </datalist>
+                          </div>
+                          {starterPasteOpen[section as 'Dinner' | 'Latin' | 'Dance'] && (
                             <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-3 text-[10px] text-slate-200">
                               <div className="text-[10px] text-slate-400">
                                 One song per line. Format: Title – Artist (singers optional).
@@ -5523,7 +6427,7 @@ function App() {
                               />
                               <div className="mt-2 flex items-center gap-2">
                                 <button
-                                  className="rounded-xl bg-teal-400/90 px-3 py-2 text-xs font-semibold text-slate-950"
+                                  className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                                   onClick={() =>
                                     importSectionFromPaste(
                                       section as 'Dinner' | 'Latin' | 'Dance',
@@ -5536,7 +6440,7 @@ function App() {
                                   Import paste
                                 </button>
                                 <button
-                                  className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-200"
+                                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                                   onClick={() => {
                                     setStarterPasteBySection((prev) => ({
                                       ...prev,
@@ -5555,35 +6459,6 @@ function App() {
                           )}
                         </div>
                       )}
-                      {!buildCompletion[
-                        section.toLowerCase() as 'dinner' | 'latin' | 'dance'
-                      ] && !gigMode && (
-                        <details className="mt-3">
-                          <summary className="inline-flex cursor-pointer items-center rounded-xl border border-white/10 px-2 py-1 text-[10px] text-slate-200">
-                            Add song
-                          </summary>
-                          <div className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950 p-2 text-[10px] text-slate-200 shadow-xl">
-                            <input
-                              className="w-full rounded-lg border border-white/10 bg-slate-900/70 px-2 py-1"
-                              placeholder="Choose a song"
-                              list={`section-song-${section}`}
-                              onChange={(event) => {
-                                if (event.target.value) {
-                                  addSongToSection(section, event.target.value)
-                                  event.currentTarget.value = ''
-                                }
-                              }}
-                            />
-                            <datalist id={`section-song-${section}`}>
-                              {appState.songs
-                                .filter((song) => song.tags.includes(section))
-                                .map((song) => (
-                                  <option key={song.id} value={song.title} />
-                                ))}
-                            </datalist>
-                          </div>
-                        </details>
-                      )}
                       <div className="mt-4 space-y-2">
                         {currentSetlist.songIds
                           .map((songId) => appState.songs.find((song) => song.id === songId))
@@ -5592,6 +6467,8 @@ function App() {
                           .map((song) => (
                             <div
                               key={song.id}
+                              role="button"
+                              tabIndex={0}
                               className={`rounded-2xl border px-3 py-2 text-xs ${
                                 gigMode ? 'cursor-pointer' : ''
                               } ${
@@ -5602,6 +6479,16 @@ function App() {
                               onClick={() => {
                                 if (gigMode) {
                                   setGigCurrentSong(song.id)
+                                  return
+                                }
+                                openSingerModal(song.id)
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                  event.preventDefault()
+                                  if (!gigMode) {
+                                    openSingerModal(song.id)
+                                  }
                                 }
                               }}
                             >
@@ -5613,14 +6500,39 @@ function App() {
                                   <div className="text-[10px] text-slate-400">
                                     {song.artist}
                                   </div>
+                                  {!gigMode && currentSetlist && (() => {
+                                    const assignments = getGigSingerAssignments(
+                                      song.id,
+                                      currentSetlist.id,
+                                    )
+                                    const singers = assignments.map((entry) => entry.singer)
+                                    const keys = Array.from(
+                                      new Set(assignments.map((entry) => entry.key)),
+                                    )
+                                    const label = !assignments.length
+                                      ? 'No singers assigned?'
+                                      : keys.length === 1
+                                        ? `${singers.join(', ')} · Key: ${keys[0]}`
+                                        : `${singers.join(', ')} · Multiple keys`
+                                    return (
+                                      <div
+                                        className={`mt-2 text-[10px] ${
+                                          assignments.length === 0 ? 'text-red-300' : 'text-teal-200'
+                                        }`}
+                                      >
+                                        {label}
+                                      </div>
+                                    )
+                                  })()}
                                 </div>
                                 <div className="flex items-center gap-2">
                                   {song.youtubeUrl && (
                                     <button
                                       className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
-                                      onClick={() =>
+                                      onClick={(event) => {
+                                        event.stopPropagation()
                                         openAudioForUrl(song.youtubeUrl ?? '', 'YouTube audio')
-                                      }
+                                      }}
                                       aria-label="Audio"
                                       title="Audio"
                                     >
@@ -5630,7 +6542,10 @@ function App() {
                                   {hasDocsForSong(song.id) && (
                                     <button
                                       className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200"
-                                      onClick={() => openDocsForSong(song.id)}
+                                      onClick={(event) => {
+                                        event.stopPropagation()
+                                        openDocsForSong(song.id)
+                                      }}
                                       aria-label="Documents"
                                       title="Documents"
                                     >
@@ -5643,7 +6558,10 @@ function App() {
                                     ] && (
                                       <button
                                         className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px] text-red-200"
-                                        onClick={() => removeSongFromSetlist(song.id)}
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          requestRemoveSong(song.id)
+                                        }}
                                         aria-label="Remove song"
                                         title="Remove song"
                                       >
@@ -5652,6 +6570,30 @@ function App() {
                                     )}
                                 </div>
                               </div>
+                              {!gigMode &&
+                                currentSetlist &&
+                                (() => {
+                                  const assignments = getGigSingerAssignments(
+                                    song.id,
+                                    currentSetlist.id,
+                                  )
+                                  const keys = Array.from(
+                                    new Set(assignments.map((entry) => entry.key)),
+                                  )
+                                  if (keys.length <= 1) return null
+                                  return (
+                                    <button
+                                      className="mt-2 inline-flex items-center gap-2 rounded-full border border-amber-300/40 px-2 py-1 text-[10px] text-amber-200"
+                                      onClick={(event) => {
+                                        event.stopPropagation()
+                                        setResolveSongId(song.id)
+                                        setShowKeyResolveModal(true)
+                                      }}
+                                    >
+                                      Resolve key
+                                    </button>
+                                  )
+                                })()}
                             </div>
                           ))}
                       </div>

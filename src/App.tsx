@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import html2pdf from 'html2pdf.js'
 import { isSupabaseEnabled, supabase, supabaseEnvStatus } from './lib/supabaseClient'
 
 type Role = 'admin' | 'user' | null
@@ -2443,6 +2444,22 @@ function App() {
     if (choice.outcome === 'accepted') {
       setInstallPrompt(null)
     }
+  }
+
+  const handleDownloadPDF = async () => {
+    const element = document.getElementById('printable-setlist')
+    if (!element || !currentSetlist) return
+
+    const opt = {
+      margin: 0.4,
+      filename: `${currentSetlist.gigName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_setlist.pdf`,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2 },
+      jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+    }
+
+    // @ts-ignore
+    await html2pdf().set(opt).from(element).save()
   }
 
   const screenHeader = (
@@ -5608,7 +5625,7 @@ function App() {
                     </button>
                     <button
                       className="liquid-button min-w-[160px] rounded-xl bg-teal-500 px-4 py-2 text-sm font-semibold text-white shadow-[0_0_20px_rgba(20,184,166,0.3)] hover:bg-teal-400 transition-colors"
-                      onClick={() => window.print()}
+                      onClick={handleDownloadPDF}
                     >
                       Download PDF
                     </button>

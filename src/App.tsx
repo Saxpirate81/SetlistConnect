@@ -5709,9 +5709,42 @@ function App() {
                         })
                         .map((musician) => (
                           <div key={musician.id} className="print-card">
-                            <div className="print-card-title">{musician.name}</div>
-                            <div className="print-card-subtitle">
-                              {(musician.instruments ?? []).join(', ') || 'No instruments'}
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <div className="print-card-title">{musician.name}</div>
+                                <div className="print-card-subtitle">
+                                  {(musician.instruments ?? []).join(', ') || 'No instruments'}
+                                </div>
+                              </div>
+                              <div className="print-contact-row">
+                                {musician.email && (
+                                  <a
+                                    href={`mailto:${musician.email}`}
+                                    className="print-icon-link"
+                                    title="Email"
+                                  >
+                                    ✉️
+                                  </a>
+                                )}
+                                {musician.phone && (
+                                  <>
+                                    <a
+                                      href={`tel:${musician.phone}`}
+                                      className="print-icon-link"
+                                      title="Call"
+                                    >
+                                      📞
+                                    </a>
+                                    <a
+                                      href={`sms:${musician.phone}`}
+                                      className="print-icon-link"
+                                      title="Text"
+                                    >
+                                      💬
+                                    </a>
+                                  </>
+                                )}
+                              </div>
                             </div>
                           </div>
                         ))}

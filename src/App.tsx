@@ -2450,16 +2450,46 @@ function App() {
     const element = document.getElementById('printable-setlist')
     if (!element || !currentSetlist) return
 
+    // Clone the element to render it in a clean context
+    const clone = element.cloneNode(true) as HTMLElement
+    clone.id = 'printable-setlist-clone'
+    
+    // Create a container that mimics the page view width
+    const container = document.createElement('div')
+    container.style.position = 'absolute'
+    container.style.left = '-9999px'
+    container.style.top = '0'
+    container.style.width = '816px' // 8.5in at 96dpi
+    container.style.padding = '32px' // Match the p-8 padding
+    container.style.backgroundColor = '#ffffff'
+    container.style.color = '#0b0f14'
+    container.className = 'bg-white' // Ensure tailwind bg is applied if needed
+    container.appendChild(clone)
+    
+    document.body.appendChild(container)
+
     const opt = {
-      margin: 0.4,
+      margin: 0.2, 
       filename: `${currentSetlist.gigName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_setlist.pdf`,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
+      html2canvas: { 
+        scale: 2, 
+        useCORS: true, 
+        logging: false,
+        windowWidth: 816,
+        scrollY: 0
+      },
       jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
     }
 
-    // @ts-ignore
-    await html2pdf().set(opt).from(element).save()
+    try {
+      // @ts-ignore
+      await html2pdf().set(opt).from(container).save()
+    } catch (err) {
+      console.error('PDF generation failed:', err)
+    } finally {
+      document.body.removeChild(container)
+    }
   }
 
   const screenHeader = (

@@ -296,6 +296,8 @@ a:hover {
   body {
     background: #ffffff;
     color: #0b0f14;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
   body * {

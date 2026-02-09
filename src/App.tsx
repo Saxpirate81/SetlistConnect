@@ -5577,37 +5577,37 @@ function App() {
 
       {showPrintPreview && currentSetlist && (
         <div
-          className="fixed inset-0 z-[99] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          className="fixed inset-0 z-[99] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm"
           onClick={() => setShowPrintPreview(false)}
         >
           <div
-            className="w-full max-w-5xl max-h-[90vh] overflow-hidden rounded-3xl border border-white/10 bg-white text-slate-950"
+            className="w-full max-w-5xl max-h-[90vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900 text-slate-200 shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex flex-col">
-              <div className="border-b border-slate-200 bg-white px-5 py-4">
-                <div className="flex items-center justify-between gap-3">
+              <div className="border-b border-white/10 bg-slate-900 px-6 py-4">
+                <div className="flex items-center justify-between gap-4">
                   <div>
-                    <h3 className="text-lg font-semibold">Setlist PDF Preview</h3>
-                    <div className="text-xs text-slate-500">
+                    <h3 className="text-lg font-semibold text-white">Setlist PDF Preview</h3>
+                    <div className="text-xs text-slate-400">
                       {currentSetlist.gigName} · {formatGigDate(currentSetlist.date)}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
                     <button
-                      className="min-w-[120px] rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700"
+                      className="min-w-[100px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-white/5 transition-colors"
                       onClick={() => setShowPrintPreview(false)}
                     >
                       Close
                     </button>
                     <button
-                      className="min-w-[140px] rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700"
+                      className="min-w-[120px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-white/5 transition-colors"
                       onClick={() => window.print()}
                     >
                       Print
                     </button>
                     <button
-                      className="min-w-[160px] rounded-xl bg-teal-500 px-4 py-2 text-sm font-semibold text-white"
+                      className="liquid-button min-w-[160px] rounded-xl bg-teal-500 px-4 py-2 text-sm font-semibold text-white shadow-[0_0_20px_rgba(20,184,166,0.3)] hover:bg-teal-400 transition-colors"
                       onClick={() => window.print()}
                     >
                       Download PDF
@@ -5615,8 +5615,8 @@ function App() {
                   </div>
                 </div>
               </div>
-              <div className="max-h-[calc(90vh-96px)] overflow-auto bg-slate-100 p-6">
-                <div className="mx-auto w-full max-w-[900px] rounded-[24px] bg-white p-6 shadow-[0_20px_60px_rgba(15,23,42,0.15)]">
+              <div className="max-h-[calc(90vh-96px)] overflow-auto bg-slate-950/50 p-6">
+                <div className="mx-auto w-full max-w-[900px] rounded-[2px] bg-white p-8 shadow-2xl ring-1 ring-white/10">
                   <div id="printable-setlist" className="print-container">
                 <div className="print-header">
                   <div>

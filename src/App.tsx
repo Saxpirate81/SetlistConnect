@@ -269,6 +269,12 @@ function App() {
   const [showPlaylistModal, setShowPlaylistModal] = useState(false)
   const [playlistIndex, setPlaylistIndex] = useState(0)
   const [playlistAutoAdvance, setPlaylistAutoAdvance] = useState(true)
+  const [playlistPlayNonce, setPlaylistPlayNonce] = useState(0)
+  const playlistYouTubeHostRef = useRef<HTMLDivElement | null>(null)
+  const playlistYouTubePlayerRef = useRef<{
+    destroy?: () => void
+  } | null>(null)
+  const [youTubeApiReady, setYouTubeApiReady] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
   const [draggedSectionSongId, setDraggedSectionSongId] = useState<string | null>(null)
   const [dragOverSectionSongId, setDragOverSectionSongId] = useState<string | null>(null)
@@ -2971,8 +2977,115 @@ function App() {
       if (movedSongTimerRef.current) {
         window.clearTimeout(movedSongTimerRef.current)
       }
+      if (playlistYouTubePlayerRef.current?.destroy) {
+        playlistYouTubePlayerRef.current.destroy()
+      }
     }
   }, [])
+
+  useEffect(() => {
+    const ytWindow = window as Window & {
+      YT?: {
+        Player: new (
+          element: HTMLElement,
+          config: {
+            videoId: string
+            playerVars?: Record<string, number>
+            events?: {
+              onReady?: () => void
+              onStateChange?: (event: { data: number }) => void
+            }
+          },
+        ) => { destroy?: () => void }
+        PlayerState: { ENDED: number }
+      }
+      onYouTubeIframeAPIReady?: () => void
+    }
+    if (ytWindow.YT?.Player) {
+      setYouTubeApiReady(true)
+      return
+    }
+    const existing = document.querySelector('script[data-youtube-api="true"]')
+    const previousHandler = ytWindow.onYouTubeIframeAPIReady
+    ytWindow.onYouTubeIframeAPIReady = () => {
+      previousHandler?.()
+      setYouTubeApiReady(true)
+    }
+    if (!existing) {
+      const script = document.createElement('script')
+      script.src = 'https://www.youtube.com/iframe_api'
+      script.async = true
+      script.dataset.youtubeApi = 'true'
+      document.body.appendChild(script)
+    }
+    return () => {
+      ytWindow.onYouTubeIframeAPIReady = previousHandler
+    }
+  }, [])
+
+  useEffect(() => {
+    const ytWindow = window as Window & {
+      YT?: {
+        Player: new (
+          element: HTMLElement,
+          config: {
+            videoId: string
+            playerVars?: Record<string, number>
+            events?: {
+              onReady?: () => void
+              onStateChange?: (event: { data: number }) => void
+            }
+          },
+        ) => { destroy?: () => void }
+        PlayerState: { ENDED: number }
+      }
+    }
+    const videoId = getYouTubeVideoId(currentPlaylistEntry?.audioUrl ?? null)
+    if (
+      !showPlaylistModal ||
+      !videoId ||
+      !youTubeApiReady ||
+      !playlistYouTubeHostRef.current ||
+      !ytWindow.YT?.Player
+    ) {
+      if (playlistYouTubePlayerRef.current?.destroy) {
+        playlistYouTubePlayerRef.current.destroy()
+        playlistYouTubePlayerRef.current = null
+      }
+      return
+    }
+    if (playlistYouTubePlayerRef.current?.destroy) {
+      playlistYouTubePlayerRef.current.destroy()
+      playlistYouTubePlayerRef.current = null
+    }
+    playlistYouTubePlayerRef.current = new ytWindow.YT.Player(playlistYouTubeHostRef.current, {
+      videoId,
+      playerVars: {
+        autoplay: 1,
+        rel: 0,
+      },
+      events: {
+        onStateChange: (event) => {
+          if (event.data !== ytWindow.YT?.PlayerState.ENDED) return
+          if (!playlistAutoAdvance || playlistEntries.length <= 1) return
+          setPlaylistIndex((current) => (current + 1) % playlistEntries.length)
+        },
+      },
+    })
+    return () => {
+      if (playlistYouTubePlayerRef.current?.destroy) {
+        playlistYouTubePlayerRef.current.destroy()
+        playlistYouTubePlayerRef.current = null
+      }
+    }
+  }, [
+    currentPlaylistEntry?.audioUrl,
+    playlistPlayNonce,
+    playlistAutoAdvance,
+    playlistEntries.length,
+    showPlaylistModal,
+    youTubeApiReady,
+  ])
 
   useEffect(() => {
     if (!isSupabaseEnabled || !supabase) return
@@ -3389,7 +3502,7 @@ function App() {
                     {!isAdmin && (
                       <div className="mt-3 grid grid-cols-2 gap-2">
                         <button
-                          className="rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs font-semibold text-slate-100"
+                          className="flex min-h-[74px] flex-col items-start justify-between rounded-2xl border border-white/10 bg-gradient-to-br from-indigo-500/35 via-slate-900/50 to-slate-900/70 px-3 py-3 text-left text-white shadow-[0_0_14px_rgba(79,70,229,0.25)]"
                           onClick={(event) => {
                             event.stopPropagation()
                             setSelectedSetlistId(setlist.id)
@@ -3397,10 +3510,11 @@ function App() {
                             setShowSetlistModal(false)
                           }}
                         >
-                          Musicians
+                          <span className="text-lg">🎤</span>
+                          <span className="text-xs font-semibold">Musicians</span>
                         </button>
                         <button
-                          className="rounded-xl border border-teal-300/40 bg-teal-400/10 px-3 py-2 text-xs font-semibold text-teal-100"
+                          className="flex min-h-[74px] flex-col items-start justify-between rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500/35 via-slate-900/50 to-slate-900/70 px-3 py-3 text-left text-white shadow-[0_0_14px_rgba(16,185,129,0.25)]"
                           onClick={(event) => {
                             event.stopPropagation()
                             setSelectedSetlistId(setlist.id)
@@ -3408,7 +3522,8 @@ function App() {
                             setShowGigMusiciansModal(false)
                           }}
                         >
-                          Gig Info
+                          <span className="text-lg">🎶</span>
+                          <span className="text-xs font-semibold">Gig Info</span>
                         </button>
                       </div>
                     )}
@@ -3425,56 +3540,48 @@ function App() {
               )}
             </div>
 
-            <div
-              className={`rounded-3xl border p-5 ${
-                hasTodayGig
-                  ? 'border-teal-300/60 bg-teal-400/10 shadow-[0_0_24px_rgba(45,212,191,0.25)]'
-                  : 'border-white/10 bg-slate-900/50'
-              }`}
-            >
-              <h3 className="font-semibold">Tonight at a glance</h3>
-              <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
-                <Stat label="Songs in library" value={appState.songs.length} />
-                <Stat label="Special requests" value={appState.specialRequests.length} />
-                <Stat
-                  label="Charts for you"
-                  value={
-                    appState.charts.filter((chart) =>
-                      appState.instrument === 'All'
-                        ? true
-                        : chart.instrument === appState.instrument,
-                    ).length
-                  }
-                />
-                <Stat
-                  label="Tags"
-                  value={appState.tagsCatalog.length}
-                />
+            {isAdmin && (
+              <div
+                className={`rounded-3xl border p-5 ${
+                  hasTodayGig
+                    ? 'border-teal-300/60 bg-teal-400/10 shadow-[0_0_24px_rgba(45,212,191,0.25)]'
+                    : 'border-white/10 bg-slate-900/50'
+                }`}
+              >
+                <h3 className="font-semibold">Tonight at a glance</h3>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                  <Stat label="Songs in library" value={appState.songs.length} />
+                  <Stat label="Special requests" value={appState.specialRequests.length} />
+                  <Stat
+                    label="Charts for you"
+                    value={
+                      appState.charts.filter((chart) =>
+                        appState.instrument === 'All'
+                          ? true
+                          : chart.instrument === appState.instrument,
+                      ).length
+                    }
+                  />
+                  <Stat
+                    label="Tags"
+                    value={appState.tagsCatalog.length}
+                  />
+                </div>
               </div>
-            </div>
+            )}
 
-            <div className="rounded-3xl border border-white/10 bg-slate-900/50 p-5">
-              <h3 className="font-semibold">Past gigs</h3>
-              <p className="mt-1 text-xs text-slate-400">Tap a gig to view the setlist.</p>
-              <div className="mt-4 flex flex-col gap-3">
-                {pastGigs.map((setlist) => (
-                  <div
-                    key={setlist.id}
-                    role="button"
-                    tabIndex={0}
-                    className="rounded-2xl border border-white/10 bg-slate-950/40 p-4"
-                    onClick={() => {
-                      setSelectedSetlistId(setlist.id)
-                      if (isAdmin) {
-                        setScreen('builder')
-                      } else {
-                        setShowSetlistModal(true)
-                        setShowGigMusiciansModal(false)
-                      }
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
+            {isAdmin && (
+              <div className="rounded-3xl border border-white/10 bg-slate-900/50 p-5">
+                <h3 className="font-semibold">Past gigs</h3>
+                <p className="mt-1 text-xs text-slate-400">Tap a gig to view the setlist.</p>
+                <div className="mt-4 flex flex-col gap-3">
+                  {pastGigs.map((setlist) => (
+                    <div
+                      key={setlist.id}
+                      role="button"
+                      tabIndex={0}
+                      className="rounded-2xl border border-white/10 bg-slate-950/40 p-4"
+                      onClick={() => {
                         setSelectedSetlistId(setlist.id)
                         if (isAdmin) {
                           setScreen('builder')
@@ -3482,81 +3589,95 @@ function App() {
                           setShowSetlistModal(true)
                           setShowGigMusiciansModal(false)
                         }
-                      }
-                    }}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h3 className="font-semibold">{setlist.gigName}</h3>
-                        <p className="text-xs text-slate-400">
-                          {formatGigDate(setlist.date)}
-                        </p>
-                      </div>
-                      {setlist.venueAddress ? (
-                        <a
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
-                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-                            setlist.venueAddress,
-                          )}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          title="Open address"
-                          onClick={(event) => event.stopPropagation()}
-                        >
-                          📍
-                        </a>
-                      ) : (
-                        <div className="h-7 w-7" />
-                      )}
-                    </div>
-                    {isAdmin && (
-                      <div className="mt-3 flex items-center gap-3 text-xs">
-                        <button
-                          className="text-teal-300"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            duplicateGig(setlist.id)
-                          }}
-                        >
-                          Duplicate gig
-                        </button>
-                      </div>
-                    )}
-                    {!isAdmin && (
-                      <div className="mt-3 grid grid-cols-2 gap-2">
-                        <button
-                          className="rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs font-semibold text-slate-100"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            setSelectedSetlistId(setlist.id)
-                            setShowGigMusiciansModal(true)
-                            setShowSetlistModal(false)
-                          }}
-                        >
-                          Musicians
-                        </button>
-                        <button
-                          className="rounded-xl border border-teal-300/40 bg-teal-400/10 px-3 py-2 text-xs font-semibold text-teal-100"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            setSelectedSetlistId(setlist.id)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          setSelectedSetlistId(setlist.id)
+                          if (isAdmin) {
+                            setScreen('builder')
+                          } else {
                             setShowSetlistModal(true)
                             setShowGigMusiciansModal(false)
-                          }}
-                        >
-                          Gig Info
-                        </button>
+                          }
+                        }
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="font-semibold">{setlist.gigName}</h3>
+                          <p className="text-xs text-slate-400">
+                            {formatGigDate(setlist.date)}
+                          </p>
+                        </div>
+                        {setlist.venueAddress ? (
+                          <a
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
+                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                              setlist.venueAddress,
+                            )}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="Open address"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            📍
+                          </a>
+                        ) : (
+                          <div className="h-7 w-7" />
+                        )}
                       </div>
-                    )}
-                  </div>
-                ))}
-                {pastGigs.length === 0 && (
-                  <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm text-slate-300">
-                    No past gigs yet.
-                  </div>
-                )}
+                      {isAdmin && (
+                        <div className="mt-3 flex items-center gap-3 text-xs">
+                          <button
+                            className="text-teal-300"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              duplicateGig(setlist.id)
+                            }}
+                          >
+                            Duplicate gig
+                          </button>
+                        </div>
+                      )}
+                      {!isAdmin && (
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <button
+                            className="flex min-h-[74px] flex-col items-start justify-between rounded-2xl border border-white/10 bg-gradient-to-br from-indigo-500/35 via-slate-900/50 to-slate-900/70 px-3 py-3 text-left text-white shadow-[0_0_14px_rgba(79,70,229,0.25)]"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setSelectedSetlistId(setlist.id)
+                              setShowGigMusiciansModal(true)
+                              setShowSetlistModal(false)
+                            }}
+                          >
+                            <span className="text-lg">🎤</span>
+                            <span className="text-xs font-semibold">Musicians</span>
+                          </button>
+                          <button
+                            className="flex min-h-[74px] flex-col items-start justify-between rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500/35 via-slate-900/50 to-slate-900/70 px-3 py-3 text-left text-white shadow-[0_0_14px_rgba(16,185,129,0.25)]"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setSelectedSetlistId(setlist.id)
+                              setShowSetlistModal(true)
+                              setShowGigMusiciansModal(false)
+                            }}
+                          >
+                            <span className="text-lg">🎶</span>
+                            <span className="text-xs font-semibold">Gig Info</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {pastGigs.length === 0 && (
+                    <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm text-slate-300">
+                      No past gigs yet.
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
 
           </section>
         )}
@@ -6099,17 +6220,19 @@ function App() {
                         : 0,
                     )
                   }
+                  onMouseUp={() => setPlaylistPlayNonce((current) => current + 1)}
                 >
                   ⏮ Prev
                 </button>
                 <button
                   className="rounded-xl border border-white/10 px-3 py-2 text-sm"
                   disabled={playlistEntries.length === 0}
-                  onClick={() =>
+                  onClick={() => {
                     setPlaylistIndex((current) =>
                       playlistEntries.length ? (current + 1) % playlistEntries.length : 0,
                     )
-                  }
+                    setPlaylistPlayNonce((current) => current + 1)
+                  }}
                 >
                   ⏭ Next
                 </button>
@@ -6169,6 +6292,7 @@ function App() {
                       </div>
                     ) : isSpotifyUrl(currentPlaylistEntry.audioUrl) ? (
                       <iframe
+                        key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
                         src={getSpotifyEmbedUrl(currentPlaylistEntry.audioUrl)}
                         className="h-[152px] w-full rounded-xl border border-white/10"
                         title="Spotify playlist item"
@@ -6176,6 +6300,7 @@ function App() {
                       />
                     ) : isAudioFileUrl(currentPlaylistEntry.audioUrl) ? (
                       <audio
+                        key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
                         className="w-full"
                         controls
                         autoPlay
@@ -6185,8 +6310,15 @@ function App() {
                           setPlaylistIndex((current) => (current + 1) % playlistEntries.length)
                         }}
                       />
+                    ) : getYouTubeVideoId(currentPlaylistEntry.audioUrl) ? (
+                      <div
+                        key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
+                        ref={playlistYouTubeHostRef}
+                        className="aspect-video w-full overflow-hidden rounded-xl border border-white/10"
+                      />
                     ) : (
                       <iframe
+                        key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
                         className="aspect-video w-full rounded-xl border border-white/10"
                         src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
                         title="YouTube playlist item"
@@ -6211,7 +6343,10 @@ function App() {
                         ? 'border-teal-300/70 bg-teal-400/10'
                         : 'border-white/10 bg-slate-950/40'
                     }`}
-                    onClick={() => setPlaylistIndex(index)}
+                    onClick={() => {
+                      setPlaylistIndex(index)
+                      setPlaylistPlayNonce((current) => current + 1)
+                    }}
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -8221,6 +8356,22 @@ function getYouTubeEmbedUrl(url: string | null) {
     return url ?? ''
   }
   return url ?? ''
+}
+
+function getYouTubeVideoId(url: string | null) {
+  try {
+    if (!url) return ''
+    const parsed = new URL(url)
+    if (parsed.hostname.includes('youtube.com')) {
+      return parsed.searchParams.get('v') ?? ''
+    }
+    if (parsed.hostname.includes('youtu.be')) {
+      return parsed.pathname.replace('/', '')
+    }
+  } catch (error) {
+    return ''
+  }
+  return ''
 }
 
 function getSpotifyEmbedUrl(url: string | null) {

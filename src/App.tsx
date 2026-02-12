@@ -228,7 +228,7 @@ function App() {
   const [bannerTouchStartX, setBannerTouchStartX] = useState<number | null>(null)
   const [newDocSongId, setNewDocSongId] = useState('')
   const [newDocSongTitle, setNewDocSongTitle] = useState('')
-  const [newDocType, setNewDocType] = useState<'Chart' | 'Lyrics' | 'Lead Sheet'>('Chart')
+  const [newDocType, setNewDocType] = useState<'Chart' | 'Lyrics' | 'Lead Sheet' | ''>('')
   const [newDocInstrument, setNewDocInstrument] = useState('')
   const [newDocTitle, setNewDocTitle] = useState('')
   const [newDocUrl, setNewDocUrl] = useState('')
@@ -241,6 +241,7 @@ function App() {
   const [singerModalSongId, setSingerModalSongId] = useState<string | null>(null)
   const [showAddSongModal, setShowAddSongModal] = useState(false)
   const [songLibraryTags, setSongLibraryTags] = useState<string[]>([])
+  const [songLibrarySearch, setSongLibrarySearch] = useState('')
   const [showDuplicateSongConfirm, setShowDuplicateSongConfirm] = useState(false)
   const [pendingSongDraft, setPendingSongDraft] = useState<{
     title: string
@@ -255,6 +256,10 @@ function App() {
   const [showGigMusiciansModal, setShowGigMusiciansModal] = useState(false)
   const [showSetlistModal, setShowSetlistModal] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
+  const [draggedSectionSongId, setDraggedSectionSongId] = useState<string | null>(null)
+  const [dragOverSectionSongId, setDragOverSectionSongId] = useState<string | null>(null)
+  const [recentlyMovedSongId, setRecentlyMovedSongId] = useState<string | null>(null)
+  const movedSongTimerRef = useRef<number | null>(null)
   const [activeBuildPanel, setActiveBuildPanel] = useState<
     | 'musicians'
     | 'addSongs'
@@ -282,7 +287,16 @@ function App() {
   }>({ Dinner: false, Latin: false, Dance: false })
   const [buildCompleteOverrides, setBuildCompleteOverrides] = useState<
     Record<string, Partial<Record<NonNullable<typeof activeBuildPanel>, boolean>>>
-  >({})
+  >(() => {
+    const stored = localStorage.getItem('setlist_build_complete')
+    if (!stored) return {}
+    try {
+      return JSON.parse(stored)
+    } catch {
+      localStorage.removeItem('setlist_build_complete')
+      return {}
+    }
+  })
   const lastDocAutosaveRef = useRef('')
   const editSongBaselineRef = useRef<{
     title: string
@@ -326,11 +340,31 @@ function App() {
   const filteredInstruments = instrumentCatalog.filter((instrument) =>
     instrument.toLowerCase().includes(instrumentFilter.toLowerCase()),
   )
+  const normalizeTagList = (tags: string[]) => {
+    const seen = new Set<string>()
+    const normalized: string[] = []
+    tags.forEach((tag) => {
+      const value = tag.trim()
+      if (!value) return
+      const key = value.toLowerCase()
+      if (seen.has(key)) return
+      seen.add(key)
+      normalized.push(value)
+    })
+    return normalized
+  }
+  const hasSongTag = (song: Song, tag: string) =>
+    song.tags.some((item) => item.trim().toLowerCase() === tag.trim().toLowerCase())
 
   const currentSetlist = useMemo(
     () => appState.setlists.find((setlist) => setlist.id === selectedSetlistId),
     [appState.setlists, selectedSetlistId],
   )
+  useEffect(() => {
+    if (!currentSetlist?.id) return
+    setActiveGigId(currentSetlist.id)
+  }, [currentSetlist?.id])
+
   const singerModalSong = useMemo(
     () => (singerModalSongId ? appState.songs.find((song) => song.id === singerModalSongId) : null),
     [appState.songs, singerModalSongId],
@@ -340,18 +374,30 @@ function App() {
     if (!currentSetlist) return []
     const gigMusicianIds = new Set(
       appState.gigMusicians
-        .filter((entry) => entry.gigId === currentSetlist.id)
+        .filter((entry) => entry.gigId === currentSetlist.id && entry.status !== 'out')
         .map((entry) => entry.musicianId),
     )
-    return appState.musicians
-      .filter((musician) => gigMusicianIds.has(musician.id))
-      .filter((musician) => Boolean(musician.singer))
+    const assignedMusicians = appState.musicians.filter((musician) =>
+      gigMusicianIds.has(musician.id),
+    )
+    const preferredVocalists = assignedMusicians.filter(
+      (musician) =>
+        Boolean(musician.singer) ||
+        (musician.instruments ?? []).some(
+          (instrument) => instrument.toLowerCase() === 'vocals',
+        ),
+    )
+    return preferredVocalists.length > 0 ? preferredVocalists : assignedMusicians
   }, [appState.gigMusicians, appState.musicians, currentSetlist])
 
   const isEditSongDirty = useMemo(() => {
     if (!editingSongId || !editSongBaselineRef.current) return false
     const baseline = editSongBaselineRef.current
-    const normalizeTags = (tags: string[]) => [...tags].sort().join('|')
+    const normalizeTags = (tags: string[]) =>
+      normalizeTagList(tags)
+        .map((tag) => tag.toLowerCase())
+        .sort()
+        .join('|')
     return (
       editingSongTitle.trim() !== baseline.title.trim() ||
       editingSongArtist.trim() !== baseline.artist.trim() ||
@@ -376,7 +422,7 @@ function App() {
     const byTag =
       activeTags.length === 0
         ? bySearch
-        : bySearch.filter((song) => activeTags.every((tag) => song.tags.includes(tag)))
+        : bySearch.filter((song) => activeTags.every((tag) => hasSongTag(song, tag)))
     return byTag.filter((song) => !setlistSongIds.has(song.id))
   }, [appState.songs, currentSetlist?.songIds, songSearch, activeTags])
 
@@ -440,7 +486,7 @@ function App() {
     const count = currentSetlist.songIds
       .map((songId) => appState.songs.find((song) => song.id === songId))
       .filter((song): song is Song => Boolean(song))
-      .filter((song) => song.tags.includes(section)).length
+      .filter((song) => hasSongTag(song, section)).length
     return { label: 'Songs', value: count }
   }, [
     activeBuildPanel,
@@ -465,7 +511,7 @@ function App() {
       currentSetlist.songIds
         .map((songId) => appState.songs.find((song) => song.id === songId))
         .filter((song): song is Song => Boolean(song))
-        .filter((song) => song.tags.includes(section)).length
+        .filter((song) => hasSongTag(song, section)).length
     return {
       musicians: appState.gigMusicians.filter((gm) => gm.gigId === currentSetlist.id)
         .length,
@@ -480,11 +526,16 @@ function App() {
 
   const filteredSongLibrary = useMemo(() => {
     const base = appState.songs.filter((song) => {
+      const searchTerm = songLibrarySearch.trim().toLowerCase()
+      if (searchTerm) {
+        const haystack = `${song.title} ${song.artist} ${song.tags.join(' ')}`.toLowerCase()
+        if (!haystack.includes(searchTerm)) return false
+      }
       if (songLibraryTags.length === 0) return true
-      return songLibraryTags.every((tag) => song.tags.includes(tag))
+      return songLibraryTags.every((tag) => hasSongTag(song, tag))
     })
     return [...base].sort((a, b) => a.title.localeCompare(b.title))
-  }, [appState.songs, songLibraryTags])
+  }, [appState.songs, songLibrarySearch, songLibraryTags])
 
   const getGigKeysText = (songId: string, gigId: string) => {
     const song = appState.songs.find((item) => item.id === songId)
@@ -625,7 +676,8 @@ function App() {
               .map((songId) => appState.songs.find((song) => song.id === songId))
               .filter((song): song is Song => Boolean(song))
               .filter((song) =>
-                song.tags.includes(
+                hasSongTag(
+                  song,
                   panel === 'dinner' ? 'Dinner' : panel === 'latin' ? 'Latin' : 'Dance',
                 ),
               )
@@ -636,13 +688,17 @@ function App() {
       }
     }
     setBuildPanelDirty(true)
-    setBuildCompleteOverrides((prev) => ({
-      ...prev,
-      [currentSetlist.id]: {
-        ...(prev[currentSetlist.id] ?? {}),
-        [panel]: value,
-      },
-    }))
+    setBuildCompleteOverrides((prev) => {
+      const next = {
+        ...prev,
+        [currentSetlist.id]: {
+          ...(prev[currentSetlist.id] ?? {}),
+          [panel]: value,
+        },
+      }
+      localStorage.setItem('setlist_build_complete', JSON.stringify(next))
+      return next
+    })
   }
 
   const handlePrintSetlist = () => {
@@ -666,7 +722,7 @@ function App() {
 
   const ensureVocalistsReady = () => {
     if (!currentSetlist) return false
-    if (!buildCompletion.musicians || gigVocalists.length === 0) {
+    if (gigVocalists.length === 0) {
       setShowSingerWarning(true)
       return false
     }
@@ -683,9 +739,10 @@ function App() {
     if (!ensureVocalistsReady()) return
     const song = appState.songs.find((item) => item.id === songId)
     if (!song) return
-    const normalizedKey = keyValue.trim() || song.originalKey?.trim() || ''
-    if (!singerName || !normalizedKey) return
     const existingKey = song.keys.find((key) => key.singer === singerName)
+    const normalizedKey =
+      keyValue.trim() || existingKey?.defaultKey?.trim() || song.originalKey?.trim() || 'TBD'
+    if (!singerName) return
     commitChange('Assign singer key', (prev) => ({
       ...prev,
       songs: prev.songs.map((item) => {
@@ -781,6 +838,7 @@ function App() {
       setLoginPhase('transition')
       loginTimerRef.current = window.setTimeout(() => {
         setRole('admin')
+        setScreen('setlists')
         setLoginPhase('app')
         localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()))
       }, 300)
@@ -793,6 +851,7 @@ function App() {
       setLoginPhase('transition')
       loginTimerRef.current = window.setTimeout(() => {
         setRole('user')
+        setScreen('setlists')
         setLoginPhase('app')
         localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()))
       }, 300)
@@ -806,6 +865,7 @@ function App() {
       loginTimerRef.current = null
     }
     setRole(null)
+    setScreen('setlists')
     setLoginPhase('login')
     setLoginInput('')
     localStorage.removeItem(LAST_ACTIVE_KEY)
@@ -824,6 +884,7 @@ function App() {
   const duplicateGig = (setlistId: string) => {
     const source = appState.setlists.find((setlist) => setlist.id === setlistId)
     if (!source) return
+    const uniqueSourceSongIds = Array.from(new Set(source.songIds))
     const newId = createId()
     commitChange('Duplicate gig', (prev) => {
       const duplicate: Setlist = {
@@ -831,6 +892,7 @@ function App() {
         id: newId,
         gigName: `${source.gigName} (Copy)`,
         date: new Date().toISOString().slice(0, 10),
+        songIds: uniqueSourceSongIds,
       }
       const sourceGigMusicians = prev.gigMusicians.filter((gm) => gm.gigId === source.id)
       const clonedGigMusicians = sourceGigMusicians.map((gm) => ({
@@ -870,10 +932,10 @@ function App() {
           venue_address: source.venueAddress ?? '',
         }),
       )
-      if (source.songIds.length) {
+      if (uniqueSourceSongIds.length) {
         runSupabase(
           supabase.from('SetlistGigSongs').insert(
-            source.songIds.map((songId, index) => ({
+            uniqueSourceSongIds.map((songId, index) => ({
               id: createId(),
               gig_id: newId,
               song_id: songId,
@@ -894,7 +956,7 @@ function App() {
       if (gigMusicianRows.length) {
         runSupabase(supabase.from('SetlistGigMusicians').insert(gigMusicianRows))
       }
-      const gigSingerRows = source.songIds.flatMap((songId) => {
+      const gigSingerRows = uniqueSourceSongIds.flatMap((songId) => {
         const song = appState.songs.find((item) => item.id === songId)
         if (!song) return []
         return song.keys
@@ -978,19 +1040,24 @@ function App() {
 
   const addSongsToSetlist = () => {
     if (selectedSongIds.length === 0 || !currentSetlist) return
+    const songsToAdd = selectedSongIds.filter((songId) => !currentSetlist.songIds.includes(songId))
+    if (songsToAdd.length === 0) {
+      setSelectedSongIds([])
+      return
+    }
     setBuildPanelDirty(true)
     commitChange('Add songs', (prev) => ({
       ...prev,
       setlists: prev.setlists.map((setlist) =>
         setlist.id === currentSetlist.id
-          ? { ...setlist, songIds: [...setlist.songIds, ...selectedSongIds] }
+          ? { ...setlist, songIds: [...setlist.songIds, ...songsToAdd] }
           : setlist,
       ),
     }))
     if (supabase) {
       runSupabase(
         supabase.from('SetlistGigSongs').insert(
-          selectedSongIds.map((songId, index) => ({
+          songsToAdd.map((songId, index) => ({
             id: createId(),
             gig_id: currentSetlist.id,
             song_id: songId,
@@ -1051,7 +1118,7 @@ function App() {
     setBuildPanelDirty(true)
     const sectionSongIds = source.songIds.filter((songId) => {
       const song = appState.songs.find((item) => item.id === songId)
-      return song?.tags.includes(section)
+      return song ? hasSongTag(song, section) : false
     })
     if (sectionSongIds.length === 0) return
     commitChange(`Import ${section} from gig`, (prev) => ({
@@ -1167,7 +1234,7 @@ function App() {
         ? existingByTitleArtist.get(`${titleKey}|${artistKey}`)
         : existingByTitle.get(titleKey)
       if (found) {
-        if (!found.tags.includes(section)) {
+        if (!hasSongTag(found, section)) {
           songIdsToTag.add(found.id)
           tagInserts.push({ id: createId(), song_id: found.id, tag: section })
         }
@@ -1264,7 +1331,7 @@ function App() {
     commitChange(`Add ${song.title} to ${section}`, (prev) => ({
       ...prev,
       songs: prev.songs.map((item) =>
-        item.id === song.id && !item.tags.includes(section)
+        item.id === song.id && !hasSongTag(item, section)
           ? { ...item, tags: [...item.tags, section] }
           : item,
       ),
@@ -1286,7 +1353,7 @@ function App() {
           sort_order: currentSetlist.songIds.length,
         }),
       )
-      if (!song.tags.includes(section)) {
+      if (!hasSongTag(song, section)) {
         runSupabase(
           supabase.from('SetlistSongTags').insert({
             id: createId(),
@@ -1296,6 +1363,64 @@ function App() {
         )
       }
     }
+  }
+
+  const reorderSectionSongs = (section: 'Dinner' | 'Latin' | 'Dance', fromId: string, toId: string) => {
+    if (!currentSetlist || fromId === toId) return
+    const sectionSongIds = currentSetlist.songIds.filter((songId) => {
+      const song = appState.songs.find((item) => item.id === songId)
+      return song ? hasSongTag(song, section) : false
+    })
+    const fromIndex = sectionSongIds.indexOf(fromId)
+    const toIndex = sectionSongIds.indexOf(toId)
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return
+
+    const reorderedSectionSongIds = [...sectionSongIds]
+    const [moved] = reorderedSectionSongIds.splice(fromIndex, 1)
+    const insertIndex = fromIndex < toIndex ? toIndex - 1 : toIndex
+    reorderedSectionSongIds.splice(insertIndex, 0, moved)
+
+    let cursor = 0
+    const nextSongIds = currentSetlist.songIds.map((songId) => {
+      const song = appState.songs.find((item) => item.id === songId)
+      if (!song || !hasSongTag(song, section)) return songId
+      const nextId = reorderedSectionSongIds[cursor]
+      cursor += 1
+      return nextId
+    })
+    const dedupedNextSongIds = Array.from(new Set(nextSongIds))
+
+    setBuildPanelDirty(true)
+    commitChange(`Reorder ${section} songs`, (prev) => ({
+      ...prev,
+      setlists: prev.setlists.map((setlist) =>
+        setlist.id === currentSetlist.id ? { ...setlist, songIds: dedupedNextSongIds } : setlist,
+      ),
+    }))
+
+    if (supabase) {
+      const client = supabase
+      dedupedNextSongIds.forEach((songId, index) => {
+        runSupabase(
+          client
+            .from('SetlistGigSongs')
+            .update({ sort_order: index })
+            .eq('gig_id', currentSetlist.id)
+            .eq('song_id', songId),
+        )
+      })
+    }
+  }
+
+  const flashMovedSong = (songId: string) => {
+    setRecentlyMovedSongId(songId)
+    if (movedSongTimerRef.current) {
+      window.clearTimeout(movedSongTimerRef.current)
+    }
+    movedSongTimerRef.current = window.setTimeout(() => {
+      setRecentlyMovedSongId(null)
+      movedSongTimerRef.current = null
+    }, 850)
   }
 
   const addMusician = () => {
@@ -1338,6 +1463,23 @@ function App() {
     setNewMusicianRoster('core')
   }
 
+  const ensureGigExistsInSupabase = (gigId: string) => {
+    if (!supabase) return
+    const gig = appState.setlists.find((setlist) => setlist.id === gigId)
+    if (!gig) return
+    runSupabase(
+      supabase.from('SetlistGigs').upsert(
+        {
+          id: gig.id,
+          gig_name: gig.gigName,
+          gig_date: gig.date,
+          venue_address: gig.venueAddress ?? '',
+        },
+        { onConflict: 'id' },
+      ),
+    )
+  }
+
   const importRosterToGig = () => {
     if (!activeGigId) return
     setBuildPanelDirty(true)
@@ -1354,6 +1496,7 @@ function App() {
       ],
     }))
     if (supabase) {
+      ensureGigExistsInSupabase(activeGigId)
       runSupabase(
         supabase.from('SetlistGigMusicians').delete().eq('gig_id', activeGigId),
       )
@@ -1411,6 +1554,7 @@ function App() {
           ],
     }))
     if (supabase) {
+      ensureGigExistsInSupabase(activeGigId)
       runSupabase(
         supabase.from('SetlistGigMusicians').insert({
           id: createId(),
@@ -1467,6 +1611,7 @@ function App() {
       ],
     }))
     if (supabase) {
+      ensureGigExistsInSupabase(activeGigId)
       runSupabase(
         supabase.from('SetlistMusicians').insert({
           id,
@@ -1492,6 +1637,8 @@ function App() {
     setNewSubPhone('')
     setNewSubInstruments([])
     setNewSubSinger('')
+    setInstrumentFilter('')
+    setNewInstrumentInput('')
   }
 
   const addInstrumentToCatalog = () => {
@@ -1507,7 +1654,7 @@ function App() {
     startEditSong(song)
     setNewDocSongId(song.id)
     setNewDocSongTitle(song.title)
-    setNewDocType('Chart')
+    setNewDocType('')
     setNewDocInstrument('')
     setNewDocTitle('')
     setNewDocUrl('')
@@ -1540,7 +1687,7 @@ function App() {
     }
   }
 
-  const saveDocumentFromEditor = async (clearAfter: boolean) => {
+  const saveDocumentFromEditor = async (clearAfter: boolean): Promise<boolean> => {
     const trimmedTitle = newDocSongTitle.trim()
     const selectedSong =
       appState.songs.find((item) => item.id === newDocSongId) ??
@@ -1549,10 +1696,15 @@ function App() {
       )
     if (!selectedSong) {
       setDocFormError('Select a song to attach this document.')
-      return
+      return false
+    }
+    if (!newDocType) {
+      setDocFormError('Select Chart, Lyrics, or Lead Sheet first.')
+      return false
     }
     setDocFormError('')
-    const instrument = newDocInstrument.trim() || 'All'
+    const instrument =
+      newDocType === 'Lyrics' ? 'Vocals' : newDocInstrument.trim() || 'All'
     const title =
       newDocType === 'Lyrics'
         ? `${selectedSong.title}${selectedSong.artist ? ` - ${selectedSong.artist}` : ''}`
@@ -1644,7 +1796,7 @@ function App() {
     if (clearAfter) {
       setNewDocSongId('')
       setNewDocSongTitle('')
-      setNewDocType('Chart')
+      setNewDocType('')
       setNewDocInstrument('')
       setNewDocTitle('')
       setNewDocUrl('')
@@ -1653,10 +1805,7 @@ function App() {
     } else {
       setNewDocFile(null)
     }
-  }
-
-  const addDocumentToSong = async () => {
-    await saveDocumentFromEditor(true)
+    return true
   }
 
   const addSongDraft = (
@@ -1715,6 +1864,10 @@ function App() {
     setNewSongAudio('')
     setNewSongOriginalKey('')
     setNewSongTags([])
+    setSongFormError('')
+    setPendingSongDraft(null)
+    setSimilarSongMatches([])
+    setShowDuplicateSongConfirm(false)
     setShowAddSongModal(false)
   }
 
@@ -1794,9 +1947,15 @@ function App() {
   const openAddSongForSection = (section: string, title: string) => {
     const trimmed = title.trim()
     if (!trimmed) return
+    setNewSongArtist('')
+    setNewSongAudio('')
+    setNewSongOriginalKey('')
     setNewSongTitle(trimmed)
     setNewSongTags([section])
     setSongFormError('')
+    setPendingSongDraft(null)
+    setSimilarSongMatches([])
+    setShowDuplicateSongConfirm(false)
     setShowAddSongModal(true)
   }
 
@@ -1806,13 +1965,14 @@ function App() {
     setEditingSongArtist(song.artist ?? '')
     setEditingSongAudio(song.youtubeUrl ?? '')
     setEditingSongOriginalKey(song.originalKey ?? '')
-    setEditingSongTags(song.tags ?? [])
+    const normalizedTags = normalizeTagList(song.tags ?? [])
+    setEditingSongTags(normalizedTags)
     editSongBaselineRef.current = {
       title: song.title ?? '',
       artist: song.artist ?? '',
       audio: song.youtubeUrl ?? '',
       originalKey: song.originalKey ?? '',
-      tags: song.tags ?? [],
+      tags: normalizedTags,
     }
   }
 
@@ -1826,10 +1986,11 @@ function App() {
     editSongBaselineRef.current = null
   }
 
-  const saveEditSong = () => {
+  const saveEditSong = (closeAfter = true) => {
     if (!editingSongId) return
     const title = editingSongTitle.trim()
     if (!title) return
+    const normalizedEditingTags = normalizeTagList(editingSongTags)
     commitChange('Update song', (prev) => ({
       ...prev,
       songs: prev.songs.map((song) =>
@@ -1840,38 +2001,63 @@ function App() {
               artist: editingSongArtist.trim(),
               youtubeUrl: editingSongAudio.trim(),
               originalKey: editingSongOriginalKey.trim(),
-              tags: editingSongTags,
+              tags: normalizedEditingTags,
             }
           : song,
       ),
-      tagsCatalog: Array.from(new Set([...prev.tagsCatalog, ...editingSongTags])),
+      tagsCatalog: Array.from(new Set([...prev.tagsCatalog, ...normalizedEditingTags])),
     }))
     if (supabase) {
       runSupabase(
-        supabase
-          .from('SetlistSongs')
-          .update({
-            title,
-            artist: editingSongArtist.trim() || null,
-            audio_url: editingSongAudio.trim() || null,
-            original_key: editingSongOriginalKey.trim() || null,
-          })
-          .eq('id', editingSongId),
-      )
-      runSupabase(
-        supabase.from('SetlistSongTags').delete().eq('song_id', editingSongId),
-      )
-      if (editingSongTags.length) {
-        runSupabase(
-          supabase.from('SetlistSongTags').insert(
-            editingSongTags.map((tag) => ({
+        (async () => {
+          const { error: updateError } = await supabase
+            .from('SetlistSongs')
+            .update({
+              title,
+              artist: editingSongArtist.trim() || null,
+              audio_url: editingSongAudio.trim() || null,
+              original_key: editingSongOriginalKey.trim() || null,
+            })
+            .eq('id', editingSongId)
+          if (updateError) return { error: updateError }
+
+          const { error: deleteError } = await supabase
+            .from('SetlistSongTags')
+            .delete()
+            .eq('song_id', editingSongId)
+          if (deleteError) return { error: deleteError }
+
+          if (!normalizedEditingTags.length) return { error: null }
+
+          const { error: insertError } = await supabase.from('SetlistSongTags').insert(
+            normalizedEditingTags.map((tag) => ({
               id: createId(),
               song_id: editingSongId,
               tag,
             })),
-          ),
-        )
-      }
+          )
+          return { error: insertError }
+        })(),
+      )
+    }
+    if (closeAfter) {
+      cancelEditSong()
+    }
+  }
+
+  const hasPendingDocDraft =
+    Boolean(editingSongId && newDocSongId && newDocType) &&
+    (newDocType === 'Lyrics'
+      ? Boolean(newDocLyrics.trim())
+      : Boolean(newDocUrl.trim() || newDocFile))
+
+  const handleSaveSongEditor = async () => {
+    if (hasPendingDocDraft) {
+      const ok = await saveDocumentFromEditor(false)
+      if (!ok) return
+    }
+    if (isEditSongDirty) {
+      saveEditSong(false)
     }
     cancelEditSong()
   }
@@ -2121,6 +2307,12 @@ function App() {
 
   const openDocsForSong = (songId?: string) => {
     if (!songId) return
+    if (role === 'admin') {
+      setShowInstrumentPrompt(false)
+      setPendingDocSongId(null)
+      setDocModalSongId(songId)
+      return
+    }
     if (!appState.instrument || appState.instrument === 'All') {
       setPendingDocSongId(songId)
       setShowInstrumentPrompt(true)
@@ -2267,11 +2459,23 @@ function App() {
     const songIdSet = new Set(songs.map((song) => song.id))
 
     const gigSongsByGig = new Map<string, string[]>()
-    gigSongsRes.data?.forEach((row) => {
+    ;[...(gigSongsRes.data ?? [])]
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      .forEach((row) => {
       if (!songIdSet.has(row.song_id)) return
       const list = gigSongsByGig.get(row.gig_id) ?? []
       list.push(row.song_id)
       gigSongsByGig.set(row.gig_id, list)
+      })
+    // Recovery path: if gig-song rows were partially lost, preserve known gig membership
+    // from singer assignments so songs still appear for affected gigs.
+    gigSingerKeysRes.data?.forEach((row) => {
+      if (!songIdSet.has(row.song_id)) return
+      const list = gigSongsByGig.get(row.gig_id) ?? []
+      if (!list.includes(row.song_id)) {
+        list.push(row.song_id)
+        gigSongsByGig.set(row.gig_id, list)
+      }
     })
 
     const setlists: Setlist[] =
@@ -2629,6 +2833,14 @@ function App() {
   }, [role])
 
   useEffect(() => {
+    return () => {
+      if (movedSongTimerRef.current) {
+        window.clearTimeout(movedSongTimerRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     if (!isSupabaseEnabled || !supabase) return
     void loadSupabaseData()
   }, [loadSupabaseData])
@@ -2645,6 +2857,7 @@ function App() {
   useEffect(() => {
     if (!editingSongId) return
     if (!newDocSongId) return
+    if (!newDocType) return
     const hasContent =
       newDocType === 'Lyrics'
         ? Boolean(newDocLyrics.trim())
@@ -2675,17 +2888,6 @@ function App() {
     newDocFile,
     newDocLyrics,
   ])
-
-  useEffect(() => {
-    const stored = localStorage.getItem('setlist_build_complete')
-    if (stored) {
-      try {
-        setBuildCompleteOverrides(JSON.parse(stored))
-      } catch {
-        localStorage.removeItem('setlist_build_complete')
-      }
-    }
-  }, [])
 
   useEffect(() => {
     localStorage.setItem(
@@ -2793,6 +2995,7 @@ function App() {
 
   useEffect(() => {
     if (!newDocSongId) return
+    if (!newDocType) return
     const existingDocs = appState.documents.filter(
       (doc) => doc.songId === newDocSongId && doc.type === newDocType,
     )
@@ -3990,7 +4193,18 @@ function App() {
                   {isAdmin && (
                     <button
                       className="mt-3 w-full rounded-xl bg-teal-400/90 py-2 text-sm font-semibold text-slate-950"
-                      onClick={() => setShowAddSongModal(true)}
+                      onClick={() => {
+                        setNewSongTitle('')
+                        setNewSongArtist('')
+                        setNewSongAudio('')
+                        setNewSongOriginalKey('')
+                        setNewSongTags([])
+                        setSongFormError('')
+                        setPendingSongDraft(null)
+                        setSimilarSongMatches([])
+                        setShowDuplicateSongConfirm(false)
+                        setShowAddSongModal(true)
+                      }}
                     >
                       Add New Song
                     </button>
@@ -4006,11 +4220,23 @@ function App() {
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-5">
+              <label className="text-[10px] uppercase tracking-[0.3em] text-slate-400">
+                Search songs
+              </label>
+              <input
+                className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+                placeholder="Search by title, artist, or tag..."
+                value={songLibrarySearch}
+                onChange={(event) => setSongLibrarySearch(event.target.value)}
+              />
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-5">
               <div className="text-[10px] uppercase tracking-[0.3em] text-slate-400">
                 Setlist tags
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
-                {DEFAULT_TAGS.map((tag) => {
+                {[...appState.tagsCatalog].sort((a, b) => a.localeCompare(b)).map((tag) => {
                   const active = songLibraryTags.includes(tag)
                   return (
                     <button
@@ -4341,9 +4567,6 @@ function App() {
           <NavButton active={screen === 'setlists'} onClick={() => setScreen('setlists')}>
             Home
           </NavButton>
-          <NavButton active={screen === 'builder'} onClick={() => setScreen('builder')}>
-            {isAdmin ? 'Build' : 'Gig Info'}
-          </NavButton>
           <NavButton active={screen === 'song'} onClick={() => setScreen('song')}>
             Songs
           </NavButton>
@@ -4444,7 +4667,7 @@ function App() {
                   {currentSetlist.songIds
                     .map((songId) => appState.songs.find((song) => song.id === songId))
                     .filter((song): song is Song => Boolean(song))
-                    .filter((song) => song.tags.includes('Latin'))
+                    .filter((song) => hasSongTag(song, 'Latin'))
                     .map((song) => {
                       const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
                       const singers = assignments.map((entry) => entry.singer)
@@ -4475,7 +4698,10 @@ function App() {
                       )
                     })}
                   {currentSetlist.songIds.filter((songId) =>
-                    appState.songs.find((song) => song.id === songId)?.tags.includes('Latin'),
+                    (() => {
+                      const song = appState.songs.find((item) => item.id === songId)
+                      return song ? hasSongTag(song, 'Latin') : false
+                    })(),
                   ).length === 0 && <div className="print-empty">No songs.</div>}
                 </div>
               </div>
@@ -4486,7 +4712,7 @@ function App() {
                   {currentSetlist.songIds
                     .map((songId) => appState.songs.find((song) => song.id === songId))
                     .filter((song): song is Song => Boolean(song))
-                    .filter((song) => song.tags.includes('Dinner'))
+                    .filter((song) => hasSongTag(song, 'Dinner'))
                     .map((song) => {
                       const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
                       const singers = assignments.map((entry) => entry.singer)
@@ -4517,7 +4743,10 @@ function App() {
                       )
                     })}
                   {currentSetlist.songIds.filter((songId) =>
-                    appState.songs.find((song) => song.id === songId)?.tags.includes('Dinner'),
+                    (() => {
+                      const song = appState.songs.find((item) => item.id === songId)
+                      return song ? hasSongTag(song, 'Dinner') : false
+                    })(),
                   ).length === 0 && <div className="print-empty">No songs.</div>}
                 </div>
               </div>
@@ -4528,7 +4757,7 @@ function App() {
                   {currentSetlist.songIds
                     .map((songId) => appState.songs.find((song) => song.id === songId))
                     .filter((song): song is Song => Boolean(song))
-                    .filter((song) => song.tags.includes('Dance'))
+                    .filter((song) => hasSongTag(song, 'Dance'))
                     .map((song) => {
                       const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
                       const singers = assignments.map((entry) => entry.singer)
@@ -4559,7 +4788,10 @@ function App() {
                       )
                     })}
                   {currentSetlist.songIds.filter((songId) =>
-                    appState.songs.find((song) => song.id === songId)?.tags.includes('Dance'),
+                    (() => {
+                      const song = appState.songs.find((item) => item.id === songId)
+                      return song ? hasSongTag(song, 'Dance') : false
+                    })(),
                   ).length === 0 && <div className="print-empty">No songs.</div>}
                 </div>
               </div>
@@ -4996,8 +5228,8 @@ function App() {
             </div>
             <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10">
               <p className="mt-2 text-sm text-slate-300">
-                Add vocalists to this gig and mark the Musicians section complete before
-                assigning singers and keys to songs.
+                Add musicians to this gig first. Singer assignment will use active assigned
+                musicians (vocalists preferred).
               </p>
               <div className="mt-4">
                 <button
@@ -5547,7 +5779,7 @@ function App() {
                       {currentSetlist.songIds
                         .map((songId) => appState.songs.find((song) => song.id === songId))
                         .filter((song): song is Song => Boolean(song))
-                        .filter((song) => song.tags.includes(section))
+                        .filter((song) => hasSongTag(song, section))
                         .map((song) => (
                           <div
                             key={song.id}
@@ -5787,7 +6019,7 @@ function App() {
                       {currentSetlist.songIds
                         .map((songId) => appState.songs.find((song) => song.id === songId))
                         .filter((song): song is Song => Boolean(song))
-                        .filter((song) => song.tags.includes('Latin'))
+                        .filter((song) => hasSongTag(song, 'Latin'))
                         .map((song) => {
                           const assignments = getGigSingerAssignments(
                             song.id,
@@ -5826,9 +6058,10 @@ function App() {
                             </div>
                           )
                         })}
-                      {currentSetlist.songIds.filter((songId) =>
-                        appState.songs.find((song) => song.id === songId)?.tags.includes('Latin'),
-                      ).length === 0 && <div className="print-empty">No songs.</div>}
+                      {currentSetlist.songIds.filter((songId) => {
+                        const song = appState.songs.find((item) => item.id === songId)
+                        return song ? hasSongTag(song, 'Latin') : false
+                      }).length === 0 && <div className="print-empty">No songs.</div>}
                     </div>
                   </div>
 
@@ -5838,7 +6071,7 @@ function App() {
                       {currentSetlist.songIds
                         .map((songId) => appState.songs.find((song) => song.id === songId))
                         .filter((song): song is Song => Boolean(song))
-                        .filter((song) => song.tags.includes('Dinner'))
+                        .filter((song) => hasSongTag(song, 'Dinner'))
                         .map((song) => {
                           const assignments = getGigSingerAssignments(
                             song.id,
@@ -5877,9 +6110,10 @@ function App() {
                             </div>
                           )
                         })}
-                      {currentSetlist.songIds.filter((songId) =>
-                        appState.songs.find((song) => song.id === songId)?.tags.includes('Dinner'),
-                      ).length === 0 && <div className="print-empty">No songs.</div>}
+                      {currentSetlist.songIds.filter((songId) => {
+                        const song = appState.songs.find((item) => item.id === songId)
+                        return song ? hasSongTag(song, 'Dinner') : false
+                      }).length === 0 && <div className="print-empty">No songs.</div>}
                     </div>
                   </div>
 
@@ -5889,7 +6123,7 @@ function App() {
                       {currentSetlist.songIds
                         .map((songId) => appState.songs.find((song) => song.id === songId))
                         .filter((song): song is Song => Boolean(song))
-                        .filter((song) => song.tags.includes('Dance'))
+                        .filter((song) => hasSongTag(song, 'Dance'))
                         .map((song) => {
                           const assignments = getGigSingerAssignments(
                             song.id,
@@ -5928,9 +6162,10 @@ function App() {
                             </div>
                           )
                         })}
-                      {currentSetlist.songIds.filter((songId) =>
-                        appState.songs.find((song) => song.id === songId)?.tags.includes('Dance'),
-                      ).length === 0 && <div className="print-empty">No songs.</div>}
+                      {currentSetlist.songIds.filter((songId) => {
+                        const song = appState.songs.find((item) => item.id === songId)
+                        return song ? hasSongTag(song, 'Dance') : false
+                      }).length === 0 && <div className="print-empty">No songs.</div>}
                   </div>
                 </div>
               </div>
@@ -5997,7 +6232,18 @@ function App() {
       {showAddSongModal && (
         <div
           className="fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/80 px-4 py-6"
-          onClick={() => setShowAddSongModal(false)}
+          onClick={() => {
+            setNewSongTitle('')
+            setNewSongArtist('')
+            setNewSongAudio('')
+            setNewSongOriginalKey('')
+            setNewSongTags([])
+            setSongFormError('')
+            setPendingSongDraft(null)
+            setSimilarSongMatches([])
+            setShowDuplicateSongConfirm(false)
+            setShowAddSongModal(false)
+          }}
         >
           <div
             className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
@@ -6014,7 +6260,18 @@ function App() {
                 </button>
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setShowAddSongModal(false)}
+                  onClick={() => {
+                    setNewSongTitle('')
+                    setNewSongArtist('')
+                    setNewSongAudio('')
+                    setNewSongOriginalKey('')
+                    setNewSongTags([])
+                    setSongFormError('')
+                    setPendingSongDraft(null)
+                    setSimilarSongMatches([])
+                    setShowDuplicateSongConfirm(false)
+                    setShowAddSongModal(false)
+                  }}
                 >
                   Close
                 </button>
@@ -6111,7 +6368,16 @@ function App() {
       {showSubModal && (
         <div
           className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/80 px-4 py-6"
-          onClick={() => setShowSubModal(false)}
+          onClick={() => {
+            setNewSubName('')
+            setNewSubEmail('')
+            setNewSubPhone('')
+            setNewSubInstruments([])
+            setNewSubSinger('')
+            setInstrumentFilter('')
+            setNewInstrumentInput('')
+            setShowSubModal(false)
+          }}
         >
           <div
             className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
@@ -6136,7 +6402,16 @@ function App() {
                 </button>
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setShowSubModal(false)}
+                  onClick={() => {
+                    setNewSubName('')
+                    setNewSubEmail('')
+                    setNewSubPhone('')
+                    setNewSubInstruments([])
+                    setNewSubSinger('')
+                    setInstrumentFilter('')
+                    setNewInstrumentInput('')
+                    setShowSubModal(false)
+                  }}
                 >
                   Close
                 </button>
@@ -6248,13 +6523,22 @@ function App() {
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Song</p>
                 <h3 className="text-lg font-semibold">Edit song</h3>
+                <p className="mt-1 truncate text-sm text-teal-200">
+                  {editingSongTitle.trim() || 'Untitled song'}
+                </p>
               </div>
               <div className="mt-3 flex items-center gap-2">
                 <button
                   className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                  onClick={isEditSongDirty ? saveEditSong : cancelEditSong}
+                  onClick={
+                    isEditSongDirty || hasPendingDocDraft
+                      ? () => {
+                          void handleSaveSongEditor()
+                        }
+                      : cancelEditSong
+                  }
                 >
-                  {isEditSongDirty ? 'Save' : 'Close'}
+                  {isEditSongDirty || hasPendingDocDraft ? 'Save' : 'Close'}
                 </button>
                 <button
                   className="min-w-[92px] rounded-xl border border-red-400/40 px-4 py-2 text-sm text-red-200"
@@ -6265,7 +6549,7 @@ function App() {
               </div>
             </div>
 
-            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-10">
+            <div className="max-h-[calc(85vh-120px)] overflow-auto px-5 pb-16">
               <div className="mt-4 grid gap-3 md:grid-cols-2">
               <input
                 className="rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm"
@@ -6298,7 +6582,9 @@ function App() {
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {appState.tagsCatalog.map((tag) => {
-                  const active = editingSongTags.includes(tag)
+                  const active = editingSongTags.some(
+                    (item) => item.trim().toLowerCase() === tag.trim().toLowerCase(),
+                  )
                   return (
                     <button
                       key={tag}
@@ -6308,11 +6594,18 @@ function App() {
                           : 'border-white/10 text-slate-300'
                       }`}
                       onClick={() =>
-                        setEditingSongTags((current) =>
-                          current.includes(tag)
-                            ? current.filter((item) => item !== tag)
-                            : [...current, tag],
-                        )
+                        setEditingSongTags((current) => {
+                          const key = tag.trim().toLowerCase()
+                          const hasTag = current.some(
+                            (item) => item.trim().toLowerCase() === key,
+                          )
+                          if (hasTag) {
+                            return current.filter(
+                              (item) => item.trim().toLowerCase() !== key,
+                            )
+                          }
+                          return normalizeTagList([...current, tag])
+                        })
                       }
                     >
                       {tag}
@@ -6386,26 +6679,59 @@ function App() {
 
               <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/40 p-4">
               <div className="text-sm font-semibold">Attach Charts & Lyrics</div>
-              <div className="mt-3 grid gap-2 md:grid-cols-2">
-                <select
-                  className="rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm"
-                  value={newDocType}
-                  onChange={(event) =>
-                    setNewDocType(event.target.value as 'Chart' | 'Lyrics' | 'Lead Sheet')
-                  }
-                >
-                  <option value="Chart">Chart</option>
-                  <option value="Lyrics">Lyrics</option>
-                  <option value="Lead Sheet">Lead sheet</option>
-                </select>
-                <input
-                  className="rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm"
-                  placeholder="Instrument (e.g. Vocals, Guitar)"
-                  list="instrument-docs"
-                  value={newDocInstrument}
-                  onChange={(event) => setNewDocInstrument(event.target.value)}
-                />
-                {newDocType !== 'Lyrics' && (
+              <div className="mt-3 grid gap-3">
+                <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                  <div className="text-[10px] uppercase tracking-[0.3em] text-slate-400">
+                    Document type
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(['Chart', 'Lyrics', 'Lead Sheet'] as const).map((type) => {
+                      const active = newDocType === type
+                      return (
+                        <button
+                          key={type}
+                          className={`rounded-full border px-4 py-2 text-sm font-semibold ${
+                            active
+                              ? 'border-teal-300 bg-teal-400/10 text-teal-200'
+                              : 'border-white/10 text-slate-300'
+                          }`}
+                          onClick={() => setNewDocType(type)}
+                        >
+                          {type}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {(newDocType === 'Chart' || newDocType === 'Lead Sheet') && (
+                  <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                    <div className="text-[10px] uppercase tracking-[0.3em] text-slate-400">
+                      Instrument
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {['All', ...instrumentCatalog].map((instrument) => {
+                        const active = (newDocInstrument || 'All') === instrument
+                        return (
+                          <button
+                            key={instrument}
+                            className={`rounded-full border px-4 py-2 text-sm font-semibold ${
+                              active
+                                ? 'border-teal-300 bg-teal-400/10 text-teal-200'
+                                : 'border-white/10 text-slate-300'
+                            }`}
+                            onClick={() =>
+                              setNewDocInstrument(instrument === 'All' ? '' : instrument)
+                            }
+                          >
+                            {instrument}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+                {(newDocType === 'Chart' || newDocType === 'Lead Sheet') && (
                   <input
                     className="rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm md:col-span-2"
                     placeholder="Document title (optional)"
@@ -6415,14 +6741,14 @@ function App() {
                 )}
                 {newDocType === 'Lyrics' && (
                   <textarea
-                    className="rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-center md:col-span-2"
+                    className="min-h-[180px] rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm leading-relaxed md:col-span-2"
                     placeholder="Paste lyrics here"
                     value={newDocLyrics}
                     onChange={(event) => setNewDocLyrics(event.target.value)}
                     rows={6}
                   />
                 )}
-                {newDocType !== 'Lyrics' && (
+                {(newDocType === 'Chart' || newDocType === 'Lead Sheet') && (
                   <label className="md:col-span-2 cursor-pointer rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-xs text-slate-300">
                     {newDocFile ? `File selected: ${newDocFile.name}` : 'Choose a file'}
                     <input
@@ -6436,20 +6762,19 @@ function App() {
                     />
                   </label>
                 )}
-                <input
-                  className="rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm md:col-span-2"
-                  placeholder="Or paste a file link (optional)"
-                  value={newDocUrl}
-                  onChange={(event) => setNewDocUrl(event.target.value)}
-                />
+                {(newDocType === 'Chart' || newDocType === 'Lead Sheet') && (
+                  <input
+                    className="rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm md:col-span-2"
+                    placeholder="Or paste a file link (optional)"
+                    value={newDocUrl}
+                    onChange={(event) => setNewDocUrl(event.target.value)}
+                  />
+                )}
               </div>
-              <button
-                type="button"
-                className="mt-3 w-full rounded-xl bg-teal-400/90 py-2 text-sm font-semibold text-slate-950"
-                onClick={addDocumentToSong}
-              >
-                {newDocType === 'Lyrics' ? 'Save lyrics' : 'Save document'}
-              </button>
+              <div className="mt-3 rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+                Use the top <span className="font-semibold text-slate-100">Save</span> button to
+                save song details and any pending chart/lyrics changes together.
+              </div>
               {docFormError && (
                 <div className="mt-2 text-xs text-red-200">{docFormError}</div>
               )}
@@ -6949,6 +7274,12 @@ function App() {
                             className="shrink-0 rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-200"
                             onClick={() => {
                               setNewSubName(subSearchInput.trim())
+                              setNewSubEmail('')
+                              setNewSubPhone('')
+                              setNewSubInstruments([])
+                              setNewSubSinger('')
+                              setInstrumentFilter('')
+                              setNewInstrumentInput('')
                               setShowSubModal(true)
                             }}
                           >
@@ -7061,6 +7392,13 @@ function App() {
                       {!buildCompletion[
                         section.toLowerCase() as 'dinner' | 'latin' | 'dance'
                       ] && !gigMode && (
+                        <p className="mt-1 text-[10px] text-slate-500">
+                          Drag songs to reorder this section.
+                        </p>
+                      )}
+                      {!buildCompletion[
+                        section.toLowerCase() as 'dinner' | 'latin' | 'dance'
+                      ] && !gigMode && (
                         <div className="mt-3 space-y-3">
                           <div className="flex items-center gap-2">
                             {!starterPasteOpen[section as 'Dinner' | 'Latin' | 'Dance'] ? (
@@ -7150,7 +7488,7 @@ function App() {
                               />
                               <datalist id={`section-song-${section}`}>
                                 {appState.songs
-                                  .filter((song) => song.tags.includes(section))
+                                  .filter((song) => hasSongTag(song, section))
                                   .map((song) => (
                                     <option key={song.id} value={song.title} />
                                   ))}
@@ -7215,19 +7553,86 @@ function App() {
                         {currentSetlist.songIds
                           .map((songId) => appState.songs.find((song) => song.id === songId))
                           .filter((song): song is Song => Boolean(song))
-                          .filter((song) => song.tags.includes(section))
+                          .filter((song) => hasSongTag(song, section))
                           .map((song) => (
-                            <div
-                              key={song.id}
-                              role="button"
-                              tabIndex={0}
-                              className={`rounded-2xl border px-3 py-2 text-xs ${
-                                gigMode ? 'cursor-pointer' : ''
-                              } ${
-                                appState.currentSongId === song.id
-                                  ? 'border-emerald-300/70 bg-emerald-400/15 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
-                                  : 'border-white/10 bg-slate-950/40'
-                              }`}
+                            <div key={song.id} className="space-y-2">
+                              {draggedSectionSongId &&
+                                draggedSectionSongId !== song.id &&
+                                dragOverSectionSongId === song.id && (
+                                  <div className="h-4 rounded-xl border border-dashed border-teal-300/70 bg-teal-300/15" />
+                                )}
+                              <div
+                                role="button"
+                                tabIndex={0}
+                                draggable={
+                                  !gigMode &&
+                                  !buildCompletion[section.toLowerCase() as 'dinner' | 'latin' | 'dance']
+                                }
+                                className={`rounded-2xl border px-3 py-2 text-xs transition-all duration-300 ${
+                                  gigMode ? 'cursor-pointer' : ''
+                                } ${
+                                  appState.currentSongId === song.id
+                                    ? 'border-emerald-300/70 bg-emerald-400/15 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
+                                    : 'border-white/10 bg-slate-950/40'
+                                } ${
+                                  recentlyMovedSongId === song.id
+                                    ? 'ring-2 ring-teal-300/80 bg-teal-300/20'
+                                    : ''
+                                }`}
+                                onDragStart={(event) => {
+                                  if (
+                                    gigMode ||
+                                    buildCompletion[
+                                      section.toLowerCase() as 'dinner' | 'latin' | 'dance'
+                                    ]
+                                  ) {
+                                    event.preventDefault()
+                                    return
+                                  }
+                                  setDraggedSectionSongId(song.id)
+                                  setDragOverSectionSongId(null)
+                                  event.dataTransfer.effectAllowed = 'move'
+                                  event.dataTransfer.setData('text/plain', song.id)
+                                }}
+                                onDragOver={(event) => {
+                                  if (
+                                    gigMode ||
+                                    buildCompletion[
+                                      section.toLowerCase() as 'dinner' | 'latin' | 'dance'
+                                    ]
+                                  ) {
+                                    return
+                                  }
+                                  event.preventDefault()
+                                  event.dataTransfer.dropEffect = 'move'
+                                  setDragOverSectionSongId(song.id)
+                                }}
+                                onDrop={(event) => {
+                                  if (
+                                    gigMode ||
+                                    buildCompletion[
+                                      section.toLowerCase() as 'dinner' | 'latin' | 'dance'
+                                    ]
+                                  ) {
+                                    return
+                                  }
+                                  event.preventDefault()
+                                  const fromId =
+                                    draggedSectionSongId ?? event.dataTransfer.getData('text/plain')
+                                  if (!fromId) return
+                                  reorderSectionSongs(
+                                    section as 'Dinner' | 'Latin' | 'Dance',
+                                    fromId,
+                                    song.id,
+                                  )
+                                  flashMovedSong(fromId)
+                                  setDraggedSectionSongId(null)
+                                  setDragOverSectionSongId(null)
+                                }}
+                                onDragEnd={() => {
+                                  setDraggedSectionSongId(null)
+                                  setDragOverSectionSongId(null)
+                                }}
                               onClick={() => {
                                 if (gigMode) {
                                   setGigCurrentSong(song.id)
@@ -7346,6 +7751,7 @@ function App() {
                                     </button>
                                   )
                                 })()}
+                              </div>
                             </div>
                           ))}
                       </div>
@@ -7360,12 +7766,12 @@ function App() {
 
       {isAdmin && history.length > 0 && (
         <div
-          className={`fixed bottom-20 left-1/2 z-40 -translate-x-1/2 rounded-full bg-teal-400/90 px-4 py-2 text-xs font-semibold text-slate-950 shadow-lg transition-opacity duration-500 ${
-            showUndoToast ? 'opacity-100' : 'pointer-events-none opacity-0'
+          className={`pointer-events-none fixed bottom-20 left-1/2 z-40 -translate-x-1/2 rounded-full bg-teal-400/90 px-4 py-2 text-xs font-semibold text-slate-950 shadow-lg transition-opacity duration-500 ${
+            showUndoToast ? 'opacity-100' : 'opacity-0'
           }`}
         >
           Change saved.
-          <button className="ml-3 underline" onClick={undoLast}>
+          <button className="pointer-events-auto ml-3 underline" onClick={undoLast}>
             Undo
           </button>
         </div>

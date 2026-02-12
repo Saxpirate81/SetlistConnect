@@ -270,11 +270,6 @@ function App() {
   const [playlistIndex, setPlaylistIndex] = useState(0)
   const [playlistAutoAdvance, setPlaylistAutoAdvance] = useState(true)
   const [playlistPlayNonce, setPlaylistPlayNonce] = useState(0)
-  const playlistYouTubeHostRef = useRef<HTMLDivElement | null>(null)
-  const playlistYouTubePlayerRef = useRef<{
-    destroy?: () => void
-  } | null>(null)
-  const [youTubeApiReady, setYouTubeApiReady] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
   const [draggedSectionSongId, setDraggedSectionSongId] = useState<string | null>(null)
   const [dragOverSectionSongId, setDragOverSectionSongId] = useState<string | null>(null)
@@ -637,6 +632,19 @@ function App() {
   }, [appState.songs, appState.specialRequests, currentSetlist])
 
   const currentPlaylistEntry = playlistEntries[playlistIndex] ?? null
+  const jumpToPlaylistIndex = (index: number) => {
+    if (!playlistEntries.length) return
+    setPlaylistIndex(index)
+    setPlaylistPlayNonce((current) => current + 1)
+  }
+  const movePlaylistBy = (delta: number) => {
+    if (!playlistEntries.length) return
+    setPlaylistIndex((current) => {
+      const next = (current + delta + playlistEntries.length) % playlistEntries.length
+      return next
+    })
+    setPlaylistPlayNonce((current) => current + 1)
+  }
 
   const getGigKeysText = (songId: string, gigId: string) => {
     const song = appState.songs.find((item) => item.id === songId)
@@ -2977,115 +2985,8 @@ function App() {
       if (movedSongTimerRef.current) {
         window.clearTimeout(movedSongTimerRef.current)
       }
-      if (playlistYouTubePlayerRef.current?.destroy) {
-        playlistYouTubePlayerRef.current.destroy()
-      }
     }
   }, [])
-
-  useEffect(() => {
-    const ytWindow = window as Window & {
-      YT?: {
-        Player: new (
-          element: HTMLElement,
-          config: {
-            videoId: string
-            playerVars?: Record<string, number>
-            events?: {
-              onReady?: () => void
-              onStateChange?: (event: { data: number }) => void
-            }
-          },
-        ) => { destroy?: () => void }
-        PlayerState: { ENDED: number }
-      }
-      onYouTubeIframeAPIReady?: () => void
-    }
-    if (ytWindow.YT?.Player) {
-      setYouTubeApiReady(true)
-      return
-    }
-    const existing = document.querySelector('script[data-youtube-api="true"]')
-    const previousHandler = ytWindow.onYouTubeIframeAPIReady
-    ytWindow.onYouTubeIframeAPIReady = () => {
-      previousHandler?.()
-      setYouTubeApiReady(true)
-    }
-    if (!existing) {
-      const script = document.createElement('script')
-      script.src = 'https://www.youtube.com/iframe_api'
-      script.async = true
-      script.dataset.youtubeApi = 'true'
-      document.body.appendChild(script)
-    }
-    return () => {
-      ytWindow.onYouTubeIframeAPIReady = previousHandler
-    }
-  }, [])
-
-  useEffect(() => {
-    const ytWindow = window as Window & {
-      YT?: {
-        Player: new (
-          element: HTMLElement,
-          config: {
-            videoId: string
-            playerVars?: Record<string, number>
-            events?: {
-              onReady?: () => void
-              onStateChange?: (event: { data: number }) => void
-            }
-          },
-        ) => { destroy?: () => void }
-        PlayerState: { ENDED: number }
-      }
-    }
-    const videoId = getYouTubeVideoId(currentPlaylistEntry?.audioUrl ?? null)
-    if (
-      !showPlaylistModal ||
-      !videoId ||
-      !youTubeApiReady ||
-      !playlistYouTubeHostRef.current ||
-      !ytWindow.YT?.Player
-    ) {
-      if (playlistYouTubePlayerRef.current?.destroy) {
-        playlistYouTubePlayerRef.current.destroy()
-        playlistYouTubePlayerRef.current = null
-      }
-      return
-    }
-    if (playlistYouTubePlayerRef.current?.destroy) {
-      playlistYouTubePlayerRef.current.destroy()
-      playlistYouTubePlayerRef.current = null
-    }
-    playlistYouTubePlayerRef.current = new ytWindow.YT.Player(playlistYouTubeHostRef.current, {
-      videoId,
-      playerVars: {
-        autoplay: 1,
-        rel: 0,
-      },
-      events: {
-        onStateChange: (event) => {
-          if (event.data !== ytWindow.YT?.PlayerState.ENDED) return
-          if (!playlistAutoAdvance || playlistEntries.length <= 1) return
-          setPlaylistIndex((current) => (current + 1) % playlistEntries.length)
-        },
-      },
-    })
-    return () => {
-      if (playlistYouTubePlayerRef.current?.destroy) {
-        playlistYouTubePlayerRef.current.destroy()
-        playlistYouTubePlayerRef.current = null
-      }
-    }
-  }, [
-    currentPlaylistEntry?.audioUrl,
-    playlistPlayNonce,
-    playlistAutoAdvance,
-    playlistEntries.length,
-    showPlaylistModal,
-    youTubeApiReady,
-  ])
 
   useEffect(() => {
     if (!isSupabaseEnabled || !supabase) return
@@ -3316,6 +3217,7 @@ function App() {
           </p>
           <form
             className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4"
+            autoComplete="on"
             onSubmit={(event) => {
               event.preventDefault()
               handleLogin()
@@ -3330,6 +3232,8 @@ function App() {
               value={loginInput}
               onChange={(event) => setLoginInput(event.target.value)}
               type="password"
+              autoComplete="current-password"
+              inputMode="text"
             />
             <button
               type="submit"
@@ -6188,7 +6092,6 @@ function App() {
       {showPlaylistModal && currentSetlist && (
         <div
           className="fixed inset-0 z-[98] flex items-center justify-center bg-slate-950/85 px-4 py-6 backdrop-blur-sm"
-          onClick={() => setShowPlaylistModal(false)}
         >
           <div
             className="w-full max-w-3xl max-h-[88vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
@@ -6203,6 +6106,7 @@ function App() {
                   </p>
                 </div>
                 <button
+                  type="button"
                   className="rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
                   onClick={() => setShowPlaylistModal(false)}
                 >
@@ -6211,32 +6115,23 @@ function App() {
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
+                  type="button"
                   className="rounded-xl border border-white/10 px-3 py-2 text-sm"
                   disabled={playlistEntries.length === 0}
-                  onClick={() =>
-                    setPlaylistIndex((current) =>
-                      playlistEntries.length
-                        ? (current - 1 + playlistEntries.length) % playlistEntries.length
-                        : 0,
-                    )
-                  }
-                  onMouseUp={() => setPlaylistPlayNonce((current) => current + 1)}
+                  onClick={() => movePlaylistBy(-1)}
                 >
                   ⏮ Prev
                 </button>
                 <button
+                  type="button"
                   className="rounded-xl border border-white/10 px-3 py-2 text-sm"
                   disabled={playlistEntries.length === 0}
-                  onClick={() => {
-                    setPlaylistIndex((current) =>
-                      playlistEntries.length ? (current + 1) % playlistEntries.length : 0,
-                    )
-                    setPlaylistPlayNonce((current) => current + 1)
-                  }}
+                  onClick={() => movePlaylistBy(1)}
                 >
                   ⏭ Next
                 </button>
                 <button
+                  type="button"
                   className={`rounded-xl border px-3 py-2 text-sm ${
                     playlistAutoAdvance
                       ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
@@ -6291,13 +6186,19 @@ function App() {
                         No audio URL saved for this song yet.
                       </div>
                     ) : isSpotifyUrl(currentPlaylistEntry.audioUrl) ? (
-                      <iframe
-                        key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
-                        src={getSpotifyEmbedUrl(currentPlaylistEntry.audioUrl)}
-                        className="h-[152px] w-full rounded-xl border border-white/10"
-                        title="Spotify playlist item"
-                        allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                      />
+                      <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
+                        <div className="text-sm text-slate-200">
+                          Spotify track ready. Tap to open in Spotify.
+                        </div>
+                        <a
+                          className="rounded-lg bg-emerald-500/90 px-3 py-2 text-xs font-semibold text-slate-950"
+                          href={currentPlaylistEntry.audioUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open Spotify
+                        </a>
+                      </div>
                     ) : isAudioFileUrl(currentPlaylistEntry.audioUrl) ? (
                       <audio
                         key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
@@ -6310,13 +6211,7 @@ function App() {
                           setPlaylistIndex((current) => (current + 1) % playlistEntries.length)
                         }}
                       />
-                    ) : getYouTubeVideoId(currentPlaylistEntry.audioUrl) ? (
-                      <div
-                        key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
-                        ref={playlistYouTubeHostRef}
-                        className="aspect-video w-full overflow-hidden rounded-xl border border-white/10"
-                      />
-                    ) : (
+                    ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
                       <iframe
                         key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
                         className="aspect-video w-full rounded-xl border border-white/10"
@@ -6325,6 +6220,20 @@ function App() {
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                         allowFullScreen
                       />
+                    ) : (
+                      <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
+                        <div className="text-sm text-slate-200">
+                          External audio link ready. Open in a new tab.
+                        </div>
+                        <a
+                          className="rounded-lg bg-teal-500/90 px-3 py-2 text-xs font-semibold text-slate-950"
+                          href={currentPlaylistEntry.audioUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open Link
+                        </a>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -6337,16 +6246,14 @@ function App() {
               <div className="mt-4 space-y-2">
                 {playlistEntries.map((item, index) => (
                   <button
+                    type="button"
                     key={item.key}
                     className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
                       index === playlistIndex
                         ? 'border-teal-300/70 bg-teal-400/10'
                         : 'border-white/10 bg-slate-950/40'
                     }`}
-                    onClick={() => {
-                      setPlaylistIndex(index)
-                      setPlaylistPlayNonce((current) => current + 1)
-                    }}
+                    onClick={() => jumpToPlaylistIndex(index)}
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -8358,20 +8265,14 @@ function getYouTubeEmbedUrl(url: string | null) {
   return url ?? ''
 }
 
-function getYouTubeVideoId(url: string | null) {
+function isYouTubeUrl(url: string | null) {
   try {
-    if (!url) return ''
+    if (!url) return false
     const parsed = new URL(url)
-    if (parsed.hostname.includes('youtube.com')) {
-      return parsed.searchParams.get('v') ?? ''
-    }
-    if (parsed.hostname.includes('youtu.be')) {
-      return parsed.pathname.replace('/', '')
-    }
+    return parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtu.be')
   } catch (error) {
-    return ''
+    return false
   }
-  return ''
 }
 
 function getSpotifyEmbedUrl(url: string | null) {

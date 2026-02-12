@@ -80,6 +80,17 @@ type Document = {
   content?: string
 }
 
+type PlaylistEntry = {
+  key: string
+  title: string
+  artist?: string
+  audioUrl?: string
+  tags: string[]
+  songId?: string
+  assignmentSingers?: string[]
+  assignmentKeys?: string[]
+}
+
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
@@ -255,6 +266,9 @@ function App() {
   const [resolveSongId, setResolveSongId] = useState<string | null>(null)
   const [showGigMusiciansModal, setShowGigMusiciansModal] = useState(false)
   const [showSetlistModal, setShowSetlistModal] = useState(false)
+  const [showPlaylistModal, setShowPlaylistModal] = useState(false)
+  const [playlistIndex, setPlaylistIndex] = useState(0)
+  const [playlistAutoAdvance, setPlaylistAutoAdvance] = useState(true)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
   const [draggedSectionSongId, setDraggedSectionSongId] = useState<string | null>(null)
   const [dragOverSectionSongId, setDragOverSectionSongId] = useState<string | null>(null)
@@ -537,6 +551,87 @@ function App() {
     return [...base].sort((a, b) => a.title.localeCompare(b.title))
   }, [appState.songs, songLibrarySearch, songLibraryTags])
 
+  const playlistEntries = useMemo<PlaylistEntry[]>(() => {
+    if (!currentSetlist) return []
+    const ordered: PlaylistEntry[] = []
+    const byKey = new Map<string, PlaylistEntry>()
+    const addOrMerge = (entry: PlaylistEntry) => {
+      const existing = byKey.get(entry.key)
+      if (existing) {
+        entry.tags.forEach((tag) => {
+          if (!existing.tags.some((item) => item.toLowerCase() === tag.toLowerCase())) {
+            existing.tags.push(tag)
+          }
+        })
+        if (!existing.audioUrl && entry.audioUrl) {
+          existing.audioUrl = entry.audioUrl
+        }
+        ;(entry.assignmentSingers ?? []).forEach((singer) => {
+          const clean = singer.trim()
+          if (!clean) return
+          if (!(existing.assignmentSingers ?? []).some((item) => item.toLowerCase() === clean.toLowerCase())) {
+            existing.assignmentSingers = [...(existing.assignmentSingers ?? []), clean]
+          }
+        })
+        ;(entry.assignmentKeys ?? []).forEach((keyValue) => {
+          const clean = keyValue.trim()
+          if (!clean) return
+          if (!(existing.assignmentKeys ?? []).some((item) => item.toLowerCase() === clean.toLowerCase())) {
+            existing.assignmentKeys = [...(existing.assignmentKeys ?? []), clean]
+          }
+        })
+        return
+      }
+      const normalized = {
+        ...entry,
+        tags: normalizeTagList(entry.tags),
+        assignmentSingers: normalizeTagList(entry.assignmentSingers ?? []),
+        assignmentKeys: normalizeTagList(entry.assignmentKeys ?? []),
+      }
+      byKey.set(normalized.key, normalized)
+      ordered.push(normalized)
+    }
+
+    appState.specialRequests
+      .filter((request) => request.gigId === currentSetlist.id)
+      .forEach((request) => {
+        const linkedSong = appState.songs.find((song) => song.id === request.songId)
+        const key = request.songId
+          ? `song:${request.songId}`
+          : `special:${request.songTitle.trim().toLowerCase()}`
+        addOrMerge({
+          key,
+          title: linkedSong?.title || request.songTitle,
+          artist: linkedSong?.artist || '',
+          audioUrl: (request.externalAudioUrl || linkedSong?.youtubeUrl || '').trim(),
+          tags: ['Special Request'],
+          songId: request.songId,
+          assignmentSingers: request.djOnly ? ['DJ'] : request.singers,
+          assignmentKeys: request.djOnly ? [] : request.key ? [request.key] : [],
+        })
+      })
+
+    ;(['Dinner', 'Dance', 'Latin'] as const).forEach((section) => {
+      currentSetlist.songIds
+        .map((songId) => appState.songs.find((song) => song.id === songId))
+        .filter((song): song is Song => Boolean(song))
+        .filter((song) => hasSongTag(song, section))
+        .forEach((song) => {
+          addOrMerge({
+            key: `song:${song.id}`,
+            title: song.title,
+            artist: song.artist,
+            audioUrl: (song.youtubeUrl || '').trim(),
+            tags: [section],
+            songId: song.id,
+          })
+        })
+    })
+    return ordered
+  }, [appState.songs, appState.specialRequests, currentSetlist])
+
+  const currentPlaylistEntry = playlistEntries[playlistIndex] ?? null
+
   const getGigKeysText = (songId: string, gigId: string) => {
     const song = appState.songs.find((item) => item.id === songId)
     if (!song) return ''
@@ -561,6 +656,27 @@ function App() {
         key: key.gigOverrides[gigId] ?? '',
       }))
       .filter((entry) => entry.key)
+  }
+
+  const getPlaylistAssignmentText = (entry: PlaylistEntry) => {
+    const singers = normalizeTagList(entry.assignmentSingers ?? [])
+    const keys = normalizeTagList(entry.assignmentKeys ?? [])
+    if (entry.songId && currentSetlist) {
+      getGigSingerAssignments(entry.songId, currentSetlist.id).forEach((assignment) => {
+        if (
+          assignment.singer &&
+          !singers.some((item) => item.toLowerCase() === assignment.singer.toLowerCase())
+        ) {
+          singers.push(assignment.singer)
+        }
+        if (assignment.key && !keys.some((item) => item.toLowerCase() === assignment.key.toLowerCase())) {
+          keys.push(assignment.key)
+        }
+      })
+    }
+    const singerLabel = singers.length ? `Assigned: ${singers.join(', ')}` : 'Assigned: none'
+    const keyLabel = keys.length ? `Key: ${keys.join(', ')}` : 'Key: —'
+    return `${singerLabel} · ${keyLabel}`
   }
 
   const resolveGigKeyForSong = (songId: string, keyValue: string) => {
@@ -838,6 +954,12 @@ function App() {
       setLoginPhase('transition')
       loginTimerRef.current = window.setTimeout(() => {
         setRole('admin')
+        setGigMode(false)
+        setShowGigMusiciansModal(false)
+        setShowSetlistModal(false)
+        setShowPlaylistModal(false)
+        setShowPrintPreview(false)
+        setActiveBuildPanel(null)
         setScreen('setlists')
         setLoginPhase('app')
         localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()))
@@ -851,6 +973,12 @@ function App() {
       setLoginPhase('transition')
       loginTimerRef.current = window.setTimeout(() => {
         setRole('user')
+        setGigMode(false)
+        setShowGigMusiciansModal(false)
+        setShowSetlistModal(false)
+        setShowPlaylistModal(false)
+        setShowPrintPreview(false)
+        setActiveBuildPanel(null)
         setScreen('setlists')
         setLoginPhase('app')
         localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()))
@@ -865,6 +993,12 @@ function App() {
       loginTimerRef.current = null
     }
     setRole(null)
+    setGigMode(false)
+    setShowGigMusiciansModal(false)
+    setShowSetlistModal(false)
+    setShowPlaylistModal(false)
+    setShowPrintPreview(false)
+    setActiveBuildPanel(null)
     setScreen('setlists')
     setLoginPhase('login')
     setLoginInput('')
@@ -3190,18 +3324,22 @@ function App() {
                     }`}
                     onClick={() => {
                       setSelectedSetlistId(setlist.id)
-                      setScreen('builder')
-                      if (!isAdmin) {
+                      if (isAdmin) {
+                        setScreen('builder')
+                      } else {
                         setShowSetlistModal(true)
+                        setShowGigMusiciansModal(false)
                       }
                     }}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault()
                         setSelectedSetlistId(setlist.id)
-                        setScreen('builder')
-                        if (!isAdmin) {
+                        if (isAdmin) {
+                          setScreen('builder')
+                        } else {
                           setShowSetlistModal(true)
+                          setShowGigMusiciansModal(false)
                         }
                       }
                     }}
@@ -3246,6 +3384,32 @@ function App() {
                           >
                             Duplicate gig
                           </button>
+                      </div>
+                    )}
+                    {!isAdmin && (
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button
+                          className="rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs font-semibold text-slate-100"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setSelectedSetlistId(setlist.id)
+                            setShowGigMusiciansModal(true)
+                            setShowSetlistModal(false)
+                          }}
+                        >
+                          Musicians
+                        </button>
+                        <button
+                          className="rounded-xl border border-teal-300/40 bg-teal-400/10 px-3 py-2 text-xs font-semibold text-teal-100"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setSelectedSetlistId(setlist.id)
+                            setShowSetlistModal(true)
+                            setShowGigMusiciansModal(false)
+                          }}
+                        >
+                          Gig Info
+                        </button>
                       </div>
                     )}
                   </div>
@@ -3301,18 +3465,22 @@ function App() {
                     className="rounded-2xl border border-white/10 bg-slate-950/40 p-4"
                     onClick={() => {
                       setSelectedSetlistId(setlist.id)
-                      setScreen('builder')
-                      if (!isAdmin) {
+                      if (isAdmin) {
+                        setScreen('builder')
+                      } else {
                         setShowSetlistModal(true)
+                        setShowGigMusiciansModal(false)
                       }
                     }}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault()
                         setSelectedSetlistId(setlist.id)
-                        setScreen('builder')
-                        if (!isAdmin) {
+                        if (isAdmin) {
+                          setScreen('builder')
+                        } else {
                           setShowSetlistModal(true)
+                          setShowGigMusiciansModal(false)
                         }
                       }
                     }}
@@ -3351,6 +3519,32 @@ function App() {
                           }}
                         >
                           Duplicate gig
+                        </button>
+                      </div>
+                    )}
+                    {!isAdmin && (
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button
+                          className="rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs font-semibold text-slate-100"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setSelectedSetlistId(setlist.id)
+                            setShowGigMusiciansModal(true)
+                            setShowSetlistModal(false)
+                          }}
+                        >
+                          Musicians
+                        </button>
+                        <button
+                          className="rounded-xl border border-teal-300/40 bg-teal-400/10 px-3 py-2 text-xs font-semibold text-teal-100"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setSelectedSetlistId(setlist.id)
+                            setShowSetlistModal(true)
+                            setShowGigMusiciansModal(false)
+                          }}
+                        >
+                          Gig Info
                         </button>
                       </div>
                     )}
@@ -3553,10 +3747,12 @@ function App() {
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   <button
-                    className="whitespace-nowrap rounded-full bg-teal-400/90 px-3 py-1 text-xs font-semibold text-slate-950"
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-teal-400/90 text-xl font-semibold text-slate-950 shadow-[0_0_18px_rgba(45,212,191,0.35)]"
                     onClick={handlePrintSetlist}
+                    title="Download setlist PDF"
+                    aria-label="Download setlist PDF"
                   >
-                    Download setlist PDF
+                    ⬇️
                   </button>
                   {isAdmin && (
                     <button
@@ -5655,10 +5851,24 @@ function App() {
                   Close
                 </button>
                 <button
-                  className="min-w-[160px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-teal-400/90 text-xl text-slate-950 shadow-[0_0_18px_rgba(45,212,191,0.35)]"
                   onClick={handlePrintSetlist}
+                  title="Download setlist PDF"
+                  aria-label="Download setlist PDF"
                 >
-                  Download setlist PDF
+                  ⬇️
+                </button>
+                <button
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-indigo-300/60 bg-indigo-500/20 text-xl text-indigo-100 shadow-[0_0_18px_rgba(99,102,241,0.28)]"
+                  onClick={() => {
+                    setPlaylistIndex(0)
+                    setPlaylistAutoAdvance(true)
+                    setShowPlaylistModal(true)
+                  }}
+                  title="Open setlist playlist"
+                  aria-label="Open setlist playlist"
+                >
+                  🎧
                 </button>
               </div>
             </div>
@@ -5847,6 +6057,190 @@ function App() {
                         ))}
                     </div>
                   </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPlaylistModal && currentSetlist && (
+        <div
+          className="fixed inset-0 z-[98] flex items-center justify-center bg-slate-950/85 px-4 py-6 backdrop-blur-sm"
+          onClick={() => setShowPlaylistModal(false)}
+        >
+          <div
+            className="w-full max-w-3xl max-h-[88vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold">Gig Playlist</h3>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Ordered: Special Requests, Dinner, Dance, Latin
+                  </p>
+                </div>
+                <button
+                  className="rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
+                  onClick={() => setShowPlaylistModal(false)}
+                >
+                  Close
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  className="rounded-xl border border-white/10 px-3 py-2 text-sm"
+                  disabled={playlistEntries.length === 0}
+                  onClick={() =>
+                    setPlaylistIndex((current) =>
+                      playlistEntries.length
+                        ? (current - 1 + playlistEntries.length) % playlistEntries.length
+                        : 0,
+                    )
+                  }
+                >
+                  ⏮ Prev
+                </button>
+                <button
+                  className="rounded-xl border border-white/10 px-3 py-2 text-sm"
+                  disabled={playlistEntries.length === 0}
+                  onClick={() =>
+                    setPlaylistIndex((current) =>
+                      playlistEntries.length ? (current + 1) % playlistEntries.length : 0,
+                    )
+                  }
+                >
+                  ⏭ Next
+                </button>
+                <button
+                  className={`rounded-xl border px-3 py-2 text-sm ${
+                    playlistAutoAdvance
+                      ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
+                      : 'border-white/10 text-slate-300'
+                  }`}
+                  onClick={() => setPlaylistAutoAdvance((current) => !current)}
+                >
+                  Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
+                </button>
+                <span className="text-xs text-slate-400">
+                  {playlistEntries.length
+                    ? `${playlistIndex + 1} / ${playlistEntries.length}`
+                    : 'No playable songs'}
+                </span>
+              </div>
+            </div>
+
+            <div className="max-h-[calc(88vh-140px)] overflow-auto px-5 pb-6 pt-4">
+              {currentPlaylistEntry ? (
+                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-lg font-semibold">{currentPlaylistEntry.title}</p>
+                      <p className="text-xs text-slate-400">{currentPlaylistEntry.artist || ' '}</p>
+                      <p className="mt-1 text-xs text-teal-200">
+                        {getPlaylistAssignmentText(currentPlaylistEntry)}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-1">
+                      {currentPlaylistEntry.tags.map((tag) => (
+                        <span
+                          key={`${currentPlaylistEntry.key}-${tag}`}
+                          className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
+                            tag === 'Special Request'
+                              ? 'bg-fuchsia-500/20 text-fuchsia-100'
+                              : tag === 'Dinner'
+                                ? 'bg-amber-500/20 text-amber-100'
+                                : tag === 'Dance'
+                                  ? 'bg-cyan-500/20 text-cyan-100'
+                                  : 'bg-pink-500/20 text-pink-100'
+                          }`}
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                    {!currentPlaylistEntry.audioUrl ? (
+                      <div className="text-sm text-slate-400">
+                        No audio URL saved for this song yet.
+                      </div>
+                    ) : isSpotifyUrl(currentPlaylistEntry.audioUrl) ? (
+                      <iframe
+                        src={getSpotifyEmbedUrl(currentPlaylistEntry.audioUrl)}
+                        className="h-[152px] w-full rounded-xl border border-white/10"
+                        title="Spotify playlist item"
+                        allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                      />
+                    ) : isAudioFileUrl(currentPlaylistEntry.audioUrl) ? (
+                      <audio
+                        className="w-full"
+                        controls
+                        autoPlay
+                        src={currentPlaylistEntry.audioUrl}
+                        onEnded={() => {
+                          if (!playlistAutoAdvance || playlistEntries.length <= 1) return
+                          setPlaylistIndex((current) => (current + 1) % playlistEntries.length)
+                        }}
+                      />
+                    ) : (
+                      <iframe
+                        className="aspect-video w-full rounded-xl border border-white/10"
+                        src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
+                        title="YouTube playlist item"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                      />
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">
+                  No playlist songs found for this gig yet.
+                </div>
+              )}
+
+              <div className="mt-4 space-y-2">
+                {playlistEntries.map((item, index) => (
+                  <button
+                    key={item.key}
+                    className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
+                      index === playlistIndex
+                        ? 'border-teal-300/70 bg-teal-400/10'
+                        : 'border-white/10 bg-slate-950/40'
+                    }`}
+                    onClick={() => setPlaylistIndex(index)}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-100">{item.title}</div>
+                        <div className="text-[11px] text-slate-400">{item.artist || ' '}</div>
+                        <div className="mt-0.5 text-[11px] text-teal-200">
+                          {getPlaylistAssignmentText(item)}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap justify-end gap-1">
+                        {item.tags.map((tag) => (
+                          <span
+                            key={`${item.key}-list-${tag}`}
+                            className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
+                              tag === 'Special Request'
+                                ? 'bg-fuchsia-500/20 text-fuchsia-100'
+                                : tag === 'Dinner'
+                                  ? 'bg-amber-500/20 text-amber-100'
+                                  : tag === 'Dance'
+                                    ? 'bg-cyan-500/20 text-cyan-100'
+                                    : 'bg-pink-500/20 text-pink-100'
+                            }`}
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </button>
                 ))}
               </div>
             </div>

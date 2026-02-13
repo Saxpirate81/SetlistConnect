@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isSupabaseEnabled, supabase, supabaseEnvStatus } from './lib/supabaseClient'
 import downloadPdfIcon from './assets/download-pdf-icon.png'
 import openPlaylistIcon from './assets/open-playlist-icon.png'
+import setlistConnectLogo from './assets/setlist-connect-logo.png'
 
 type Role = 'admin' | 'user' | null
 type Screen = 'setlists' | 'builder' | 'song' | 'musicians'
@@ -2875,11 +2876,18 @@ function App() {
     <div className="fixed top-0 left-0 right-0 z-[70]">
       <header className="border-b border-white/10 bg-slate-950/90 backdrop-blur-md">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-teal-300/80">
-              Setlist Connect
-            </p>
-            <h1 className="text-lg font-semibold text-white">Gig Center</h1>
+          <div className="flex items-center gap-3">
+            <img
+              src={setlistConnectLogo}
+              alt="Setlist Connect logo"
+              className="h-10 w-10 rounded-xl object-contain"
+            />
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-teal-300/80">
+                Setlist Connect
+              </p>
+              <h1 className="text-lg font-semibold text-white">Gig Center</h1>
+            </div>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-300">
             {screen === 'setlists' && installPrompt && !isInstalled && (

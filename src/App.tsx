@@ -93,6 +93,18 @@ type PlaylistEntry = {
   assignmentKeys?: string[]
 }
 
+type DocumentSelectionItem = {
+  id: string
+  songId: string
+  type: 'Chart' | 'Lyrics' | 'Lead Sheet'
+  instrument: string
+  title: string
+  url?: string
+  content?: string
+  instruments: string[]
+  sourceDocIds: string[]
+}
+
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
@@ -109,7 +121,7 @@ type AppState = {
   documents: Document[]
   musicians: Musician[]
   gigMusicians: GigMusician[]
-  instrument: string | null
+  instrument: string[] | null
   currentSongId: string | null
 }
 
@@ -125,8 +137,10 @@ const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000
 const LAST_ACTIVE_KEY = 'setlist:lastActive'
 
 const INSTRUMENTS = ['Vocals', 'Guitar', 'Keys', 'Bass', 'Drums', 'Sax', 'Trumpet']
+const INSTRUMENTAL_LABEL = 'Instrumental'
 const DEFAULT_TAGS = ['Special Request', 'Dinner', 'Latin', 'Dance']
 const DEFAULT_SPECIAL_TYPES = ['First Dance', 'Last Dance', 'Parent Dance', 'Anniversary']
+const SETLIST_PANEL_PREFIX = 'set:'
 
 const initialState: AppState = {
   songs: [],
@@ -201,11 +215,16 @@ function App() {
   const [pendingSpecialNote, setPendingSpecialNote] = useState('')
   const [pendingSpecialDjOnly, setPendingSpecialDjOnly] = useState(false)
   const [pendingSpecialExternalUrl, setPendingSpecialExternalUrl] = useState('')
+  const [showSpecialRequestModal, setShowSpecialRequestModal] = useState(false)
   const [selectedSongIds, setSelectedSongIds] = useState<string[]>([])
   const [docModalSongId, setDocModalSongId] = useState<string | null>(null)
   const [docModalContent, setDocModalContent] = useState<Document | null>(null)
+  const [docModalPageIndex, setDocModalPageIndex] = useState(0)
+  const [docSwipeStartX, setDocSwipeStartX] = useState<number | null>(null)
   const [pendingDocSongId, setPendingDocSongId] = useState<string | null>(null)
   const [showInstrumentPrompt, setShowInstrumentPrompt] = useState(false)
+  const [instrumentSelectionDraft, setInstrumentSelectionDraft] = useState<string[]>([])
+  const [docInstrumentDraft, setDocInstrumentDraft] = useState<string[]>([])
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [isInstalled, setIsInstalled] = useState(false)
   const [dismissedUpNextId, setDismissedUpNextId] = useState<string | null>(null)
@@ -231,7 +250,6 @@ function App() {
     ...INSTRUMENTS,
     'Percussion',
     'Violin',
-    'Saxophone',
   ])
   const [instrumentFilter, setInstrumentFilter] = useState('')
   const [newInstrumentInput, setNewInstrumentInput] = useState('')
@@ -242,7 +260,7 @@ function App() {
   const [newDocSongId, setNewDocSongId] = useState('')
   const [newDocSongTitle, setNewDocSongTitle] = useState('')
   const [newDocType, setNewDocType] = useState<'Chart' | 'Lyrics' | 'Lead Sheet' | ''>('')
-  const [newDocInstrument, setNewDocInstrument] = useState('')
+  const [newDocInstruments, setNewDocInstruments] = useState<string[]>([])
   const [newDocTitle, setNewDocTitle] = useState('')
   const [newDocUrl, setNewDocUrl] = useState('')
   const [newDocFile, setNewDocFile] = useState<File | null>(null)
@@ -272,38 +290,23 @@ function App() {
   const [playlistIndex, setPlaylistIndex] = useState(0)
   const [playlistAutoAdvance, setPlaylistAutoAdvance] = useState(true)
   const [playlistPlayNonce, setPlaylistPlayNonce] = useState(0)
+  const [showAddMusicianModal, setShowAddMusicianModal] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
   const [draggedSectionSongId, setDraggedSectionSongId] = useState<string | null>(null)
   const [dragOverSectionSongId, setDragOverSectionSongId] = useState<string | null>(null)
   const [recentlyMovedSongId, setRecentlyMovedSongId] = useState<string | null>(null)
   const movedSongTimerRef = useRef<number | null>(null)
-  const [activeBuildPanel, setActiveBuildPanel] = useState<
-    | 'musicians'
-    | 'addSongs'
-    | 'special'
-    | 'dinner'
-    | 'latin'
-    | 'dance'
-    | null
-  >(null)
+  const [activeBuildPanel, setActiveBuildPanel] = useState<string | null>(null)
   const [buildPanelDirty, setBuildPanelDirty] = useState(false)
   const [pendingSingerAssignments, setPendingSingerAssignments] = useState<
     Record<string, { singer: string; key: string }[]>
   >({})
   const [showSingerWarning, setShowSingerWarning] = useState(false)
   const [showMissingSingerWarning, setShowMissingSingerWarning] = useState(false)
-  const [starterPasteBySection, setStarterPasteBySection] = useState<{
-    Dinner: string
-    Latin: string
-    Dance: string
-  }>({ Dinner: '', Latin: '', Dance: '' })
-  const [starterPasteOpen, setStarterPasteOpen] = useState<{
-    Dinner: boolean
-    Latin: boolean
-    Dance: boolean
-  }>({ Dinner: false, Latin: false, Dance: false })
+  const [starterPasteBySection, setStarterPasteBySection] = useState<Record<string, string>>({})
+  const [starterPasteOpen, setStarterPasteOpen] = useState<Record<string, boolean>>({})
   const [buildCompleteOverrides, setBuildCompleteOverrides] = useState<
-    Record<string, Partial<Record<NonNullable<typeof activeBuildPanel>, boolean>>>
+    Record<string, Record<string, boolean>>
   >(() => {
     const stored = localStorage.getItem('setlist_build_complete')
     if (!stored) return {}
@@ -314,6 +317,50 @@ function App() {
       return {}
     }
   })
+  const [gigSetlistSections, setGigSetlistSections] = useState<Record<string, string[]>>(() => {
+    const stored = localStorage.getItem('setlist_gig_sections')
+    if (!stored) return {}
+    try {
+      return JSON.parse(stored)
+    } catch {
+      localStorage.removeItem('setlist_gig_sections')
+      return {}
+    }
+  })
+  const [showAddSetlistModal, setShowAddSetlistModal] = useState(false)
+  const [newSetlistLabel, setNewSetlistLabel] = useState('')
+  const [draggedSetlistSection, setDraggedSetlistSection] = useState<string | null>(null)
+  const [dragOverSetlistSection, setDragOverSetlistSection] = useState<string | null>(null)
+  const [showSectionAddSongsModal, setShowSectionAddSongsModal] = useState(false)
+  const [sectionAddSongsSource, setSectionAddSongsSource] = useState('')
+  const [sectionAddSongsTargets, setSectionAddSongsTargets] = useState<string[]>([])
+  const [sectionAddSongsSearch, setSectionAddSongsSearch] = useState('')
+  const [showDeleteSetlistSectionConfirm, setShowDeleteSetlistSectionConfirm] = useState(false)
+  const [pendingDeleteSetlistSection, setPendingDeleteSetlistSection] = useState<string | null>(null)
+  const [gigHiddenSetlistSections, setGigHiddenSetlistSections] = useState<Record<string, string[]>>(
+    () => {
+      const stored = localStorage.getItem('setlist_hidden_gig_sections')
+      if (!stored) return {}
+      try {
+        return JSON.parse(stored)
+      } catch {
+        localStorage.removeItem('setlist_hidden_gig_sections')
+        return {}
+      }
+    },
+  )
+  const [gigHiddenSpecialSection, setGigHiddenSpecialSection] = useState<Record<string, boolean>>(
+    () => {
+      const stored = localStorage.getItem('setlist_hidden_special_section')
+      if (!stored) return {}
+      try {
+        return JSON.parse(stored)
+      } catch {
+        localStorage.removeItem('setlist_hidden_special_section')
+        return {}
+      }
+    },
+  )
   const lastDocAutosaveRef = useRef('')
   const editSongBaselineRef = useRef<{
     title: string
@@ -324,6 +371,8 @@ function App() {
   } | null>(null)
   const [songFormError, setSongFormError] = useState('')
   const [docFormError, setDocFormError] = useState('')
+  const [showDocInstrumentWarning, setShowDocInstrumentWarning] = useState(false)
+  const [showDocUrlAccessWarning, setShowDocUrlAccessWarning] = useState(false)
   const [loginPhase, setLoginPhase] = useState<'login' | 'transition' | 'app'>('login')
   const loginTimerRef = useRef<number | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
@@ -374,17 +423,134 @@ function App() {
     })
     return normalized
   }
+  const normalizeInstrumentName = (value: string) => {
+    const trimmed = value.trim()
+    if (!trimmed) return ''
+    if (trimmed.toLowerCase() === 'saxophone') return 'Sax'
+    return trimmed
+  }
+  const parseDocumentInstruments = (raw: string) => {
+    const normalized = raw
+      .split('||')
+      .map((item) => normalizeInstrumentName(item))
+      .filter(Boolean)
+    if (normalized.length === 0) return ['All']
+    if (normalized.some((item) => item === 'All')) return ['All']
+    return normalizeTagList(normalized)
+  }
+  const formatDocumentInstruments = (raw: string) => parseDocumentInstruments(raw).join(', ')
+  const activeInstruments =
+    appState.instrument && appState.instrument.length > 0 ? appState.instrument : ['All']
+  const documentMatchesActiveInstruments = (doc: Document) => {
+    if (role === 'admin') return true
+    if (activeInstruments.includes('All')) return true
+    const docInstruments = parseDocumentInstruments(doc.instrument)
+    return docInstruments.includes('All')
+      ? true
+      : docInstruments.some((item) => activeInstruments.includes(item))
+  }
+  const getDocumentSelectionItems = (songId: string) => {
+    const docs = appState.documents
+      .filter((doc) => doc.songId === songId)
+      .filter((doc) => documentMatchesActiveInstruments(doc))
+    const grouped = new Map<string, DocumentSelectionItem>()
+    docs.forEach((doc) => {
+      const key = [
+        doc.songId,
+        doc.type,
+        doc.title.trim().toLowerCase(),
+        (doc.url ?? '').trim().toLowerCase(),
+        (doc.content ?? '').trim().toLowerCase(),
+      ].join('|')
+      const existing = grouped.get(key)
+      if (existing) {
+        parseDocumentInstruments(doc.instrument).forEach((instrument) => {
+          if (!existing.instruments.includes(instrument)) {
+            existing.instruments.push(instrument)
+          }
+        })
+        existing.sourceDocIds.push(doc.id)
+        return
+      }
+      grouped.set(key, {
+        id: doc.id,
+        songId: doc.songId,
+        type: doc.type,
+        instrument: parseDocumentInstruments(doc.instrument).join('||'),
+        title: doc.title,
+        url: doc.url,
+        content: doc.content,
+        instruments: parseDocumentInstruments(doc.instrument),
+        sourceDocIds: [doc.id],
+      })
+    })
+    return [...grouped.values()].sort((a, b) => {
+      if (a.type === 'Lyrics' && b.type !== 'Lyrics') return -1
+      if (a.type !== 'Lyrics' && b.type === 'Lyrics') return 1
+      return a.title.localeCompare(b.title)
+    })
+  }
+  const getDocumentViewerUrl = (url?: string) => {
+    if (!url) return ''
+    if (!/\.pdf(\?|#|$)/i.test(url)) return url
+    if (url.includes('#')) {
+      return `${url}&zoom=page-width&view=FitH`
+    }
+    return `${url}#zoom=page-width&view=FitH`
+  }
+  const isImageFileUrl = (url: string | undefined) =>
+    Boolean(url && /\.(png|jpe?g|gif|webp)$/i.test(url))
   const hasSongTag = (song: Song, tag: string) =>
     song.tags.some((item) => item.trim().toLowerCase() === tag.trim().toLowerCase())
+  const setlistPanelKey = (section: string) => `${SETLIST_PANEL_PREFIX}${section}`
+  const getSectionFromPanel = (panel: string | null) =>
+    panel && panel.startsWith(SETLIST_PANEL_PREFIX)
+      ? panel.slice(SETLIST_PANEL_PREFIX.length)
+      : null
+  const normalizeSetlistSectionLabel = (value: string) =>
+    value.replace(/\s+/g, ' ').trim()
+  const isReservedBuildPanel = (value: string) =>
+    ['musicians', 'addsongs', 'special'].includes(value.trim().toLowerCase())
 
   const currentSetlist = useMemo(
     () => appState.setlists.find((setlist) => setlist.id === selectedSetlistId),
     [appState.setlists, selectedSetlistId],
   )
+  const isSpecialSectionHidden = currentSetlist
+    ? Boolean(gigHiddenSpecialSection[currentSetlist.id])
+    : false
   useEffect(() => {
     if (!currentSetlist?.id) return
     setActiveGigId(currentSetlist.id)
   }, [currentSetlist?.id])
+  const orderedSetSections = useMemo(() => {
+    if (!currentSetlist) return []
+    const saved = gigSetlistSections[currentSetlist.id] ?? []
+    const hidden = new Set(
+      (gigHiddenSetlistSections[currentSetlist.id] ?? []).map((item) => item.toLowerCase()),
+    )
+    const fromSongs = currentSetlist.songIds
+      .map((songId) => appState.songs.find((song) => song.id === songId))
+      .filter((song): song is Song => Boolean(song))
+      .flatMap((song) => song.tags)
+      .filter((tag) => {
+        const normalized = tag.trim().toLowerCase()
+        return normalized !== 'special request' && normalized !== 'special requests'
+      })
+    const seen = new Set<string>()
+    const merged = [...saved, ...fromSongs]
+      .map(normalizeSetlistSectionLabel)
+      .filter(Boolean)
+      .filter((section) => {
+        const key = section.toLowerCase()
+        if (key === 'special request' || key === 'special requests') return false
+        if (hidden.has(key)) return false
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+    return merged
+  }, [appState.songs, currentSetlist, gigSetlistSections, gigHiddenSetlistSections])
 
   const singerModalSong = useMemo(
     () => (singerModalSongId ? appState.songs.find((song) => song.id === singerModalSongId) : null),
@@ -454,29 +620,27 @@ function App() {
   }, [appState.setlists, currentSetlist?.id])
 
   const buildCompletion = useMemo(() => {
-    if (!currentSetlist) {
-      return {
-        musicians: false,
-        addSongs: false,
-        special: false,
-        dinner: false,
-        latin: false,
-        dance: false,
-      }
+    const base: Record<string, boolean> = {
+      musicians: false,
+      addSongs: false,
+      special: false,
     }
+    orderedSetSections.forEach((section) => {
+      base[setlistPanelKey(section)] = false
+    })
+    if (!currentSetlist) return base
     const gigId = currentSetlist.id
     const overrides = buildCompleteOverrides[gigId]
-    return {
-      musicians: overrides?.musicians ?? false,
-      addSongs: overrides?.addSongs ?? false,
-      special: overrides?.special ?? false,
-      dinner: overrides?.dinner ?? false,
-      latin: overrides?.latin ?? false,
-      dance: overrides?.dance ?? false,
-    }
+    if (!overrides) return base
+    const next = { ...base }
+    Object.entries(overrides).forEach(([panel, value]) => {
+      if (typeof value === 'boolean') next[panel] = value
+    })
+    return next
   }, [
     currentSetlist,
     buildCompleteOverrides,
+    orderedSetSections,
   ])
 
   const buildPanelCount = useMemo(() => {
@@ -498,12 +662,8 @@ function App() {
     if (activeBuildPanel === 'addSongs') {
       return { label: 'Songs', value: currentSetlist.songIds.length }
     }
-    const section =
-      activeBuildPanel === 'dinner'
-        ? 'Dinner'
-        : activeBuildPanel === 'latin'
-          ? 'Latin'
-          : 'Dance'
+    const section = getSectionFromPanel(activeBuildPanel)
+    if (!section) return { label: '', value: 0 }
     const count = currentSetlist.songIds
       .map((songId) => appState.songs.find((song) => song.id === songId))
       .filter((song): song is Song => Boolean(song))
@@ -518,32 +678,35 @@ function App() {
   ])
 
   const buildCardCounts = useMemo(() => {
-    if (!currentSetlist) {
-      return {
-        musicians: 0,
-        addSongs: 0,
-        special: 0,
-        dinner: 0,
-        latin: 0,
-        dance: 0,
-      }
+    const base: Record<string, number> = {
+      musicians: 0,
+      addSongs: 0,
+      special: 0,
     }
-    const sectionCount = (section: 'Dinner' | 'Latin' | 'Dance') =>
+    if (!currentSetlist) return base
+    const sectionCount = (section: string) =>
       currentSetlist.songIds
         .map((songId) => appState.songs.find((song) => song.id === songId))
         .filter((song): song is Song => Boolean(song))
         .filter((song) => hasSongTag(song, section)).length
-    return {
+    const next: Record<string, number> = {
       musicians: appState.gigMusicians.filter((gm) => gm.gigId === currentSetlist.id)
         .length,
       addSongs: currentSetlist.songIds.length,
       special: appState.specialRequests.filter((req) => req.gigId === currentSetlist.id)
         .length,
-      dinner: sectionCount('Dinner'),
-      latin: sectionCount('Latin'),
-      dance: sectionCount('Dance'),
     }
-  }, [appState.gigMusicians, appState.specialRequests, appState.songs, currentSetlist])
+    orderedSetSections.forEach((section) => {
+      next[setlistPanelKey(section)] = sectionCount(section)
+    })
+    return next
+  }, [
+    appState.gigMusicians,
+    appState.specialRequests,
+    appState.songs,
+    currentSetlist,
+    orderedSetSections,
+  ])
 
   const filteredSongLibrary = useMemo(() => {
     const base = appState.songs.filter((song) => {
@@ -557,6 +720,76 @@ function App() {
     })
     return [...base].sort((a, b) => a.title.localeCompare(b.title))
   }, [appState.songs, songLibrarySearch, songLibraryTags])
+
+  const sectionAddSongsActiveFilters = useMemo(() => {
+    const selected = normalizeTagList(
+      sectionAddSongsTargets.length ? sectionAddSongsTargets : [sectionAddSongsSource],
+    )
+    return selected.filter(Boolean)
+  }, [sectionAddSongsSource, sectionAddSongsTargets])
+
+  const sectionAddSongsAvailableSongs = useMemo(() => {
+    if (!currentSetlist) return []
+    const search = sectionAddSongsSearch.trim().toLowerCase()
+    const filterSections = sectionAddSongsActiveFilters
+    const includeAllBySection =
+      filterSections.length === 0 || filterSections.length >= orderedSetSections.length
+    return appState.songs
+      .filter((song) => !currentSetlist.songIds.includes(song.id))
+      .filter((song) =>
+        includeAllBySection ? true : filterSections.some((section) => hasSongTag(song, section)),
+      )
+      .filter((song) =>
+        !search ? true : `${song.title} ${song.artist}`.toLowerCase().includes(search),
+      )
+      .sort((a, b) => a.title.localeCompare(b.title))
+  }, [
+    appState.songs,
+    currentSetlist,
+    orderedSetSections.length,
+    sectionAddSongsActiveFilters,
+    sectionAddSongsSearch,
+  ])
+
+  const gigSingerOptions = useMemo(() => {
+    if (!currentSetlist) return []
+    const activeIds = new Set(
+      appState.gigMusicians
+        .filter((row) => row.gigId === currentSetlist.id && row.status !== 'out')
+        .map((row) => row.musicianId),
+    )
+    const fallbackIds = new Set(
+      appState.gigMusicians
+        .filter((row) => row.gigId === currentSetlist.id)
+        .map((row) => row.musicianId),
+    )
+    const idsToUse = activeIds.size > 0 ? activeIds : fallbackIds
+    return normalizeTagList(
+      appState.musicians
+        .filter((musician) => idsToUse.has(musician.id))
+        .filter(
+          (musician) =>
+            Boolean(musician.singer) ||
+            (musician.instruments ?? []).some(
+              (instrument) => instrument.trim().toLowerCase() === 'vocals',
+            ),
+        )
+        .map((musician) => musician.name),
+    )
+  }, [appState.gigMusicians, appState.musicians, currentSetlist])
+  const assignSingerOptions = useMemo(
+    () => normalizeTagList([...gigSingerOptions, INSTRUMENTAL_LABEL]),
+    [gigSingerOptions],
+  )
+  const specialRequestSingerOptions = useMemo(
+    () => normalizeTagList([...gigSingerOptions, INSTRUMENTAL_LABEL]),
+    [gigSingerOptions],
+  )
+  const pendingSpecialSongMatch = useMemo(() => {
+    const title = pendingSpecialSong.trim().toLowerCase()
+    if (!title) return null
+    return appState.songs.find((song) => song.title.trim().toLowerCase() === title) ?? null
+  }, [appState.songs, pendingSpecialSong])
 
   const playlistEntries = useMemo<PlaylistEntry[]>(() => {
     if (!currentSetlist) return []
@@ -638,6 +871,15 @@ function App() {
   }, [appState.songs, appState.specialRequests, currentSetlist])
 
   const currentPlaylistEntry = playlistEntries[playlistIndex] ?? null
+  const docModalPages = useMemo(() => {
+    if (!docModalContent?.url) return []
+    const pages = docModalContent.url
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+    return pages.length ? pages : [docModalContent.url]
+  }, [docModalContent])
+  const activeDocModalPage = docModalPages[docModalPageIndex] ?? docModalPages[0] ?? ''
   const isPlaylistEntryPlayable = (entry?: PlaylistEntry | null) =>
     Boolean(entry?.audioUrl && entry.audioUrl.trim())
 
@@ -671,6 +913,67 @@ function App() {
     if (next < 0) return
     setPlaylistIndex(next)
     setPlaylistPlayNonce((current) => current + 1)
+  }
+  const moveDocPageBy = (delta: number) => {
+    if (docModalPages.length <= 1) return
+    setDocModalPageIndex((current) => {
+      const next = current + delta
+      if (next < 0) return docModalPages.length - 1
+      if (next >= docModalPages.length) return 0
+      return next
+    })
+  }
+  const printActiveDocument = () => {
+    if (!docModalContent) return
+    const runPrintInHiddenFrame = (options: { html?: string; url?: string }) => {
+      const iframe = document.createElement('iframe')
+      iframe.style.position = 'fixed'
+      iframe.style.right = '0'
+      iframe.style.bottom = '0'
+      iframe.style.width = '0'
+      iframe.style.height = '0'
+      iframe.style.border = '0'
+      iframe.style.opacity = '0'
+      const cleanup = () => {
+        window.setTimeout(() => {
+          if (iframe.parentNode) {
+            iframe.parentNode.removeChild(iframe)
+          }
+        }, 1200)
+      }
+      iframe.onload = () => {
+        window.setTimeout(() => {
+          try {
+            iframe.contentWindow?.focus()
+            iframe.contentWindow?.print()
+          } catch {
+            // Some remote viewers block programmatic print.
+          } finally {
+            cleanup()
+          }
+        }, 250)
+      }
+      if (options.html) {
+        iframe.srcdoc = options.html
+      } else if (options.url) {
+        iframe.src = options.url
+      }
+      document.body.appendChild(iframe)
+    }
+
+    if (docModalContent.content) {
+      const escaped = docModalContent.content
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+      runPrintInHiddenFrame({
+        html: `<!doctype html><html><head><title>${docModalContent.title}</title><meta name="viewport" content="width=device-width, initial-scale=1.0" /><style>body{font-family:Inter,system-ui,-apple-system,sans-serif;margin:20px;color:#0f172a;}h1{font-size:18px;margin:0 0 12px;}pre{white-space:pre-wrap;line-height:1.55;font-size:13px;}</style></head><body><h1>${docModalContent.title}</h1><pre>${escaped}</pre></body></html>`,
+      })
+      return
+    }
+    if (activeDocModalPage) {
+      runPrintInHiddenFrame({ url: activeDocModalPage })
+    }
   }
 
   const getGigKeysText = (songId: string, gigId: string) => {
@@ -807,20 +1110,21 @@ function App() {
         ? 'from-teal-500/20 via-slate-900/60 to-slate-950/80'
         : activeBuildPanel === 'special'
           ? 'from-amber-500/20 via-slate-900/60 to-slate-950/80'
-          : activeBuildPanel === 'dinner'
+          : (getSectionFromPanel(activeBuildPanel)?.toLowerCase().includes('dinner') ?? false)
             ? 'from-emerald-500/20 via-slate-900/60 to-slate-950/80'
-            : activeBuildPanel === 'latin'
+            : (getSectionFromPanel(activeBuildPanel)?.toLowerCase().includes('latin') ?? false)
               ? 'from-pink-500/20 via-slate-900/60 to-slate-950/80'
-              : activeBuildPanel === 'dance'
+              : (getSectionFromPanel(activeBuildPanel)?.toLowerCase().includes('dance') ?? false)
                 ? 'from-cyan-500/20 via-slate-900/60 to-slate-950/80'
                 : 'from-slate-900/60 via-slate-900/80 to-slate-950/90'
 
   const setBuildComplete = (
-    panel: NonNullable<typeof activeBuildPanel>,
+    panel: string,
     value: boolean,
   ) => {
     if (!currentSetlist) return
-    if (value && ['special', 'dinner', 'latin', 'dance'].includes(panel)) {
+    const sectionPanel = getSectionFromPanel(panel)
+    if (value && (panel === 'special' || Boolean(sectionPanel))) {
       const hasMissingSingers =
         panel === 'special'
           ? appState.specialRequests.some(
@@ -833,10 +1137,7 @@ function App() {
               .map((songId) => appState.songs.find((song) => song.id === songId))
               .filter((song): song is Song => Boolean(song))
               .filter((song) =>
-                hasSongTag(
-                  song,
-                  panel === 'dinner' ? 'Dinner' : panel === 'latin' ? 'Latin' : 'Dance',
-                ),
+                hasSongTag(song, sectionPanel ?? ''),
               )
               .some((song) => getGigSingerAssignments(song.id, currentSetlist.id).length === 0)
       if (hasMissingSingers) {
@@ -1000,6 +1301,12 @@ function App() {
         setShowSetlistModal(false)
         setShowPlaylistModal(false)
         setShowPrintPreview(false)
+        setShowAddMusicianModal(false)
+        setShowAddSetlistModal(false)
+        setShowSectionAddSongsModal(false)
+        setShowDeleteSetlistSectionConfirm(false)
+        setPendingDeleteSetlistSection(null)
+        setShowSpecialRequestModal(false)
         setActiveBuildPanel(null)
         setScreen('setlists')
         setLoginPhase('app')
@@ -1019,6 +1326,12 @@ function App() {
         setShowSetlistModal(false)
         setShowPlaylistModal(false)
         setShowPrintPreview(false)
+        setShowAddMusicianModal(false)
+        setShowAddSetlistModal(false)
+        setShowSectionAddSongsModal(false)
+        setShowDeleteSetlistSectionConfirm(false)
+        setPendingDeleteSetlistSection(null)
+        setShowSpecialRequestModal(false)
         setActiveBuildPanel(null)
         setScreen('setlists')
         setLoginPhase('app')
@@ -1039,6 +1352,12 @@ function App() {
     setShowSetlistModal(false)
     setShowPlaylistModal(false)
     setShowPrintPreview(false)
+    setShowAddMusicianModal(false)
+    setShowAddSetlistModal(false)
+    setShowSectionAddSongsModal(false)
+    setShowDeleteSetlistSectionConfirm(false)
+    setPendingDeleteSetlistSection(null)
+    setShowSpecialRequestModal(false)
     setActiveBuildPanel(null)
     setScreen('setlists')
     setLoginPhase('login')
@@ -1148,6 +1467,7 @@ function App() {
         runSupabase(supabase.from('SetlistGigSingerKeys').insert(gigSingerRows))
       }
     }
+    setGigHiddenSpecialSection((prev) => ({ ...prev, [newId]: false }))
   }
 
   const createBlankSetlist = () => {
@@ -1174,6 +1494,7 @@ function App() {
         }),
       )
     }
+    setGigHiddenSpecialSection((prev) => ({ ...prev, [newId]: false }))
     setSelectedSetlistId(newId)
     setScreen('builder')
   }
@@ -1205,6 +1526,18 @@ function App() {
     if (activeGigId === setlistId) {
       setActiveGigId('')
     }
+    setGigSetlistSections((prev) => {
+      const { [setlistId]: _removed, ...rest } = prev
+      return rest
+    })
+    setGigHiddenSetlistSections((prev) => {
+      const { [setlistId]: _removed, ...rest } = prev
+      return rest
+    })
+    setGigHiddenSpecialSection((prev) => {
+      const { [setlistId]: _removed, ...rest } = prev
+      return rest
+    })
     setScreen('setlists')
   }
 
@@ -1242,6 +1575,81 @@ function App() {
       )
     }
     setSelectedSongIds([])
+  }
+
+  const openAddSongsForSection = (section: string) => {
+    const normalized = normalizeSetlistSectionLabel(section)
+    if (!normalized) return
+    setSectionAddSongsSource(normalized)
+    setSectionAddSongsTargets([normalized])
+    setSectionAddSongsSearch('')
+    setSelectedSongIds([])
+    setShowSectionAddSongsModal(true)
+  }
+
+  const addSelectedSongsToTargetSetlists = () => {
+    if (!currentSetlist || selectedSongIds.length === 0) return
+    const targetSections = normalizeTagList(
+      sectionAddSongsTargets.length ? sectionAddSongsTargets : [sectionAddSongsSource],
+    ).filter(Boolean)
+    if (targetSections.length === 0) return
+    const songsToAdd = selectedSongIds.filter((songId) => !currentSetlist.songIds.includes(songId))
+    if (songsToAdd.length === 0) {
+      setSelectedSongIds([])
+      setShowSectionAddSongsModal(false)
+      return
+    }
+
+    const selectedSongs = songsToAdd
+      .map((songId) => appState.songs.find((song) => song.id === songId))
+      .filter((song): song is Song => Boolean(song))
+    const tagInserts = selectedSongs.flatMap((song) =>
+      targetSections
+        .filter((section) => !hasSongTag(song, section))
+        .map((section) => ({
+          id: createId(),
+          song_id: song.id,
+          tag: section,
+        })),
+    )
+
+    setBuildPanelDirty(true)
+    commitChange('Add songs to setlists', (prev) => ({
+      ...prev,
+      songs: prev.songs.map((song) =>
+        songsToAdd.includes(song.id)
+          ? {
+              ...song,
+              tags: Array.from(new Set([...song.tags, ...targetSections])),
+            }
+          : song,
+      ),
+      setlists: prev.setlists.map((setlist) =>
+        setlist.id === currentSetlist.id
+          ? { ...setlist, songIds: [...setlist.songIds, ...songsToAdd] }
+          : setlist,
+      ),
+      tagsCatalog: Array.from(new Set([...prev.tagsCatalog, ...targetSections])),
+    }))
+
+    if (supabase) {
+      runSupabase(
+        supabase.from('SetlistGigSongs').insert(
+          songsToAdd.map((songId, index) => ({
+            id: createId(),
+            gig_id: currentSetlist.id,
+            song_id: songId,
+            sort_order: (currentSetlist.songIds.length ?? 0) + index,
+          })),
+        ),
+      )
+      if (tagInserts.length) {
+        runSupabase(supabase.from('SetlistSongTags').insert(tagInserts))
+      }
+    }
+
+    setSelectedSongIds([])
+    setShowSectionAddSongsModal(false)
   }
 
   const removeSongFromSetlist = (songId: string) => {
@@ -1355,7 +1763,7 @@ function App() {
   }
 
   const importSectionFromPaste = (
-    section: 'Dinner' | 'Latin' | 'Dance',
+    section: string,
     text: string,
   ) => {
     if (!currentSetlist) return
@@ -1497,50 +1905,7 @@ function App() {
     setStarterPasteOpen((prev) => ({ ...prev, [section]: false }))
   }
 
-  const addSongToSection = (section: string, songTitle: string) => {
-    const song = appState.songs.find(
-      (item) => item.title.toLowerCase() === songTitle.toLowerCase(),
-    )
-    if (!song || !currentSetlist) return
-    setBuildPanelDirty(true)
-    commitChange(`Add ${song.title} to ${section}`, (prev) => ({
-      ...prev,
-      songs: prev.songs.map((item) =>
-        item.id === song.id && !hasSongTag(item, section)
-          ? { ...item, tags: [...item.tags, section] }
-          : item,
-      ),
-      setlists: prev.setlists.map((setlist) =>
-        setlist.id === currentSetlist.id
-          ? {
-              ...setlist,
-              songIds: Array.from(new Set([...setlist.songIds, song.id])),
-            }
-          : setlist,
-      ),
-    }))
-    if (supabase) {
-      runSupabase(
-        supabase.from('SetlistGigSongs').insert({
-          id: createId(),
-          gig_id: currentSetlist.id,
-          song_id: song.id,
-          sort_order: currentSetlist.songIds.length,
-        }),
-      )
-      if (!hasSongTag(song, section)) {
-        runSupabase(
-          supabase.from('SetlistSongTags').insert({
-            id: createId(),
-            song_id: song.id,
-            tag: section,
-          }),
-        )
-      }
-    }
-  }
-
-  const reorderSectionSongs = (section: 'Dinner' | 'Latin' | 'Dance', fromId: string, toId: string) => {
+  const reorderSectionSongs = (section: string, fromId: string, toId: string) => {
     if (!currentSetlist || fromId === toId) return
     const sectionSongIds = currentSetlist.songIds.filter((songId) => {
       const song = appState.songs.find((item) => item.id === songId)
@@ -1585,6 +1950,163 @@ function App() {
         )
       })
     }
+  }
+
+  const addGigSetlistSection = (requestedLabel: string) => {
+    if (!currentSetlist) return
+    const normalized = normalizeSetlistSectionLabel(requestedLabel)
+    if (!normalized) return
+    if (isReservedBuildPanel(normalized.toLowerCase())) return
+    const existing = orderedSetSections.find(
+      (section) => section.toLowerCase() === normalized.toLowerCase(),
+    )
+    if (existing) return
+    setBuildPanelDirty(true)
+    setGigSetlistSections((prev) => {
+      const next = {
+        ...prev,
+        [currentSetlist.id]: [...orderedSetSections, normalized],
+      }
+      return next
+    })
+    setGigHiddenSetlistSections((prev) => {
+      const hidden = prev[currentSetlist.id] ?? []
+      if (!hidden.some((item) => item.toLowerCase() === normalized.toLowerCase())) {
+        return prev
+      }
+      const next = {
+        ...prev,
+        [currentSetlist.id]: hidden.filter(
+          (item) => item.toLowerCase() !== normalized.toLowerCase(),
+        ),
+      }
+      return next
+    })
+    setAppState((prev) => ({
+      ...prev,
+      tagsCatalog: Array.from(new Set([...prev.tagsCatalog, normalized])),
+    }))
+  }
+
+  const reorderGigSetlistSections = (fromSection: string, toSection: string) => {
+    if (!currentSetlist || fromSection === toSection) return
+    const fromIndex = orderedSetSections.findIndex(
+      (section) => section.toLowerCase() === fromSection.toLowerCase(),
+    )
+    const toIndex = orderedSetSections.findIndex(
+      (section) => section.toLowerCase() === toSection.toLowerCase(),
+    )
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return
+    const reordered = [...orderedSetSections]
+    const [moved] = reordered.splice(fromIndex, 1)
+    reordered.splice(toIndex, 0, moved)
+    setBuildPanelDirty(true)
+    setGigSetlistSections((prev) => ({
+      ...prev,
+      [currentSetlist.id]: reordered,
+    }))
+  }
+
+  const addGigSetlistSectionFromTemplate = (template: string) => {
+    const current = orderedSetSections
+    if (template === 'Dance') {
+      const danceCount = current.filter((section) =>
+        section.toLowerCase().startsWith('dance'),
+      ).length
+      const label = danceCount === 0 ? 'Dance' : `Dance Set ${danceCount + 1}`
+      addGigSetlistSection(label)
+      return
+    }
+    if (template === 'Dinner') {
+      const dinnerCount = current.filter((section) =>
+        section.toLowerCase().startsWith('dinner'),
+      ).length
+      const label = dinnerCount === 0 ? 'Dinner' : `Dinner Set ${dinnerCount + 1}`
+      addGigSetlistSection(label)
+      return
+    }
+    if (template === 'Latin') {
+      const latinCount = current.filter((section) =>
+        section.toLowerCase().startsWith('latin'),
+      ).length
+      const label = latinCount === 0 ? 'Latin' : `Latin Set ${latinCount + 1}`
+      addGigSetlistSection(label)
+      return
+    }
+    if (template === 'Special Requests') {
+      if (!currentSetlist) return
+      setGigHiddenSpecialSection((prev) => ({
+        ...prev,
+        [currentSetlist.id]: false,
+      }))
+      return
+    }
+    addGigSetlistSection(template)
+  }
+
+  const requestDeleteSetlistSection = (section: string) => {
+    setPendingDeleteSetlistSection(section)
+    setShowDeleteSetlistSectionConfirm(true)
+  }
+
+  const confirmDeleteSetlistSection = () => {
+    if (!currentSetlist || !pendingDeleteSetlistSection) return
+    const section = pendingDeleteSetlistSection
+    const normalized = section.trim().toLowerCase()
+    if (normalized === 'special request' || normalized === 'special requests') {
+      setBuildPanelDirty(true)
+      setGigHiddenSpecialSection((prev) => ({
+        ...prev,
+        [currentSetlist.id]: true,
+      }))
+      if (activeBuildPanel === 'special') {
+        setActiveBuildPanel(null)
+      }
+      setPendingDeleteSetlistSection(null)
+      setShowDeleteSetlistSectionConfirm(false)
+      return
+    }
+    setBuildPanelDirty(true)
+    setGigSetlistSections((prev) => ({
+      ...prev,
+      [currentSetlist.id]: (prev[currentSetlist.id] ?? []).filter(
+        (item) => item.toLowerCase() !== section.toLowerCase(),
+      ),
+    }))
+    setGigHiddenSetlistSections((prev) => ({
+      ...prev,
+      [currentSetlist.id]: Array.from(
+        new Set([...(prev[currentSetlist.id] ?? []), section]),
+      ),
+    }))
+    setBuildCompleteOverrides((prev) => {
+      const gigOverrides = prev[currentSetlist.id] ?? {}
+      const key = setlistPanelKey(section)
+      if (!(key in gigOverrides)) return prev
+      const { [key]: _removed, ...rest } = gigOverrides
+      return {
+        ...prev,
+        [currentSetlist.id]: rest,
+      }
+    })
+    setStarterPasteOpen((prev) => {
+      const { [section]: _removed, ...rest } = prev
+      return rest
+    })
+    setStarterPasteBySection((prev) => {
+      const { [section]: _removed, ...rest } = prev
+      return rest
+    })
+    if (getSectionFromPanel(activeBuildPanel)?.toLowerCase() === section.toLowerCase()) {
+      setActiveBuildPanel(null)
+    }
+    setPendingDeleteSetlistSection(null)
+    setShowDeleteSetlistSectionConfirm(false)
+  }
+
+  const cancelDeleteSetlistSection = () => {
+    setPendingDeleteSetlistSection(null)
+    setShowDeleteSetlistSectionConfirm(false)
   }
 
   const flashMovedSong = (songId: string) => {
@@ -1817,7 +2339,7 @@ function App() {
   }
 
   const addInstrumentToCatalog = () => {
-    const value = newInstrumentInput.trim()
+    const value = normalizeInstrumentName(newInstrumentInput)
     if (!value) return
     if (!instrumentCatalog.includes(value)) {
       setInstrumentCatalog((prev) => [...prev, value])
@@ -1830,11 +2352,34 @@ function App() {
     setNewDocSongId(song.id)
     setNewDocSongTitle(song.title)
     setNewDocType('')
-    setNewDocInstrument('')
+    setNewDocInstruments([])
     setNewDocTitle('')
     setNewDocUrl('')
     setNewDocFile(null)
     setNewDocLyrics('')
+  }
+
+  const openSongEditorFromSpecialRequest = () => {
+    const trimmedTitle = pendingSpecialSong.trim()
+    if (!trimmedTitle) return
+    if (pendingSpecialSongMatch) {
+      openSongEditor(pendingSpecialSongMatch)
+      setShowSpecialRequestModal(false)
+      return
+    }
+    setNewSongArtist('')
+    setNewSongAudio(pendingSpecialExternalUrl.trim())
+    setNewSongOriginalKey(pendingSpecialDjOnly ? '' : pendingSpecialKey.trim())
+    setNewSongTitle(trimmedTitle)
+    setNewSongTags(
+      normalizeTagList(['Special Request', pendingSpecialType.trim()].filter(Boolean)),
+    )
+    setSongFormError('')
+    setPendingSongDraft(null)
+    setSimilarSongMatches([])
+    setShowDuplicateSongConfirm(false)
+    setShowAddSongModal(true)
+    setShowSpecialRequestModal(false)
   }
 
   const updateDocumentFile = async (doc: Document, file: File) => {
@@ -1877,102 +2422,132 @@ function App() {
       setDocFormError('Select Chart, Lyrics, or Lead Sheet first.')
       return false
     }
+    if (role !== 'admin' && newDocType === 'Lead Sheet') {
+      setDocFormError('Only Chart and Lyrics are allowed in musician view.')
+      return false
+    }
     setDocFormError('')
-    const instrument =
-      newDocType === 'Lyrics' ? 'Vocals' : newDocInstrument.trim() || 'All'
+    setShowDocInstrumentWarning(false)
+    const instruments =
+      newDocType === 'Lyrics'
+        ? ['Vocals']
+        : newDocInstruments.length
+          ? newDocInstruments.map((item) => normalizeInstrumentName(item))
+          : []
+    if (
+      (newDocType === 'Chart' || newDocType === 'Lead Sheet') &&
+      (instruments.length === 0 || instruments.includes('All'))
+    ) {
+      setDocFormError('Select one or more instruments before saving this chart.')
+      setShowDocInstrumentWarning(true)
+      return false
+    }
+    const normalizedInstruments = normalizeTagList(instruments.filter(Boolean))
+    const finalInstruments = normalizedInstruments.includes('All')
+      ? ['All']
+      : normalizedInstruments.length
+        ? normalizedInstruments
+        : ['All']
     const title =
       newDocType === 'Lyrics'
         ? `${selectedSong.title}${selectedSong.artist ? ` - ${selectedSong.artist}` : ''}`
         : newDocTitle.trim() ||
           `${selectedSong.title} ${newDocType === 'Chart' ? 'Chart' : newDocType}`
-    const existingDoc = appState.documents.find(
-      (doc) =>
-        doc.songId === selectedSong.id &&
-        doc.type === newDocType &&
-        doc.instrument === instrument &&
-        doc.title === title,
-    )
-    const docId = existingDoc?.id ?? createId()
+    const docsToSave = finalInstruments.map((instrument) => {
+      const existingDoc = appState.documents.find(
+        (doc) =>
+          doc.songId === selectedSong.id &&
+          doc.type === newDocType &&
+          normalizeInstrumentName(doc.instrument) === instrument &&
+          doc.title === title,
+      )
+      return {
+        existing: existingDoc,
+        doc: {
+          id: existingDoc?.id ?? createId(),
+          songId: selectedSong.id,
+          type: newDocType,
+          instrument,
+          title,
+        } as Document,
+      }
+    })
     const uploadedUrl = newDocFile
-      ? await uploadDocFile(newDocFile, selectedSong.id, docId)
+      ? await uploadDocFile(newDocFile, selectedSong.id, docsToSave[0]?.doc.id ?? createId())
       : null
     const fileUrl = newDocUrl.trim() || uploadedUrl || newDocFile?.name || null
     const content = newDocType === 'Lyrics' ? newDocLyrics.trim() || undefined : undefined
-    const doc: Document = {
-      id: docId,
-      songId: selectedSong.id,
-      type: newDocType,
-      instrument,
-      title,
-      url: fileUrl ?? undefined,
-      content,
-    }
+    const documentsToPersist = docsToSave.map(({ existing, doc }) => ({
+      existing,
+      doc: {
+        ...doc,
+        url: fileUrl ?? undefined,
+        content,
+      },
+    }))
 
     setAppState((prev) => {
-      const nextDocuments = existingDoc
-        ? prev.documents.map((item) => (item.id === doc.id ? doc : item))
-        : [doc, ...prev.documents]
+      let nextDocuments = [...prev.documents]
+      documentsToPersist.forEach(({ doc }) => {
+        const index = nextDocuments.findIndex((item) => item.id === doc.id)
+        if (index >= 0) {
+          nextDocuments[index] = doc
+        } else {
+          nextDocuments = [doc, ...nextDocuments]
+        }
+      })
       const nextCharts =
-        doc.type === 'Chart'
-          ? existingDoc
-            ? prev.charts.map((item) =>
-                item.id === doc.id
-                  ? {
-                      ...item,
-                      title: doc.title,
-                      instrument: doc.instrument,
-                      fileName: doc.url,
-                    }
-                  : item,
-              )
-            : [
-                {
-                  id: doc.id,
-                  songId: doc.songId,
-                  instrument: doc.instrument,
-                  title: doc.title,
-                  fileName: doc.url,
-                },
-                ...prev.charts,
-              ]
+        newDocType === 'Chart'
+          ? nextDocuments
+              .filter((item) => item.type === 'Chart')
+              .map((item) => ({
+                id: item.id,
+                songId: item.songId,
+                instrument: item.instrument,
+                title: item.title,
+                fileName: item.url,
+              }))
           : prev.charts
       return { ...prev, documents: nextDocuments, charts: nextCharts }
     })
 
     if (supabase) {
-      if (existingDoc) {
-        runSupabase(
-          supabase
-            .from('SetlistDocuments')
-            .update({
+      const client = supabase
+      documentsToPersist.forEach(({ existing, doc }) => {
+        if (existing) {
+          runSupabase(
+            client
+              .from('SetlistDocuments')
+              .update({
+                doc_type: doc.type,
+                instrument: doc.instrument,
+                title: doc.title,
+                file_url: doc.url ?? null,
+                content: doc.content ?? null,
+              })
+              .eq('id', doc.id),
+          )
+        } else {
+          runSupabase(
+            client.from('SetlistDocuments').insert({
+              id: doc.id,
+              song_id: doc.songId,
               doc_type: doc.type,
               instrument: doc.instrument,
               title: doc.title,
               file_url: doc.url ?? null,
               content: doc.content ?? null,
-            })
-            .eq('id', doc.id),
-        )
-      } else {
-        runSupabase(
-          supabase.from('SetlistDocuments').insert({
-            id: doc.id,
-            song_id: doc.songId,
-            doc_type: doc.type,
-            instrument: doc.instrument,
-            title: doc.title,
-            file_url: doc.url ?? null,
-            content: doc.content ?? null,
-          }),
-        )
-      }
+            }),
+          )
+        }
+      })
     }
 
     if (clearAfter) {
       setNewDocSongId('')
       setNewDocSongTitle('')
       setNewDocType('')
-      setNewDocInstrument('')
+      setNewDocInstruments([])
       setNewDocTitle('')
       setNewDocUrl('')
       setNewDocFile(null)
@@ -2117,21 +2692,6 @@ function App() {
     setPendingSongDraft(null)
     setSimilarSongMatches([])
     setShowDuplicateSongConfirm(false)
-  }
-
-  const openAddSongForSection = (section: string, title: string) => {
-    const trimmed = title.trim()
-    if (!trimmed) return
-    setNewSongArtist('')
-    setNewSongAudio('')
-    setNewSongOriginalKey('')
-    setNewSongTitle(trimmed)
-    setNewSongTags([section])
-    setSongFormError('')
-    setPendingSongDraft(null)
-    setSimilarSongMatches([])
-    setShowDuplicateSongConfirm(false)
-    setShowAddSongModal(true)
   }
 
   const startEditSong = (song: Song) => {
@@ -2344,6 +2904,16 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [showUndoToast])
 
+  const resetPendingSpecialRequest = () => {
+    setPendingSpecialType('')
+    setPendingSpecialSong('')
+    setPendingSpecialSingers([])
+    setPendingSpecialKey('')
+    setPendingSpecialNote('')
+    setPendingSpecialDjOnly(false)
+    setPendingSpecialExternalUrl('')
+  }
+
   const addSpecialRequest = () => {
     if (!currentSetlist) return
     setBuildPanelDirty(true)
@@ -2353,16 +2923,25 @@ function App() {
       (song) => song.title.toLowerCase() === customSong.toLowerCase(),
     )
     const songTitle = existingSong?.title ?? customSong
+    const normalizedSingers = pendingSpecialDjOnly ? [] : normalizeTagList(pendingSpecialSingers)
+    const normalizedKey = pendingSpecialDjOnly ? '' : pendingSpecialKey.trim()
     if (
       !type ||
       !songTitle ||
       (!pendingSpecialDjOnly &&
-        (pendingSpecialSingers.length === 0 || !pendingSpecialKey))
+        (normalizedSingers.length === 0 || !normalizedKey))
     ) {
       return
     }
     const requestId = createId()
     const createdSongId = existingSong?.id ?? createId()
+    const requestTags = normalizeTagList(['Special Request', type])
+    const existingSongTagsLower = new Set(
+      (existingSong?.tags ?? []).map((tag) => tag.trim().toLowerCase()),
+    )
+    const missingTagsForExistingSong = requestTags.filter(
+      (tag) => !existingSongTagsLower.has(tag.toLowerCase()),
+    )
     commitChange('Add special request', (prev) => {
       const requestTypeTag = prev.tagsCatalog.includes(type)
         ? prev.tagsCatalog
@@ -2371,16 +2950,24 @@ function App() {
         existingSong || !customSong
           ? prev.songs.map((song) =>
               song.id === existingSong?.id
-                ? { ...song, specialPlayedCount: song.specialPlayedCount + 1 }
+                ? {
+                    ...song,
+                    tags: Array.from(new Set([...song.tags, ...requestTags])),
+                    specialPlayedCount: song.specialPlayedCount + 1,
+                  }
                 : song,
             )
           : [
               {
                 id: createdSongId,
                 title: customSong,
-                artist: 'New Artist',
-                tags: ['Special Request', type],
-                keys: [{ singer: 'Maya', defaultKey: 'C', gigOverrides: {} }],
+                artist: '',
+                tags: requestTags,
+                keys: normalizedSingers.map((singer) => ({
+                  singer,
+                  defaultKey: normalizedKey,
+                  gigOverrides: {},
+                })),
                 specialPlayedCount: 1,
               },
               ...prev.songs,
@@ -2394,8 +2981,8 @@ function App() {
             type,
             songTitle,
             songId: createdSongId,
-            singers: pendingSpecialDjOnly ? [] : pendingSpecialSingers,
-            key: pendingSpecialDjOnly ? '' : pendingSpecialKey,
+            singers: normalizedSingers,
+            key: normalizedKey,
             note: pendingSpecialNote.trim() || undefined,
             djOnly: pendingSpecialDjOnly,
             externalAudioUrl: pendingSpecialExternalUrl.trim() || undefined,
@@ -2409,34 +2996,36 @@ function App() {
         tagsCatalog: requestTypeTag,
       }
     })
-    setPendingSpecialType('')
-    setPendingSpecialSong('')
-    setPendingSpecialSingers([])
-    setPendingSpecialKey('')
-    setPendingSpecialNote('')
-    setPendingSpecialDjOnly(false)
-    setPendingSpecialExternalUrl('')
+    resetPendingSpecialRequest()
+    setShowSpecialRequestModal(false)
     if (supabase) {
       if (!existingSong && customSong) {
         runSupabase(
           supabase.from('SetlistSongs').insert({
             id: createdSongId,
             title: customSong,
-            artist: 'New Artist',
+            artist: '',
             audio_url: null,
           }),
         )
-        runSupabase(
-          supabase.from('SetlistSongKeys').insert({
-            id: createId(),
-            song_id: createdSongId,
-            singer_name: 'Maya',
-            default_key: 'C',
-          }),
-        )
+        if (normalizedSingers.length > 0 && normalizedKey) {
+          runSupabase(
+            supabase.from('SetlistSongKeys').insert(
+              normalizedSingers.map((singer) => ({
+                id: createId(),
+                song_id: createdSongId,
+                singer_name: singer,
+                default_key: normalizedKey,
+              })),
+            ),
+          )
+        }
+      }
+      const tagsToPersist = existingSong ? missingTagsForExistingSong : requestTags
+      if (tagsToPersist.length > 0) {
         runSupabase(
           supabase.from('SetlistSongTags').insert(
-            ['Special Request', type].map((tag) => ({
+            tagsToPersist.map((tag) => ({
               id: createId(),
               song_id: createdSongId,
               tag,
@@ -2451,8 +3040,8 @@ function App() {
           request_type: type,
           song_title: songTitle,
           song_id: createdSongId,
-          singers: pendingSpecialDjOnly ? [] : pendingSpecialSingers,
-          song_key: pendingSpecialDjOnly ? null : pendingSpecialKey,
+          singers: normalizedSingers,
+          song_key: normalizedKey || null,
           note: pendingSpecialNote.trim() || null,
           dj_only: pendingSpecialDjOnly,
           external_audio_url: pendingSpecialExternalUrl.trim() || null,
@@ -2463,12 +3052,7 @@ function App() {
 
   const hasDocsForSong = (songId?: string) => {
     if (!songId) return false
-    const docs = appState.documents.filter((doc) => doc.songId === songId)
-    if (docs.length === 0) return false
-    if (!appState.instrument || appState.instrument === 'All') return true
-    return docs.some(
-      (doc) => doc.instrument === appState.instrument || doc.instrument === 'All',
-    )
+    return getDocumentSelectionItems(songId).length > 0
   }
 
   const openAudioForUrl = (url: string, label?: string) => {
@@ -2482,28 +3066,36 @@ function App() {
 
   const openDocsForSong = (songId?: string) => {
     if (!songId) return
+    const openSongDocsWithSelection = (targetSongId: string) => {
+      const matchingDocs = getDocumentSelectionItems(targetSongId)
+      if (matchingDocs.length === 0) return
+      // Always open chooser popup first so admin/musician flows match.
+      setDocModalSongId(targetSongId)
+      setDocModalPageIndex(0)
+      setDocModalContent(null)
+    }
     if (role === 'admin') {
       setShowInstrumentPrompt(false)
       setPendingDocSongId(null)
-      setDocModalSongId(songId)
+      openSongDocsWithSelection(songId)
       return
     }
-    if (!appState.instrument || appState.instrument === 'All') {
+    if (!appState.instrument || appState.instrument.length === 0) {
       setPendingDocSongId(songId)
+      setDocInstrumentDraft([])
       setShowInstrumentPrompt(true)
       return
     }
-    setDocModalSongId(songId)
+    openSongDocsWithSelection(songId)
   }
   const openLyricsForSong = (songId?: string) => {
     if (!songId) return
-    const lyricsDoc = appState.documents.find(
-      (doc) => doc.songId === songId && doc.type === 'Lyrics',
-    )
+    const lyricsDoc = getDocumentSelectionItems(songId).find((doc) => doc.type === 'Lyrics')
     if (!lyricsDoc) return
     setShowInstrumentPrompt(false)
     setPendingDocSongId(null)
     setDocModalSongId(songId)
+    setDocModalPageIndex(0)
     setDocModalContent(lyricsDoc)
   }
 
@@ -2681,7 +3273,7 @@ function App() {
         id: row.id,
         songId: row.song_id,
         type: row.doc_type,
-        instrument: row.instrument,
+        instrument: parseDocumentInstruments(row.instrument ?? 'All').join('||'),
         title: row.title,
         url: row.file_url ?? undefined,
         content: row.content ?? undefined,
@@ -2704,7 +3296,7 @@ function App() {
         roster: row.roster,
         email: row.email ?? undefined,
         phone: row.phone ?? undefined,
-        instruments: row.instruments ?? [],
+        instruments: (row.instruments ?? []).map((item: string) => normalizeInstrumentName(item)),
         singer: row.singer ?? undefined,
       })) ?? []
 
@@ -3049,7 +3641,7 @@ function App() {
     const signature = [
       newDocSongId,
       newDocType,
-      newDocInstrument,
+      newDocInstruments.join('|'),
       newDocTitle,
       newDocUrl,
       newDocFile?.name ?? '',
@@ -3065,7 +3657,7 @@ function App() {
     editingSongId,
     newDocSongId,
     newDocType,
-    newDocInstrument,
+    newDocInstruments,
     newDocTitle,
     newDocUrl,
     newDocFile,
@@ -3078,6 +3670,21 @@ function App() {
       JSON.stringify(buildCompleteOverrides),
     )
   }, [buildCompleteOverrides])
+
+  useEffect(() => {
+    localStorage.setItem('setlist_gig_sections', JSON.stringify(gigSetlistSections))
+  }, [gigSetlistSections])
+
+  useEffect(() => {
+    localStorage.setItem(
+      'setlist_hidden_gig_sections',
+      JSON.stringify(gigHiddenSetlistSections),
+    )
+  }, [gigHiddenSetlistSections])
+
+  useEffect(() => {
+    localStorage.setItem('setlist_hidden_special_section', JSON.stringify(gigHiddenSpecialSection))
+  }, [gigHiddenSpecialSection])
 
   useEffect(() => {
     setBuildPanelDirty(false)
@@ -3183,16 +3790,22 @@ function App() {
       (doc) => doc.songId === newDocSongId && doc.type === newDocType,
     )
     if (!existingDocs.length) return
-    const matchingInstrument = newDocInstrument.trim()
-      ? existingDocs.find((doc) => doc.instrument === newDocInstrument.trim())
-      : existingDocs[0]
+    const selectedSet = new Set(
+      normalizeTagList(newDocInstruments.map((item) => normalizeInstrumentName(item))),
+    )
+    const matchingInstrument =
+      selectedSet.size > 0
+        ? existingDocs.find((doc) => selectedSet.has(normalizeInstrumentName(doc.instrument)))
+        : existingDocs[0]
     if (!matchingInstrument) return
     setNewDocTitle((current) => current || matchingInstrument.title)
-    setNewDocInstrument((current) => current || matchingInstrument.instrument)
+    setNewDocInstruments((current) =>
+      current.length ? current : parseDocumentInstruments(matchingInstrument.instrument),
+    )
     setNewDocUrl(matchingInstrument.url ?? '')
     setNewDocLyrics(matchingInstrument.content ?? '')
     setNewDocFile(null)
-  }, [appState.documents, newDocInstrument, newDocSongId, newDocType])
+  }, [appState.documents, newDocInstruments, newDocSongId, newDocType])
 
   useEffect(() => {
     const hasPopup =
@@ -3207,8 +3820,15 @@ function App() {
       showSubModal ||
       showDuplicateSongConfirm ||
       showAddSongModal ||
+      showAddMusicianModal ||
       showGigMusiciansModal ||
       showMissingSingerWarning ||
+      showDocInstrumentWarning ||
+      showDocUrlAccessWarning ||
+      showAddSetlistModal ||
+      showSectionAddSongsModal ||
+      showDeleteSetlistSectionConfirm ||
+      showSpecialRequestModal ||
       showSetlistModal ||
       showPrintPreview
     document.body.style.overflow = hasPopup ? 'hidden' : ''
@@ -3228,8 +3848,15 @@ function App() {
     showSubModal,
     showDuplicateSongConfirm,
     showAddSongModal,
+    showAddMusicianModal,
     showGigMusiciansModal,
     showMissingSingerWarning,
+    showDocInstrumentWarning,
+    showDocUrlAccessWarning,
+    showAddSetlistModal,
+    showSectionAddSongsModal,
+    showDeleteSetlistSectionConfirm,
+    showSpecialRequestModal,
     showSetlistModal,
     showPrintPreview,
   ])
@@ -3318,7 +3945,7 @@ function App() {
       {appState.instrument === null && role !== 'admin' && (
         <div
           className="fixed inset-0 z-[80] flex items-center bg-slate-950/80 py-6"
-          onClick={() => setAppState((prev) => ({ ...prev, instrument: 'All' }))}
+          onClick={() => setAppState((prev) => ({ ...prev, instrument: ['All'] }))}
         >
           <div
             className="mx-auto w-full max-w-md max-h-[85vh] overflow-hidden rounded-t-3xl bg-slate-900 sm:rounded-3xl"
@@ -3327,7 +3954,7 @@ function App() {
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
               <h2 className="text-lg font-semibold">Select your instrument</h2>
               <p className="mt-1 text-sm text-slate-300">
-                Charts and lead sheets will filter to your part.
+                Pick one or more instruments to view matching charts and lyrics.
               </p>
             </div>
             <div className="max-h-[calc(85vh-92px)] overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
@@ -3335,16 +3962,37 @@ function App() {
                 {INSTRUMENTS.map((instrument) => (
                   <button
                     key={instrument}
-                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm"
-                    onClick={() => setAppState((prev) => ({ ...prev, instrument }))}
+                    className={`rounded-xl border px-3 py-2 text-sm ${
+                      instrumentSelectionDraft.includes(instrument)
+                        ? 'border-teal-300 bg-teal-400/10 text-teal-100'
+                        : 'border-white/10 bg-white/5'
+                    }`}
+                    onClick={() =>
+                      setInstrumentSelectionDraft((current) =>
+                        current.includes(instrument)
+                          ? current.filter((item) => item !== instrument)
+                          : [...current, instrument],
+                      )
+                    }
                   >
                     {instrument}
                   </button>
                 ))}
               </div>
               <button
+                className="mt-4 w-full rounded-xl bg-teal-400/90 px-3 py-2 text-sm font-semibold text-slate-950"
+                onClick={() =>
+                  setAppState((prev) => ({
+                    ...prev,
+                    instrument: instrumentSelectionDraft.length ? instrumentSelectionDraft : ['All'],
+                  }))
+                }
+              >
+                Continue
+              </button>
+              <button
                 className="mt-4 w-full rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
-                onClick={() => setAppState((prev) => ({ ...prev, instrument: 'All' }))}
+                onClick={() => setAppState((prev) => ({ ...prev, instrument: ['All'] }))}
               >
                 Skip for now
               </button>
@@ -3497,9 +4145,13 @@ function App() {
                     label="Charts for you"
                     value={
                       appState.charts.filter((chart) =>
-                        appState.instrument === 'All'
-                          ? true
-                          : chart.instrument === appState.instrument,
+                        documentMatchesActiveInstruments({
+                          id: chart.id,
+                          songId: chart.songId,
+                          type: 'Chart',
+                          instrument: chart.instrument,
+                          title: chart.title,
+                        }),
                       ).length
                     }
                   />
@@ -3836,50 +4488,26 @@ function App() {
                     label: 'Assign Musicians',
                     icon: '🎤',
                     tint: 'from-indigo-500/30 via-slate-900/40 to-slate-900/60',
-                    complete: buildCompletion.musicians,
+                    complete: Boolean(buildCompletion.musicians),
+                    count: buildCardCounts.musicians ?? 0,
                   },
-                  {
-                    key: 'addSongs',
-                    label: 'Add Songs',
-                    icon: '➕',
-                    tint: 'from-teal-500/30 via-slate-900/40 to-slate-900/60',
-                    complete: buildCompletion.addSongs,
-                  },
-                  {
-                    key: 'special',
-                    label: 'Special Requests',
-                    icon: '✨',
-                    tint: 'from-amber-500/30 via-slate-900/40 to-slate-900/60',
-                    complete: buildCompletion.special,
-                  },
-                  {
-                    key: 'dinner',
-                    label: 'Dinner',
-                    icon: '🍽️',
-                    tint: 'from-emerald-500/30 via-slate-900/40 to-slate-900/60',
-                    complete: buildCompletion.dinner,
-                  },
-                  {
-                    key: 'latin',
-                    label: 'Latin',
-                    icon: '💃',
-                    tint: 'from-pink-500/30 via-slate-900/40 to-slate-900/60',
-                    complete: buildCompletion.latin,
-                  },
-                  {
-                    key: 'dance',
-                    label: 'Dance',
-                    icon: '🕺',
-                    tint: 'from-cyan-500/30 via-slate-900/40 to-slate-900/60',
-                    complete: buildCompletion.dance,
-                  },
+                  ...(!isSpecialSectionHidden
+                    ? [
+                        {
+                          key: 'special',
+                          label: 'Special Requests',
+                          icon: '✨',
+                          tint: 'from-amber-500/30 via-slate-900/40 to-slate-900/60',
+                          complete: Boolean(buildCompletion.special),
+                          count: buildCardCounts.special ?? 0,
+                        },
+                      ]
+                    : []),
                 ].map((item) => (
                   <button
                     key={item.key}
                     className={`flex min-h-[96px] flex-col items-start justify-between rounded-3xl border border-white/10 bg-gradient-to-br ${item.tint} px-4 py-4 text-left text-white shadow-[0_0_18px_rgba(15,23,42,0.35)]`}
-                    onClick={() =>
-                      setActiveBuildPanel(item.key as typeof activeBuildPanel)
-                    }
+                    onClick={() => setActiveBuildPanel(item.key)}
                   >
                     <div className="flex w-full items-start justify-between">
                       <span className="text-2xl">{item.icon}</span>
@@ -3893,13 +4521,99 @@ function App() {
                           {item.complete ? '✓' : '○'}
                         </span>
                         <span className="mt-1 text-sm font-semibold text-slate-100">
-                          {buildCardCounts[item.key as keyof typeof buildCardCounts] ?? 0}
+                          {item.count}
                         </span>
                       </div>
                     </div>
                     <span className="text-sm font-semibold">{item.label}</span>
                   </button>
                 ))}
+                {orderedSetSections.map((section) => {
+                  const panelKey = setlistPanelKey(section)
+                  const lower = section.toLowerCase()
+                  const icon = lower.includes('dinner')
+                    ? '🍽️'
+                    : lower.includes('latin')
+                      ? '💃'
+                      : lower.includes('dance')
+                        ? '🕺'
+                        : '🎶'
+                  const tint = lower.includes('dinner')
+                    ? 'from-emerald-500/30 via-slate-900/40 to-slate-900/60'
+                    : lower.includes('latin')
+                      ? 'from-pink-500/30 via-slate-900/40 to-slate-900/60'
+                      : lower.includes('dance')
+                        ? 'from-cyan-500/30 via-slate-900/40 to-slate-900/60'
+                        : 'from-violet-500/30 via-slate-900/40 to-slate-900/60'
+                  return (
+                    <div key={panelKey} className="space-y-2">
+                      {draggedSetlistSection &&
+                        draggedSetlistSection !== section &&
+                        dragOverSetlistSection === section && (
+                          <div className="h-4 rounded-xl border border-dashed border-teal-300/70 bg-teal-300/15" />
+                        )}
+                      <button
+                        draggable
+                        className={`flex min-h-[96px] w-full flex-col items-start justify-between rounded-3xl border border-white/10 bg-gradient-to-br ${tint} px-4 py-4 text-left text-white shadow-[0_0_18px_rgba(15,23,42,0.35)]`}
+                        onClick={() => setActiveBuildPanel(panelKey)}
+                        onDragStart={(event) => {
+                          setDraggedSetlistSection(section)
+                          setDragOverSetlistSection(null)
+                          event.dataTransfer.effectAllowed = 'move'
+                          event.dataTransfer.setData('text/plain', section)
+                        }}
+                        onDragOver={(event) => {
+                          event.preventDefault()
+                          event.dataTransfer.dropEffect = 'move'
+                          setDragOverSetlistSection(section)
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault()
+                          const fromSection =
+                            draggedSetlistSection ?? event.dataTransfer.getData('text/plain')
+                          if (!fromSection) return
+                          reorderGigSetlistSections(fromSection, section)
+                          setDraggedSetlistSection(null)
+                          setDragOverSetlistSection(null)
+                        }}
+                        onDragEnd={() => {
+                          setDraggedSetlistSection(null)
+                          setDragOverSetlistSection(null)
+                        }}
+                      >
+                        <div className="flex w-full items-start justify-between">
+                          <span className="text-2xl">{icon}</span>
+                          <div className="flex flex-col items-end">
+                            <span
+                              className={`text-3xl ${
+                                buildCompletion[panelKey] ? 'text-emerald-300' : 'text-amber-300'
+                              }`}
+                              title={buildCompletion[panelKey] ? 'Complete' : 'Not complete'}
+                            >
+                              {buildCompletion[panelKey] ? '✓' : '○'}
+                            </span>
+                            <span className="mt-1 text-sm font-semibold text-slate-100">
+                              {buildCardCounts[panelKey] ?? 0}
+                            </span>
+                          </div>
+                        </div>
+                        <span className="text-sm font-semibold">{section}</span>
+                      </button>
+                    </div>
+                  )
+                })}
+                <button
+                  className="flex min-h-[96px] flex-col items-start justify-between rounded-3xl border border-dashed border-teal-300/50 bg-gradient-to-br from-teal-500/30 via-slate-900/40 to-slate-900/60 px-4 py-4 text-left text-white shadow-[0_0_18px_rgba(15,23,42,0.35)]"
+                  onClick={() => {
+                    setNewSetlistLabel('')
+                    setShowAddSetlistModal(true)
+                  }}
+                >
+                  <div className="flex w-full items-start justify-between">
+                    <span className="text-2xl">➕</span>
+                  </div>
+                  <span className="text-sm font-semibold">Add Setlist</span>
+                </button>
               </div>
             )}
             {!isAdmin && (
@@ -4092,7 +4806,17 @@ function App() {
                             )}
                           </div>
                         </div>
-                        <div className="text-xs text-slate-300">
+                        <div
+                          className={`text-xs ${
+                            !request.djOnly &&
+                            request.singers.some(
+                              (singer) =>
+                                singer.trim().toLowerCase() === INSTRUMENTAL_LABEL.toLowerCase(),
+                            )
+                              ? 'text-fuchsia-200'
+                              : 'text-slate-300'
+                          }`}
+                        >
                           {request.djOnly ? 'DJ' : request.singers.join(', ')}
                         </div>
                         <div className="text-xs text-slate-200">
@@ -4623,117 +5347,12 @@ function App() {
               </div>
               <div className="mt-4 space-y-4">
                 {isAdmin && (
-                  <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
-                    <h3 className="text-sm font-semibold">Add musician</h3>
-                    <p className="mt-1 text-xs text-slate-400">
-                      Mark core members or subs. Add contact info and instruments.
-                    </p>
-                    <div className="mt-3 grid gap-2 md:grid-cols-2">
-                      <input
-                        className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                        placeholder="Musician name"
-                        value={newMusicianName}
-                        onChange={(event) => setNewMusicianName(event.target.value)}
-                      />
-                      <select
-                        className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                        value={newMusicianRoster}
-                        onChange={(event) =>
-                          setNewMusicianRoster(event.target.value as 'core' | 'sub')
-                        }
-                      >
-                        <option value="core">Core roster</option>
-                        <option value="sub">Sub</option>
-                      </select>
-                      <input
-                        className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                        placeholder="Email"
-                        value={newMusicianEmail}
-                        onChange={(event) => setNewMusicianEmail(event.target.value)}
-                      />
-                      <input
-                        className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                        placeholder="Phone"
-                        value={newMusicianPhone}
-                        onChange={(event) => setNewMusicianPhone(event.target.value)}
-                      />
-                      <div className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm">
-                        <div className="text-[10px] uppercase tracking-wide text-slate-400">
-                          Instruments
-                        </div>
-                        <input
-                          className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs"
-                          placeholder="Filter instruments"
-                          value={instrumentFilter}
-                          onChange={(event) => setInstrumentFilter(event.target.value)}
-                        />
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {filteredInstruments.map((instrument) => {
-                            const active = newMusicianInstruments.includes(instrument)
-                            return (
-                              <button
-                                key={instrument}
-                                className={`rounded-full border px-3 py-1 text-xs ${
-                                  active
-                                    ? 'border-teal-300 bg-teal-400/10 text-teal-200'
-                                    : 'border-white/10 text-slate-300'
-                                }`}
-                                onClick={() => {
-                                  const next = newMusicianInstruments.includes(instrument)
-                                    ? newMusicianInstruments.filter(
-                                        (item) => item !== instrument,
-                                      )
-                                    : [...newMusicianInstruments, instrument]
-                                  setNewMusicianInstruments(next)
-                                  if (!next.includes('Vocals')) {
-                                    setNewMusicianSinger('')
-                                  }
-                                }}
-                              >
-                                {instrument}
-                              </button>
-                            )
-                          })}
-                        </div>
-                        <div className="mt-2 flex gap-2">
-                          <input
-                            className="flex-1 rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs"
-                            placeholder="Add instrument"
-                            value={newInstrumentInput}
-                            onChange={(event) => setNewInstrumentInput(event.target.value)}
-                          />
-                          <button
-                            className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-200"
-                            onClick={addInstrumentToCatalog}
-                          >
-                            Add
-                          </button>
-                        </div>
-                      </div>
-                      {newMusicianInstruments.includes('Vocals') && (
-                        <select
-                          className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                          value={newMusicianSinger}
-                          onChange={(event) =>
-                            setNewMusicianSinger(
-                              event.target.value as 'male' | 'female' | 'other' | '',
-                            )
-                          }
-                        >
-                          <option value="">Singer?</option>
-                          <option value="male">Male</option>
-                          <option value="female">Female</option>
-                          <option value="other">Other</option>
-                        </select>
-                      )}
-                    </div>
-                    <button
-                      className="mt-3 w-full rounded-xl bg-teal-400/90 py-2 text-sm font-semibold text-slate-950"
-                      onClick={addMusician}
-                    >
-                      Add musician
-                    </button>
-                  </div>
+                  <button
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm font-semibold text-slate-100"
+                    onClick={() => setShowAddMusicianModal(true)}
+                  >
+                    Add musician
+                  </button>
                 )}
                 <div className="mt-4 space-y-2">
                   {appState.musicians
@@ -5069,7 +5688,7 @@ function App() {
 
       {showInstrumentPrompt && pendingDocSongId && (
         <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          className="fixed inset-0 z-[125] flex items-center justify-center bg-slate-950/80 px-4 py-6"
           onClick={() => {
             setShowInstrumentPrompt(false)
             setPendingDocSongId(null)
@@ -5082,7 +5701,7 @@ function App() {
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">Choose instrument</h3>
               <p className="mt-1 text-sm text-slate-300">
-                Pick your instrument to open the right chart or lyrics.
+                Pick one or more instruments to open matching charts and lyrics.
               </p>
             </div>
             <div className="max-h-[calc(80vh-92px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
@@ -5090,18 +5709,39 @@ function App() {
                 {INSTRUMENTS.map((instrument) => (
                   <button
                     key={instrument}
-                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm"
-                    onClick={() => {
-                      setAppState((prev) => ({ ...prev, instrument }))
-                      setShowInstrumentPrompt(false)
-                      setDocModalSongId(pendingDocSongId)
-                      setPendingDocSongId(null)
-                    }}
+                    className={`rounded-xl border px-3 py-2 text-sm ${
+                      docInstrumentDraft.includes(instrument)
+                        ? 'border-teal-300 bg-teal-400/10 text-teal-100'
+                        : 'border-white/10 bg-white/5'
+                    }`}
+                    onClick={() =>
+                      setDocInstrumentDraft((current) =>
+                        current.includes(instrument)
+                          ? current.filter((item) => item !== instrument)
+                          : [...current, instrument],
+                      )
+                    }
                   >
                     {instrument}
                   </button>
                 ))}
               </div>
+              <button
+                className="mt-4 w-full rounded-xl bg-teal-400/90 px-3 py-2 text-sm font-semibold text-slate-950"
+                onClick={() => {
+                  setAppState((prev) => ({
+                    ...prev,
+                    instrument: docInstrumentDraft.length ? docInstrumentDraft : ['All'],
+                  }))
+                  setShowInstrumentPrompt(false)
+                  setDocModalSongId(pendingDocSongId)
+                  setDocModalPageIndex(0)
+                  setDocModalContent(null)
+                  setPendingDocSongId(null)
+                }}
+              >
+                Continue
+              </button>
               <button
                 className="mt-4 w-full rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
                 onClick={() => {
@@ -5118,19 +5758,24 @@ function App() {
 
       {docModalSongId && (
         <div
-          className="fixed inset-0 z-[80] flex items-center bg-slate-950/80 py-6"
+          className="fixed inset-0 z-[130] bg-slate-950/95"
           onClick={() => {
             setDocModalSongId(null)
             setDocModalContent(null)
+            setDocModalPageIndex(0)
           }}
         >
           <div
-            className="mx-auto w-full max-w-md overflow-hidden rounded-t-3xl bg-slate-900 sm:rounded-3xl"
+            className="h-full w-full overflow-hidden bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">
-                {docModalContent ? 'Song Lyrics' : 'Song documents'}
+                {docModalContent
+                  ? docModalContent.type === 'Lyrics'
+                    ? 'Song Lyrics'
+                    : 'Song Chart'
+                  : 'Song documents'}
               </h3>
               <div className="mt-3 flex items-center gap-2">
                 <button
@@ -5138,61 +5783,158 @@ function App() {
                   onClick={() => {
                     setDocModalSongId(null)
                     setDocModalContent(null)
+                    setDocModalPageIndex(0)
                   }}
                 >
                   Close
                 </button>
+                {docModalContent && (
+                  <button
+                    className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                    onClick={() => {
+                      setDocModalContent(null)
+                      setDocModalPageIndex(0)
+                    }}
+                  >
+                    Back
+                  </button>
+                )}
               </div>
             </div>
-            <div className="max-h-[70vh] overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
+            <div className="h-[calc(100vh-88px)] overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
               {!docModalContent && (
                 <div className="mt-4 space-y-2">
-                  {appState.documents
-                    .filter((doc) => doc.songId === docModalSongId)
-                    .filter((doc) =>
-                      !appState.instrument || appState.instrument === 'All'
-                        ? true
-                        : doc.instrument === 'All' || doc.instrument === appState.instrument,
-                    )
-                    .map((doc) => (
+                  {getDocumentSelectionItems(docModalSongId).map((doc) => (
                       <div
                         key={doc.id}
-                        className="rounded-2xl border border-white/10 bg-slate-950/40 p-3 text-sm"
+                        role="button"
+                        tabIndex={0}
+                        className={`rounded-2xl border p-3 text-sm ${
+                          doc.type === 'Lyrics'
+                            ? activeInstruments.includes('Vocals')
+                              ? 'border-fuchsia-300/50 bg-fuchsia-400/10'
+                              : 'border-fuchsia-300/30 bg-fuchsia-400/5'
+                            : 'border-white/10 bg-slate-950/40'
+                        }`}
+                        onClick={() => {
+                          setDocModalPageIndex(0)
+                          setDocModalContent(doc)
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            setDocModalPageIndex(0)
+                            setDocModalContent(doc)
+                          }
+                        }}
                       >
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-2">
                           <div>
                             <div className="font-semibold">{doc.title}</div>
                             <div className="text-xs text-slate-400">
-                              {doc.type} · {doc.instrument}
+                              {doc.type} · {doc.instruments.join(', ')}
                             </div>
                           </div>
-                          <button
-                            className="rounded-full border border-white/10 px-3 py-1 text-xs"
-                            onClick={() => {
-                              if (doc.content) {
-                                setDocModalContent(doc)
-                                return
-                              }
-                              if (doc.url) {
-                                window.open(doc.url, '_blank')
-                              }
-                            }}
-                          >
-                            Open
-                          </button>
+                          {isAdmin && (
+                            <button
+                              className="rounded-full border border-red-400/40 px-3 py-1 text-xs text-red-200"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                commitChange('Delete document', (prev) => ({
+                                  ...prev,
+                                  documents: prev.documents.filter(
+                                    (item) => !doc.sourceDocIds.includes(item.id),
+                                  ),
+                                  charts: prev.charts.filter(
+                                    (item) => !doc.sourceDocIds.includes(item.id),
+                                  ),
+                                }))
+                                if (supabase) {
+                                  const client = supabase
+                                  doc.sourceDocIds.forEach((id) => {
+                                    runSupabase(
+                                      client.from('SetlistDocuments').delete().eq('id', id),
+                                    )
+                                  })
+                                }
+                              }}
+                            >
+                              Delete
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))}
+                  {getDocumentSelectionItems(docModalSongId).length === 0 && (
+                    <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-3 text-sm text-slate-300">
+                      No charts or lyrics found for selected instruments.
+                    </div>
+                  )}
                 </div>
               )}
               {docModalContent && (
-                <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/50 p-4 text-slate-200">
-                  <div className="mb-3 text-center text-xl font-bold">
-                    {docModalContent?.title}
-                  </div>
-                  <pre className="whitespace-pre-wrap text-center text-sm font-semibold">
-                    {docModalContent?.content}
-                  </pre>
+                <div
+                  className="relative mt-4 h-[calc(100%-1rem)] rounded-2xl border border-white/10 bg-slate-950/50 p-4 text-slate-200"
+                  onTouchStart={(event) => setDocSwipeStartX(event.touches[0]?.clientX ?? null)}
+                  onTouchEnd={(event) => {
+                    if (docSwipeStartX === null) return
+                    const endX = event.changedTouches[0]?.clientX ?? docSwipeStartX
+                    if (endX - docSwipeStartX > 50) moveDocPageBy(-1)
+                    if (docSwipeStartX - endX > 50) moveDocPageBy(1)
+                    setDocSwipeStartX(null)
+                  }}
+                >
+                  <div className="mb-3 text-center text-xl font-bold">{docModalContent.title}</div>
+                  {docModalContent.content ? (
+                    <pre className="h-[calc(100%-2rem)] overflow-auto whitespace-pre-wrap text-sm font-semibold leading-relaxed">
+                      {docModalContent.content}
+                    </pre>
+                  ) : activeDocModalPage ? (
+                    <div className="relative h-[calc(100%-2rem)] w-full overflow-hidden rounded-2xl border border-white/10 bg-black">
+                      {isImageFileUrl(activeDocModalPage) ? (
+                        <img
+                          src={activeDocModalPage}
+                          alt={docModalContent.title}
+                          className="h-full w-full object-contain"
+                        />
+                      ) : (
+                        <iframe
+                          src={getDocumentViewerUrl(activeDocModalPage)}
+                          className="h-full w-full"
+                          title={docModalContent.title}
+                        />
+                      )}
+                      {docModalPages.length > 1 && (
+                        <>
+                          <button
+                            className="absolute bottom-3 left-3 rounded-xl bg-slate-900/80 px-3 py-2 text-xs font-semibold"
+                            onClick={() => moveDocPageBy(-1)}
+                          >
+                            ◀ Page
+                          </button>
+                          <button
+                            className="absolute bottom-3 right-3 rounded-xl bg-slate-900/80 px-3 py-2 text-xs font-semibold"
+                            onClick={() => moveDocPageBy(1)}
+                          >
+                            Page ▶
+                          </button>
+                          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-slate-900/80 px-3 py-1 text-xs">
+                            {docModalPageIndex + 1} / {docModalPages.length}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-slate-300">No document URL available.</div>
+                  )}
+                  <button
+                    className="absolute bottom-3 right-3 rounded-xl border border-white/10 bg-slate-900/85 px-3 py-2 text-xs font-semibold text-slate-100"
+                    onClick={printActiveDocument}
+                    title="Print chart or lyrics"
+                    aria-label="Print chart or lyrics"
+                  >
+                    Print
+                  </button>
                 </div>
               )}
             </div>
@@ -5540,6 +6282,469 @@ function App() {
         </div>
       )}
 
+      {showDocInstrumentWarning && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowDocInstrumentWarning(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900 p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold">Choose instrument(s)</h3>
+            <p className="mt-2 text-sm text-slate-300">
+              Charts require at least one instrument selection before saving.
+            </p>
+            <button
+              className="mt-4 w-full rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+              onClick={() => setShowDocInstrumentWarning(false)}
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showDocUrlAccessWarning && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowDocUrlAccessWarning(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900 p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold">Shared URL check</h3>
+            <p className="mt-2 text-sm text-slate-300">
+              Please make sure the shared chart URL original source is viewable for everyone,
+              otherwise it will not load properly.
+            </p>
+            <p className="mt-2 text-sm text-slate-300">
+              Uploading a PDF is the most secure way for all musicians to see your chart.
+            </p>
+            <button
+              className="mt-4 w-full rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+              onClick={() => setShowDocUrlAccessWarning(false)}
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showSectionAddSongsModal && currentSetlist && (
+        <div
+          className="fixed inset-0 z-[92] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowSectionAddSongsModal(false)}
+        >
+          <div
+            className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Add song(s)</h3>
+              <p className="mt-1 text-sm text-slate-300">
+                Add songs not already in this gig. Default setlist: {sectionAddSongsSource}
+              </p>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => setShowSectionAddSongsModal(false)}
+                >
+                  Close
+                </button>
+                <button
+                  className="min-w-[120px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                  onClick={addSelectedSongsToTargetSetlists}
+                >
+                  Add selected
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4">
+              <input
+                className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-2 text-sm"
+                placeholder="Search songs"
+                value={sectionAddSongsSearch}
+                onChange={(event) => setSectionAddSongsSearch(event.target.value)}
+              />
+              <div className="mt-3 rounded-2xl border border-white/10 bg-slate-950/40 p-3">
+                <div className="text-[10px] uppercase tracking-[0.3em] text-slate-400">
+                  Add selected songs to setlist(s)
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                      orderedSetSections.length > 0 &&
+                      sectionAddSongsTargets.length === orderedSetSections.length
+                        ? 'border-teal-300 bg-teal-400/10 text-teal-200'
+                        : 'border-white/10 text-slate-300'
+                    }`}
+                    onClick={() => setSectionAddSongsTargets([...orderedSetSections])}
+                  >
+                    All
+                  </button>
+                  {orderedSetSections.map((section) => {
+                    const active = sectionAddSongsTargets.some(
+                      (item) => item.toLowerCase() === section.toLowerCase(),
+                    )
+                    return (
+                      <button
+                        key={`target-${section}`}
+                        className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                          active
+                            ? 'border-teal-300 bg-teal-400/10 text-teal-200'
+                            : 'border-white/10 text-slate-300'
+                        }`}
+                        onClick={() =>
+                          setSectionAddSongsTargets((current) =>
+                            current.some((item) => item.toLowerCase() === section.toLowerCase())
+                              ? current.filter((item) => item.toLowerCase() !== section.toLowerCase())
+                              : [...current, section],
+                          )
+                        }
+                      >
+                        {section}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              <div className="mt-3 max-h-72 space-y-2 overflow-auto">
+                {sectionAddSongsAvailableSongs.map((song) => (
+                  <label
+                    key={`section-add-song-${song.id}`}
+                    className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-sm"
+                  >
+                    <div>
+                      <div className="font-semibold">{song.title}</div>
+                      <div className="text-xs text-slate-400">{song.artist}</div>
+                      {song.tags.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {song.tags.map((tag) => (
+                            <span
+                              key={`${song.id}-${tag}`}
+                              className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-slate-300"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={selectedSongIds.includes(song.id)}
+                      onChange={(event) =>
+                        setSelectedSongIds((current) =>
+                          event.target.checked
+                            ? [...current, song.id]
+                            : current.filter((id) => id !== song.id),
+                        )
+                      }
+                    />
+                  </label>
+                ))}
+                {sectionAddSongsAvailableSongs.length === 0 && (
+                  <div className="rounded-xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm text-slate-300">
+                    No available songs to add for this gig.
+                  </div>
+                )}
+              </div>
+              <div className="mt-3 flex items-center gap-2 text-xs text-slate-300">
+                <button
+                  className="rounded-full border border-white/10 px-3 py-1"
+                  onClick={() =>
+                    setSelectedSongIds(sectionAddSongsAvailableSongs.map((song) => song.id))
+                  }
+                >
+                  Select all
+                </button>
+                <button
+                  className="rounded-full border border-white/10 px-3 py-1"
+                  onClick={() => setSelectedSongIds([])}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSpecialRequestModal && currentSetlist && (
+        <div
+          className="fixed inset-0 z-[93] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowSpecialRequestModal(false)}
+        >
+          <div
+            className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Add special request</h3>
+              <p className="mt-1 text-sm text-slate-300">
+                Enter request details. New songs are automatically saved to the song library.
+              </p>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => setShowSpecialRequestModal(false)}
+                >
+                  Close
+                </button>
+                <button
+                  className="min-w-[120px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                  onClick={addSpecialRequest}
+                >
+                  Save request
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-wide text-slate-400">
+                    Request type
+                  </label>
+                  <input
+                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                    placeholder="Type a request type"
+                    list="special-type-list-modal"
+                    value={pendingSpecialType}
+                    onChange={(event) => setPendingSpecialType(event.target.value)}
+                  />
+                  <datalist id="special-type-list-modal">
+                    {appState.specialTypes.map((type) => (
+                      <option key={type} value={type} />
+                    ))}
+                  </datalist>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-wide text-slate-400">
+                    Song title
+                  </label>
+                  <input
+                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                    placeholder="Type a song title"
+                    list="special-song-list-modal"
+                    value={pendingSpecialSong}
+                    onChange={(event) => setPendingSpecialSong(event.target.value)}
+                  />
+                  <datalist id="special-song-list-modal">
+                    {appState.songs.map((song) => (
+                      <option key={song.id} value={song.title} />
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-wide text-slate-400">
+                    Singers
+                  </label>
+                  {specialRequestSingerOptions.length === 0 && (
+                    <div className="text-xs text-slate-400">
+                      No gig singers assigned yet. Add musicians first.
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    {specialRequestSingerOptions.map((singer) => (
+                      <button
+                        key={singer}
+                        className={`rounded-full border px-3 py-1 text-xs ${
+                          pendingSpecialSingers.includes(singer)
+                            ? 'border-teal-300 bg-teal-400/10 text-teal-200'
+                            : 'border-white/10 text-slate-300'
+                        }`}
+                        onClick={() =>
+                          setPendingSpecialSingers((current) =>
+                            current.includes(singer)
+                              ? current.filter((item) => item !== singer)
+                              : [...current, singer],
+                          )
+                        }
+                      >
+                        {singer}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-wide text-slate-400">
+                    Key
+                  </label>
+                  <input
+                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                    placeholder="Song key"
+                    value={pendingSpecialKey}
+                    onChange={(event) => setPendingSpecialKey(event.target.value)}
+                    disabled={pendingSpecialDjOnly}
+                  />
+                </div>
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-wide text-slate-400">
+                    Notes
+                  </label>
+                  <input
+                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                    placeholder="Optional notes"
+                    value={pendingSpecialNote}
+                    onChange={(event) => setPendingSpecialNote(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-wide text-slate-400">
+                    DJ only
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={pendingSpecialDjOnly}
+                      onChange={(event) => setPendingSpecialDjOnly(event.target.checked)}
+                    />
+                    <span className="text-xs text-slate-300">This request is DJ only</span>
+                  </div>
+                  <input
+                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                    placeholder="Audio link (YouTube, Spotify, MP3)"
+                    value={pendingSpecialExternalUrl}
+                    onChange={(event) => setPendingSpecialExternalUrl(event.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="mt-3 rounded-2xl border border-white/10 bg-slate-950/50 p-3">
+                <div className="text-[10px] uppercase tracking-[0.3em] text-slate-400">
+                  Charts & lyrics
+                </div>
+                <p className="mt-2 text-xs text-slate-300">
+                  Use the same song editor flow to add lyrics/charts/lead sheets for this request song.
+                </p>
+                <button
+                  className="mt-3 rounded-xl border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200"
+                  onClick={openSongEditorFromSpecialRequest}
+                  disabled={!pendingSpecialSong.trim()}
+                >
+                  {pendingSpecialSongMatch
+                    ? 'Edit song charts/lyrics'
+                    : 'Create song and add charts/lyrics'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDeleteSetlistSectionConfirm && (
+        <div
+          className="fixed inset-0 z-[94] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={cancelDeleteSetlistSection}
+        >
+          <div
+            className="w-full max-w-sm rounded-3xl border border-red-400/30 bg-slate-900 p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-red-200">Delete setlist section?</h3>
+            {pendingDeleteSetlistSection?.toLowerCase().startsWith('special request') ? (
+              <p className="mt-2 text-sm text-slate-300">
+                This hides <span className="font-semibold">Special Requests</span> for this gig.
+                Existing special request entries stay saved.
+              </p>
+            ) : (
+              <p className="mt-2 text-sm text-slate-300">
+                This removes <span className="font-semibold">{pendingDeleteSetlistSection}</span>{' '}
+                from this gig view. Songs stay in the gig and can still appear in other setlists.
+              </p>
+            )}
+            <div className="mt-4 flex items-center gap-2">
+              <button
+                className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                onClick={cancelDeleteSetlistSection}
+              >
+                Cancel
+              </button>
+              <button
+                className="min-w-[120px] rounded-xl bg-red-500/90 px-4 py-2 text-sm font-semibold text-white"
+                onClick={confirmDeleteSetlistSection}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAddSetlistModal && currentSetlist && (
+        <div
+          className="fixed inset-0 z-[92] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowAddSetlistModal(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900 p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold">Add Setlist</h3>
+            <p className="mt-2 text-sm text-slate-300">
+              Choose a set type or create your own label. Admin can drag to reorder setlists.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {['Special Requests', 'Dinner', 'Latin', 'Dance'].map((template) => (
+                <button
+                  key={template}
+                  className="rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200"
+                  onClick={() => {
+                    addGigSetlistSectionFromTemplate(template)
+                    setShowAddSetlistModal(false)
+                  }}
+                >
+                  {template}
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/50 p-3">
+              <div className="text-[10px] uppercase tracking-[0.3em] text-slate-400">Custom label</div>
+              <input
+                className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm"
+                placeholder="Example: Cocktail Set"
+                value={newSetlistLabel}
+                onChange={(event) => setNewSetlistLabel(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter') return
+                  event.preventDefault()
+                  const value = normalizeSetlistSectionLabel(newSetlistLabel)
+                  if (!value) return
+                  addGigSetlistSection(value)
+                  setShowAddSetlistModal(false)
+                  setNewSetlistLabel('')
+                }}
+              />
+            </div>
+            <div className="mt-4 flex items-center gap-2">
+              <button
+                className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                onClick={() => setShowAddSetlistModal(false)}
+              >
+                Close
+              </button>
+              <button
+                className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                onClick={() => {
+                  const value = normalizeSetlistSectionLabel(newSetlistLabel)
+                  if (!value) return
+                  addGigSetlistSection(value)
+                  setShowAddSetlistModal(false)
+                  setNewSetlistLabel('')
+                }}
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {singerModalSong && currentSetlist && (
         <div
           className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/80 px-4 py-6"
@@ -5574,12 +6779,17 @@ function App() {
                     Complete “Assign Musicians” before assigning singers.
                   </div>
                 )}
-                {gigVocalists.length === 0 ? (
+                {assignSingerOptions.length === 0 ? (
                   <div className="mt-3 text-xs text-slate-400">
-                    No vocalists assigned to this gig yet.
+                    No singers assigned to this gig yet.
                   </div>
                 ) : (
                   <>
+                    {gigSingerOptions.length === 0 && (
+                      <div className="mt-3 text-xs text-amber-200">
+                        No gig vocalists assigned. You can still choose Instrumental.
+                      </div>
+                    )}
                     {singerModalSong.keys.some(
                       (key) => key.gigOverrides[currentSetlist.id],
                     ) && (
@@ -5596,54 +6806,82 @@ function App() {
                           ))}
                       </div>
                     )}
+                    <div className="mt-4">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                        Select singers
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {assignSingerOptions.map((singer) => {
+                          const active = (pendingSingerAssignments[singerModalSong.id] ?? []).some(
+                            (row) => row.singer.toLowerCase() === singer.toLowerCase(),
+                          )
+                          return (
+                            <button
+                              key={`assign-${singer}`}
+                              className={`rounded-full border px-3 py-1 text-xs ${
+                                active
+                                  ? singer === INSTRUMENTAL_LABEL
+                                    ? 'border-fuchsia-300 bg-fuchsia-400/10 text-fuchsia-200'
+                                    : 'border-teal-300 bg-teal-400/10 text-teal-200'
+                                  : singer === INSTRUMENTAL_LABEL
+                                    ? 'border-fuchsia-400/40 text-fuchsia-200'
+                                    : 'border-white/10 text-slate-300'
+                              }`}
+                              onClick={() =>
+                                setPendingSingerAssignments((prev) => {
+                                  const rows = prev[singerModalSong.id] ?? []
+                                  const exists = rows.some(
+                                    (row) => row.singer.toLowerCase() === singer.toLowerCase(),
+                                  )
+                                  if (exists) {
+                                    return {
+                                      ...prev,
+                                      [singerModalSong.id]: rows.filter(
+                                        (row) => row.singer.toLowerCase() !== singer.toLowerCase(),
+                                      ),
+                                    }
+                                  }
+                                  const existing = singerModalSong.keys.find(
+                                    (key) => key.singer.toLowerCase() === singer.toLowerCase(),
+                                  )
+                                  return {
+                                    ...prev,
+                                    [singerModalSong.id]: [
+                                      ...rows,
+                                      {
+                                        singer,
+                                        key:
+                                          existing?.gigOverrides[currentSetlist.id] ??
+                                          existing?.defaultKey ??
+                                          singerModalSong.originalKey ??
+                                          '',
+                                      },
+                                    ],
+                                  }
+                                })
+                              }
+                            >
+                              {singer}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
                     <div className="mt-4 space-y-2">
-                      {(pendingSingerAssignments[singerModalSong.id] ?? [
-                        { singer: '', key: '' },
-                      ]).map((pending, index) => {
+                      {(pendingSingerAssignments[singerModalSong.id] ?? []).map((pending, index) => {
                         const selectedKey = singerModalSong.keys.find(
-                          (key) => key.singer === pending.singer,
+                          (key) => key.singer.toLowerCase() === pending.singer.toLowerCase(),
                         )
                         const suggestion =
                           selectedKey?.defaultKey || singerModalSong.originalKey || ''
                         return (
                           <div
-                            key={`${singerModalSong.id}-${index}`}
-                            className="grid gap-2 md:grid-cols-[1.2fr_0.8fr_auto]"
+                            key={`${singerModalSong.id}-${pending.singer}-${index}`}
+                            className="grid gap-2 md:grid-cols-[1.2fr_0.8fr_auto_auto]"
                           >
-                            <select
-                              className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-xs text-slate-200"
-                              value={pending.singer}
-                              onChange={(event) => {
-                                if (!ensureVocalistsReady()) return
-                                const singer = event.target.value
-                                const existing = singerModalSong.keys.find(
-                                  (key) => key.singer === singer,
-                                )
-                                const rows =
-                                  pendingSingerAssignments[singerModalSong.id] ?? [
-                                    { singer: '', key: '' },
-                                  ]
-                                setPendingSingerAssignments((prev) => {
-                                  const nextRows = [...rows]
-                                  nextRows[index] = {
-                                    singer,
-                                    key:
-                                      existing?.gigOverrides[currentSetlist.id] ??
-                                      existing?.defaultKey ??
-                                      singerModalSong.originalKey ??
-                                      '',
-                                  }
-                                  return { ...prev, [singerModalSong.id]: nextRows }
-                                })
-                              }}
-                            >
-                              <option value="">Select singer</option>
-                              {gigVocalists.map((musician) => (
-                                <option key={musician.id} value={musician.name}>
-                                  {musician.name}
-                                </option>
-                              ))}
-                            </select>
+                            <div className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-xs text-slate-200">
+                              {pending.singer}
+                            </div>
                             <input
                               className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-xs text-slate-200"
                               placeholder={`Key ${suggestion ? `(${suggestion})` : ''}`}
@@ -5676,27 +6914,30 @@ function App() {
                             >
                               Save
                             </button>
+                            <button
+                              className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-200"
+                              onClick={() =>
+                                setPendingSingerAssignments((prev) => ({
+                                  ...prev,
+                                  [singerModalSong.id]: (prev[singerModalSong.id] ?? []).filter(
+                                    (row) =>
+                                      row.singer.toLowerCase() !== pending.singer.toLowerCase(),
+                                  ),
+                                }))
+                              }
+                            >
+                              Remove
+                            </button>
                           </div>
                         )
                       })}
+                      {(pendingSingerAssignments[singerModalSong.id] ?? []).length === 0 && (
+                        <div className="text-xs text-slate-400">
+                          Tap singer buttons above to select one or more singers.
+                        </div>
+                      )}
                     </div>
-                    <div className="mt-3 flex items-center justify-between text-[10px] text-slate-400">
-                      <span>Multiple vocalists supported.</span>
-                      <button
-                        className="rounded-full border border-white/10 px-2 py-1 text-[10px] text-slate-200"
-                        onClick={() =>
-                          setPendingSingerAssignments((prev) => ({
-                            ...prev,
-                            [singerModalSong.id]: [
-                              ...(prev[singerModalSong.id] ?? [{ singer: '', key: '' }]),
-                              { singer: '', key: '' },
-                            ],
-                          }))
-                        }
-                      >
-                        Add vocalist
-                      </button>
-                    </div>
+                    <div className="mt-3 text-[10px] text-slate-400">Multiple singers supported.</div>
                     {(pendingSingerAssignments[singerModalSong.id] ?? []).some(
                       (row) =>
                         row.singer &&
@@ -5947,6 +7188,7 @@ function App() {
               </div>
             </div>
             <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-5">
+              {!isSpecialSectionHidden && (
               <div
                 className={`rounded-3xl border p-5 ${
                   currentSetlist.date === new Date().toISOString().slice(0, 10)
@@ -6026,7 +7268,17 @@ function App() {
                               )}
                             </div>
                           </div>
-                          <div className="text-xs text-slate-300">
+                          <div
+                            className={`text-xs ${
+                              !request.djOnly &&
+                              request.singers.some(
+                                (singer) =>
+                                  singer.trim().toLowerCase() === INSTRUMENTAL_LABEL.toLowerCase(),
+                              )
+                                ? 'text-fuchsia-200'
+                                : 'text-slate-300'
+                            }`}
+                          >
                             {request.djOnly ? 'DJ' : request.singers.join(', ')}
                           </div>
                           <div className="text-xs text-slate-200">
@@ -6040,9 +7292,10 @@ function App() {
                     })}
                 </div>
               </div>
+              )}
 
               <div className="mt-4 grid gap-4 md:grid-cols-3">
-                {['Dinner', 'Latin', 'Dance'].map((section) => (
+                {orderedSetSections.map((section) => (
                   <div
                     key={section}
                     className={`rounded-3xl border p-5 ${
@@ -6053,7 +7306,7 @@ function App() {
                   >
                     <div className="flex items-center justify-between gap-3 min-w-0">
                       <h3 className="text-sm font-semibold whitespace-nowrap">
-                        {section} Set
+                        {section}
                       </h3>
                     </div>
                     <p className="mt-1 text-xs text-slate-400">
@@ -6067,7 +7320,16 @@ function App() {
                         .map((song) => (
                           <div
                             key={song.id}
+                            role="button"
+                            tabIndex={0}
                             className="rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs"
+                            onClick={() => openDocsForSong(song.id)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                openDocsForSong(song.id)
+                              }
+                            }}
                           >
                             <div className="flex items-start justify-between gap-2">
                               <div>
@@ -6081,6 +7343,11 @@ function App() {
                                     currentSetlist.id,
                                   )
                                   const singers = assignments.map((entry) => entry.singer)
+                                  const hasInstrumental = assignments.some(
+                                    (entry) =>
+                                      entry.singer.trim().toLowerCase() ===
+                                      INSTRUMENTAL_LABEL.toLowerCase(),
+                                  )
                                   const keys = Array.from(
                                     new Set(assignments.map((entry) => entry.key)),
                                   )
@@ -6094,6 +7361,8 @@ function App() {
                                       className={`mt-2 text-xs ${
                                         assignments.length === 0
                                           ? 'text-red-300'
+                                          : hasInstrumental
+                                            ? 'text-fuchsia-200'
                                           : 'text-teal-200'
                                       }`}
                                     >
@@ -6105,10 +7374,11 @@ function App() {
                               <div className="flex items-center gap-2">
                                 {song.youtubeUrl && (
                                   <button
-                                    className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
-                                    onClick={() =>
+                                    className="relative z-20 inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
+                                    onClick={(event) => {
+                                      event.stopPropagation()
                                       openAudioForUrl(song.youtubeUrl ?? '', 'YouTube audio')
-                                    }
+                                    }}
                                     aria-label="Audio"
                                     title="Audio"
                                   >
@@ -6117,8 +7387,11 @@ function App() {
                                 )}
                                 {hasDocsForSong(song.id) && (
                                   <button
-                                    className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200"
-                                    onClick={() => openDocsForSong(song.id)}
+                                    className="relative z-10 inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200"
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      openDocsForSong(song.id)
+                                    }}
                                     aria-label="Documents"
                                     title="Documents"
                                   >
@@ -6714,6 +7987,136 @@ function App() {
         </div>
       )}
 
+      {showAddMusicianModal && isAdmin && (
+        <div
+          className="fixed inset-0 z-[87] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowAddMusicianModal(false)}
+        >
+          <div
+            className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Add musician</h3>
+              <p className="mt-1 text-sm text-slate-300">
+                Mark core members or subs. Add contact info and instruments.
+              </p>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => setShowAddMusicianModal(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4">
+              <div className="grid gap-2 md:grid-cols-2">
+                <input
+                  className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                  placeholder="Musician name"
+                  value={newMusicianName}
+                  onChange={(event) => setNewMusicianName(event.target.value)}
+                />
+                <select
+                  className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                  value={newMusicianRoster}
+                  onChange={(event) => setNewMusicianRoster(event.target.value as 'core' | 'sub')}
+                >
+                  <option value="core">Core roster</option>
+                  <option value="sub">Sub</option>
+                </select>
+                <input
+                  className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                  placeholder="Email"
+                  value={newMusicianEmail}
+                  onChange={(event) => setNewMusicianEmail(event.target.value)}
+                />
+                <input
+                  className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                  placeholder="Phone"
+                  value={newMusicianPhone}
+                  onChange={(event) => setNewMusicianPhone(event.target.value)}
+                />
+                <div className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm md:col-span-2">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">Instruments</div>
+                  <input
+                    className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs"
+                    placeholder="Filter instruments"
+                    value={instrumentFilter}
+                    onChange={(event) => setInstrumentFilter(event.target.value)}
+                  />
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {filteredInstruments.map((instrument) => {
+                      const active = newMusicianInstruments.includes(instrument)
+                      return (
+                        <button
+                          key={instrument}
+                          className={`rounded-full border px-3 py-1 text-xs ${
+                            active
+                              ? 'border-teal-300 bg-teal-400/10 text-teal-200'
+                              : 'border-white/10 text-slate-300'
+                          }`}
+                          onClick={() => {
+                            const next = newMusicianInstruments.includes(instrument)
+                              ? newMusicianInstruments.filter((item) => item !== instrument)
+                              : [...newMusicianInstruments, instrument]
+                            setNewMusicianInstruments(next)
+                            if (!next.includes('Vocals')) {
+                              setNewMusicianSinger('')
+                            }
+                          }}
+                        >
+                          {instrument}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      className="flex-1 rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs"
+                      placeholder="Add instrument"
+                      value={newInstrumentInput}
+                      onChange={(event) => setNewInstrumentInput(event.target.value)}
+                    />
+                    <button
+                      className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-200"
+                      onClick={addInstrumentToCatalog}
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+                {newMusicianInstruments.includes('Vocals') && (
+                  <select
+                    className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                    value={newMusicianSinger}
+                    onChange={(event) =>
+                      setNewMusicianSinger(event.target.value as 'male' | 'female' | 'other' | '')
+                    }
+                  >
+                    <option value="">Singer?</option>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                    <option value="other">Other</option>
+                  </select>
+                )}
+              </div>
+              <button
+                className="mt-3 w-full rounded-xl bg-teal-400/90 py-2 text-sm font-semibold text-slate-950"
+                onClick={() => {
+                  if (!newMusicianName.trim()) return
+                  addMusician()
+                  setShowAddMusicianModal(false)
+                }}
+              >
+                Add musician
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showAddSongModal && (
         <div
           className="fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/80 px-4 py-6"
@@ -7118,7 +8521,7 @@ function App() {
                       <div>
                         <div className="font-semibold">{doc.title}</div>
                         <div className="text-[10px] text-slate-400">
-                          {doc.type} · {doc.instrument}
+                          {doc.type} · {formatDocumentInstruments(doc.instrument)}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -7170,7 +8573,10 @@ function App() {
                     Document type
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {(['Chart', 'Lyrics', 'Lead Sheet'] as const).map((type) => {
+                    {(isAdmin
+                      ? (['Chart', 'Lyrics', 'Lead Sheet'] as const)
+                      : (['Chart', 'Lyrics'] as const)
+                    ).map((type) => {
                       const active = newDocType === type
                       return (
                         <button
@@ -7192,11 +8598,11 @@ function App() {
                 {(newDocType === 'Chart' || newDocType === 'Lead Sheet') && (
                   <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
                     <div className="text-[10px] uppercase tracking-[0.3em] text-slate-400">
-                      Instrument
+                      Instruments
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {['All', ...instrumentCatalog].map((instrument) => {
-                        const active = (newDocInstrument || 'All') === instrument
+                      {instrumentCatalog.map((instrument) => {
+                        const active = newDocInstruments.includes(instrument)
                         return (
                           <button
                             key={instrument}
@@ -7206,7 +8612,13 @@ function App() {
                                 : 'border-white/10 text-slate-300'
                             }`}
                             onClick={() =>
-                              setNewDocInstrument(instrument === 'All' ? '' : instrument)
+                              setNewDocInstruments((current) => {
+                                const has = current.includes(instrument)
+                                const next = has
+                                  ? current.filter((item) => item !== instrument)
+                                  : [...current, instrument]
+                                return normalizeTagList(next)
+                              })
                             }
                           >
                             {instrument}
@@ -7250,9 +8662,16 @@ function App() {
                 {(newDocType === 'Chart' || newDocType === 'Lead Sheet') && (
                   <input
                     className="rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm md:col-span-2"
-                    placeholder="Or paste a file link (optional)"
+                    placeholder="Or paste file link(s). Use a new line per page."
                     value={newDocUrl}
-                    onChange={(event) => setNewDocUrl(event.target.value)}
+                    onChange={(event) => {
+                      const nextUrl = event.target.value
+                      const wasEmpty = !newDocUrl.trim()
+                      setNewDocUrl(nextUrl)
+                      if (wasEmpty && nextUrl.trim()) {
+                        setShowDocUrlAccessWarning(true)
+                      }
+                    }}
                   />
                 )}
               </div>
@@ -7286,11 +8705,7 @@ function App() {
                     ? 'Add Songs Not on Setlist'
                     : activeBuildPanel === 'special'
                       ? 'Special Requests'
-                      : activeBuildPanel === 'dinner'
-                        ? 'Dinner Set'
-                        : activeBuildPanel === 'latin'
-                          ? 'Latin Set'
-                          : 'Dance Set'}
+                      : getSectionFromPanel(activeBuildPanel) ?? 'Setlist'}
               </h3>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
@@ -7330,6 +8745,20 @@ function App() {
                           }`}
                         />
                       </span>
+                    </button>
+                  )}
+                  {(getSectionFromPanel(activeBuildPanel) || activeBuildPanel === 'special') && (
+                    <button
+                      className="rounded-full border border-red-400/40 px-4 py-2 text-sm font-semibold text-red-200"
+                      onClick={() => {
+                        if (activeBuildPanel === 'special') {
+                          requestDeleteSetlistSection('Special Requests')
+                          return
+                        }
+                        requestDeleteSetlistSection(getSectionFromPanel(activeBuildPanel) ?? '')
+                      }}
+                    >
+                      Delete setlist
                     </button>
                   )}
                 </div>
@@ -7442,7 +8871,7 @@ function App() {
                 </div>
               )}
 
-              {activeBuildPanel === 'special' && (
+              {activeBuildPanel === 'special' && !isSpecialSectionHidden && (
                 <div
                   className={`rounded-3xl border p-5 ${
                     currentSetlist.date === new Date().toISOString().slice(0, 10)
@@ -7460,9 +8889,12 @@ function App() {
                     {!gigMode && (
                       <button
                         className="rounded-full border border-white/10 px-3 py-1 text-xs"
-                        onClick={addSpecialRequest}
+                        onClick={() => {
+                          resetPendingSpecialRequest()
+                          setShowSpecialRequestModal(true)
+                        }}
                       >
-                        Add song
+                        Add request
                       </button>
                     )}
                   </div>
@@ -7530,7 +8962,7 @@ function App() {
                               <div className="mt-2 flex items-center gap-2 text-[10px]">
                                 {(request.externalAudioUrl || song?.youtubeUrl) && (
                                   <button
-                                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
+                                    className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
                                     onClick={(event) => {
                                       event.stopPropagation()
                                       openAudioForUrl(
@@ -7546,22 +8978,38 @@ function App() {
                                     🎧
                                   </button>
                                 )}
-                                {hasDocsForSong(song?.id) && (
+                                {(hasDocsForSong(song?.id) || (isAdmin && Boolean(song))) && (
                                   <button
                                     className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-slate-200"
                                     onClick={(event) => {
                                       event.stopPropagation()
-                                      openDocsForSong(song?.id)
+                                      if (!song) return
+                                      if (hasDocsForSong(song.id)) {
+                                        openDocsForSong(song.id)
+                                      } else if (isAdmin) {
+                                        openSongEditor(song)
+                                      }
                                     }}
-                                    aria-label="Documents"
-                                    title="Documents"
+                                    aria-label={hasDocsForSong(song?.id) ? 'Documents' : 'Add lyrics/charts'}
+                                    title={hasDocsForSong(song?.id) ? 'Documents' : 'Add lyrics/charts'}
                                   >
                                     📄
                                   </button>
                                 )}
                               </div>
                             </div>
-                            <div className="text-xs text-slate-300">
+                            <div
+                              className={`text-xs ${
+                                !request.djOnly &&
+                                request.singers.some(
+                                  (singer) =>
+                                    singer.trim().toLowerCase() ===
+                                    INSTRUMENTAL_LABEL.toLowerCase(),
+                                )
+                                  ? 'text-fuchsia-200'
+                                  : 'text-slate-300'
+                              }`}
+                            >
                               {request.djOnly ? 'DJ' : request.singers.join(', ')}
                             </div>
                             <div className="text-xs text-slate-200">
@@ -7575,133 +9023,6 @@ function App() {
                       })}
                   </div>
 
-                  <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
-                    <h4 className="text-sm font-semibold">Add a request</h4>
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <label className="text-[10px] uppercase tracking-wide text-slate-400">
-                          Request type
-                        </label>
-                        <input
-                          className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                          placeholder="Type a request type"
-                          list="special-type-list"
-                          value={pendingSpecialType}
-                          onChange={(event) => setPendingSpecialType(event.target.value)}
-                        />
-                        <datalist id="special-type-list">
-                          {appState.specialTypes.map((type) => (
-                            <option key={type} value={type} />
-                          ))}
-                        </datalist>
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] uppercase tracking-wide text-slate-400">
-                          Song title
-                        </label>
-                        <input
-                          className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                          placeholder="Type a song title"
-                          list="special-song-list"
-                          value={pendingSpecialSong}
-                          onChange={(event) => setPendingSpecialSong(event.target.value)}
-                        />
-                        <datalist id="special-song-list">
-                          {appState.songs.map((song) => (
-                            <option key={song.id} value={song.title} />
-                          ))}
-                        </datalist>
-                      </div>
-                    </div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <label className="text-[10px] uppercase tracking-wide text-slate-400">
-                          Singers
-                        </label>
-                        <div className="flex flex-wrap gap-2">
-                          {appState.singersCatalog.map((singer) => (
-                            <button
-                              key={singer}
-                              className={`rounded-full border px-3 py-1 text-xs ${
-                                pendingSpecialSingers.includes(singer)
-                                  ? 'border-teal-300 bg-teal-400/10 text-teal-200'
-                                  : 'border-white/10 text-slate-300'
-                              }`}
-                              onClick={() =>
-                                setPendingSpecialSingers((current) =>
-                                  current.includes(singer)
-                                    ? current.filter((item) => item !== singer)
-                                    : [...current, singer],
-                                )
-                              }
-                            >
-                              {singer}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] uppercase tracking-wide text-slate-400">
-                          Key
-                        </label>
-                        <input
-                          className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                          placeholder="Song key"
-                          value={pendingSpecialKey}
-                          onChange={(event) => setPendingSpecialKey(event.target.value)}
-                          disabled={pendingSpecialDjOnly}
-                        />
-                      </div>
-                    </div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <label className="text-[10px] uppercase tracking-wide text-slate-400">
-                          Notes
-                        </label>
-                        <input
-                          className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                          placeholder="Optional notes"
-                          value={pendingSpecialNote}
-                          onChange={(event) => setPendingSpecialNote(event.target.value)}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] uppercase tracking-wide text-slate-400">
-                          DJ only
-                        </label>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={pendingSpecialDjOnly}
-                            onChange={(event) => setPendingSpecialDjOnly(event.target.checked)}
-                          />
-                          <span className="text-xs text-slate-300">
-                            This request is DJ only
-                          </span>
-                        </div>
-                        <input
-                          className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                          placeholder="Audio link (YouTube, Spotify, MP3)"
-                          value={pendingSpecialExternalUrl}
-                          onChange={(event) => setPendingSpecialExternalUrl(event.target.value)}
-                        />
-                      </div>
-                    </div>
-                    <div className="mt-3 flex items-center gap-2 text-xs text-slate-300">
-                      <button
-                        className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300"
-                        onClick={addSongToLibrary}
-                      >
-                        Save to library
-                      </button>
-                      <button
-                        className="rounded-xl bg-teal-400/90 px-3 py-2 text-xs font-semibold text-slate-950"
-                        onClick={addSpecialRequest}
-                      >
-                        Add request
-                      </button>
-                    </div>
-                  </div>
                 </div>
               )}
 
@@ -7829,16 +9150,10 @@ function App() {
                 </div>
               )}
 
-              {(activeBuildPanel === 'dinner' ||
-                activeBuildPanel === 'latin' ||
-                activeBuildPanel === 'dance') &&
+              {getSectionFromPanel(activeBuildPanel) &&
                 (() => {
-                  const section =
-                    activeBuildPanel === 'dinner'
-                      ? 'Dinner'
-                      : activeBuildPanel === 'latin'
-                        ? 'Latin'
-                        : 'Dance'
+                  const section = getSectionFromPanel(activeBuildPanel) ?? ''
+                  const completionKey = setlistPanelKey(section)
                   return (
                     <div
                       className={`rounded-3xl border p-5 ${
@@ -7849,10 +9164,9 @@ function App() {
                     >
                       <div className="flex items-center justify-between gap-3 min-w-0">
                         <h3 className="text-sm font-semibold whitespace-nowrap">
-                          {section} Set
+                          {section}
                         </h3>
-                        {!buildCompletion[section.toLowerCase() as 'dinner' | 'latin' | 'dance'] &&
-                          !gigMode && (
+                        {!buildCompletion[completionKey] && !gigMode && (
                           <select
                             className="w-[170px] shrink-0 rounded-xl border border-white/10 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-200"
                             onChange={(event) => {
@@ -7874,19 +9188,15 @@ function App() {
                       <p className="mt-1 text-xs text-slate-400">
                         Songs tagged for {section.toLowerCase()}.
                       </p>
-                      {!buildCompletion[
-                        section.toLowerCase() as 'dinner' | 'latin' | 'dance'
-                      ] && !gigMode && (
+                      {!buildCompletion[completionKey] && !gigMode && (
                         <p className="mt-1 text-[10px] text-slate-500">
                           Drag songs to reorder this section.
                         </p>
                       )}
-                      {!buildCompletion[
-                        section.toLowerCase() as 'dinner' | 'latin' | 'dance'
-                      ] && !gigMode && (
+                      {!buildCompletion[completionKey] && !gigMode && (
                         <div className="mt-3 space-y-3">
                           <div className="flex items-center gap-2">
-                            {!starterPasteOpen[section as 'Dinner' | 'Latin' | 'Dance'] ? (
+                            {!starterPasteOpen[section] ? (
                               <button
                                 className="min-w-[170px] whitespace-nowrap rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                                 onClick={() =>
@@ -7911,75 +9221,14 @@ function App() {
                                 Close
                               </button>
                             )}
-                            <details className="w-auto">
-                              <summary
-                                className="inline-flex min-w-[130px] cursor-pointer items-center justify-center whitespace-nowrap rounded-xl border border-white/10 px-4 py-2 text-center text-sm font-semibold text-slate-200"
-                                onClick={() => {
-                                  const panel = document.getElementById(`section-add-${section}`)
-                                  panel?.classList.toggle('hidden')
-                                }}
-                              >
-                                Add song
-                              </summary>
-                            </details>
+                            <button
+                              className="inline-flex min-w-[130px] items-center justify-center whitespace-nowrap rounded-xl border border-white/10 px-4 py-2 text-center text-sm font-semibold text-slate-200"
+                              onClick={() => openAddSongsForSection(section)}
+                            >
+                              Add song(s)
+                            </button>
                           </div>
-                          <div
-                            id={`section-add-${section}`}
-                            className="mt-2 hidden w-full rounded-2xl border border-white/10 bg-slate-950 p-2 text-[10px] text-slate-200 shadow-xl"
-                          >
-                              <input
-                                className="w-full rounded-lg border border-white/10 bg-slate-900/70 px-2 py-1 text-slate-200"
-                                placeholder="Choose a song"
-                                list={`section-song-${section}`}
-                                onChange={(event) => {
-                                  const value = event.currentTarget.value
-                                  const match = appState.songs.find(
-                                    (song) =>
-                                      song.title.toLowerCase() === value.trim().toLowerCase(),
-                                  )
-                                  if (match) {
-                                    addSongToSection(section, match.title)
-                                    event.currentTarget.value = ''
-                                  }
-                                }}
-                                onKeyDown={(event) => {
-                                  if (event.key !== 'Enter') return
-                                  event.preventDefault()
-                                  const value = (event.currentTarget as HTMLInputElement).value
-                                  const match = appState.songs.find(
-                                    (song) =>
-                                      song.title.toLowerCase() === value.trim().toLowerCase(),
-                                  )
-                                  if (match) {
-                                    addSongToSection(section, match.title)
-                                    ;(event.currentTarget as HTMLInputElement).value = ''
-                                    return
-                                  }
-                                  openAddSongForSection(section, value)
-                                  ;(event.currentTarget as HTMLInputElement).value = ''
-                                }}
-                                onBlur={(event) => {
-                                  const value = event.currentTarget.value.trim()
-                                  if (!value) return
-                                  const match = appState.songs.find(
-                                    (song) =>
-                                      song.title.toLowerCase() === value.toLowerCase(),
-                                  )
-                                  if (!match) {
-                                    openAddSongForSection(section, value)
-                                    event.currentTarget.value = ''
-                                  }
-                                }}
-                              />
-                              <datalist id={`section-song-${section}`}>
-                                {appState.songs
-                                  .filter((song) => hasSongTag(song, section))
-                                  .map((song) => (
-                                    <option key={song.id} value={song.title} />
-                                  ))}
-                              </datalist>
-                          </div>
-                          {starterPasteOpen[section as 'Dinner' | 'Latin' | 'Dance'] && (
+                          {starterPasteOpen[section] && (
                             <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-3 text-[10px] text-slate-200">
                               <div className="text-[10px] text-slate-400">
                                 One song per line. Format: Title – Artist (singers optional).
@@ -7989,9 +9238,7 @@ function App() {
                                 rows={6}
                                 placeholder={`Example:\nSeptember – Earth, Wind & Fire\nUptown Funk – Mark Ronson ft. Bruno Mars`}
                                 value={
-                                  starterPasteBySection[
-                                    section as 'Dinner' | 'Latin' | 'Dance'
-                                  ]
+                                  starterPasteBySection[section] ?? ''
                                 }
                                 onChange={(event) =>
                                   setStarterPasteBySection((prev) => ({
@@ -8005,10 +9252,8 @@ function App() {
                                   className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                                   onClick={() =>
                                     importSectionFromPaste(
-                                      section as 'Dinner' | 'Latin' | 'Dance',
-                                      starterPasteBySection[
-                                        section as 'Dinner' | 'Latin' | 'Dance'
-                                      ],
+                                      section,
+                                      starterPasteBySection[section] ?? '',
                                     )
                                   }
                                 >
@@ -8051,7 +9296,7 @@ function App() {
                                 tabIndex={0}
                                 draggable={
                                   !gigMode &&
-                                  !buildCompletion[section.toLowerCase() as 'dinner' | 'latin' | 'dance']
+                                  !buildCompletion[completionKey]
                                 }
                                 className={`rounded-2xl border px-3 py-2 text-xs transition-all duration-300 ${
                                   gigMode ? 'cursor-pointer' : ''
@@ -8067,9 +9312,7 @@ function App() {
                                 onDragStart={(event) => {
                                   if (
                                     gigMode ||
-                                    buildCompletion[
-                                      section.toLowerCase() as 'dinner' | 'latin' | 'dance'
-                                    ]
+                                    buildCompletion[completionKey]
                                   ) {
                                     event.preventDefault()
                                     return
@@ -8082,9 +9325,7 @@ function App() {
                                 onDragOver={(event) => {
                                   if (
                                     gigMode ||
-                                    buildCompletion[
-                                      section.toLowerCase() as 'dinner' | 'latin' | 'dance'
-                                    ]
+                                    buildCompletion[completionKey]
                                   ) {
                                     return
                                   }
@@ -8095,9 +9336,7 @@ function App() {
                                 onDrop={(event) => {
                                   if (
                                     gigMode ||
-                                    buildCompletion[
-                                      section.toLowerCase() as 'dinner' | 'latin' | 'dance'
-                                    ]
+                                    buildCompletion[completionKey]
                                   ) {
                                     return
                                   }
@@ -8106,7 +9345,7 @@ function App() {
                                     draggedSectionSongId ?? event.dataTransfer.getData('text/plain')
                                   if (!fromId) return
                                   reorderSectionSongs(
-                                    section as 'Dinner' | 'Latin' | 'Dance',
+                                    section,
                                     fromId,
                                     song.id,
                                   )
@@ -8121,16 +9360,16 @@ function App() {
                               onClick={() => {
                                 if (gigMode) {
                                   setGigCurrentSong(song.id)
-                                  return
                                 }
-                                openSingerModal(song.id)
+                                openDocsForSong(song.id)
                               }}
                               onKeyDown={(event) => {
                                 if (event.key === 'Enter' || event.key === ' ') {
                                   event.preventDefault()
-                                  if (!gigMode) {
-                                    openSingerModal(song.id)
+                                  if (gigMode) {
+                                    setGigCurrentSong(song.id)
                                   }
+                                  openDocsForSong(song.id)
                                 }
                               }}
                             >
@@ -8148,6 +9387,11 @@ function App() {
                                       currentSetlist.id,
                                     )
                                     const singers = assignments.map((entry) => entry.singer)
+                                    const hasInstrumental = assignments.some(
+                                      (entry) =>
+                                        entry.singer.trim().toLowerCase() ===
+                                        INSTRUMENTAL_LABEL.toLowerCase(),
+                                    )
                                     const keys = Array.from(
                                       new Set(assignments.map((entry) => entry.key)),
                                     )
@@ -8157,20 +9401,29 @@ function App() {
                                         ? `${singers.join(', ')} · Key: ${keys[0]}`
                                         : `${singers.join(', ')} · Multiple keys`
                                     return (
-                                      <div
+                                      <button
+                                        type="button"
                                         className={`mt-2 text-[10px] ${
-                                          assignments.length === 0 ? 'text-red-300' : 'text-teal-200'
+                                          assignments.length === 0
+                                            ? 'text-red-300'
+                                            : hasInstrumental
+                                              ? 'text-fuchsia-200'
+                                              : 'text-teal-200'
                                         }`}
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          openSingerModal(song.id)
+                                        }}
                                       >
                                         {label}
-                                      </div>
+                                      </button>
                                     )
                                   })()}
                                 </div>
                                 <div className="flex items-center gap-2">
                                   {song.youtubeUrl && (
                                     <button
-                                      className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
+                                      className="relative z-20 inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
                                       onClick={(event) => {
                                         event.stopPropagation()
                                         openAudioForUrl(song.youtubeUrl ?? '', 'YouTube audio')
@@ -8183,7 +9436,7 @@ function App() {
                                   )}
                                   {hasDocsForSong(song.id) && (
                                     <button
-                                      className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200"
+                                      className="relative z-10 inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200"
                                       onClick={(event) => {
                                         event.stopPropagation()
                                         openDocsForSong(song.id)
@@ -8195,9 +9448,7 @@ function App() {
                                     </button>
                                   )}
                                   {!gigMode &&
-                                    !buildCompletion[
-                                      section.toLowerCase() as 'dinner' | 'latin' | 'dance'
-                                    ] && (
+                                    !buildCompletion[completionKey] && (
                                       <button
                                         className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[12px] text-red-200"
                                         onClick={(event) => {

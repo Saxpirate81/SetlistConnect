@@ -76,6 +76,57 @@ a:hover {
   animation: fadeIn 0.35s ease;
 }
 
+@media (max-width: 768px) {
+  .liquid-button,
+  .upnext-flash {
+    animation-duration: 7s;
+  }
+
+  button:hover,
+  [role="button"]:hover,
+  a:hover {
+    box-shadow: none;
+  }
+}
+
+@media (max-width: 640px) {
+  button,
+  [role="button"],
+  a[role="button"],
+  label[role="button"] {
+    min-width: 0 !important;
+    max-width: 100%;
+  }
+
+  button,
+  [role="button"] {
+    overflow-wrap: anywhere;
+  }
+
+  button[class*="whitespace-nowrap"],
+  [role="button"][class*="whitespace-nowrap"],
+  label[class*="whitespace-nowrap"],
+  a[class*="whitespace-nowrap"] {
+    white-space: normal !important;
+  }
+
+  button[class*="min-w-"],
+  [role="button"][class*="min-w-"],
+  label[class*="min-w-"],
+  a[class*="min-w-"] {
+    min-width: 0 !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liquid-button,
+  .liquid-button::after,
+  .upnext-flash,
+  .fade-in {
+    animation: none !important;
+  }
+}
+
 @keyframes upnext-flash {
   0%,
   100% {

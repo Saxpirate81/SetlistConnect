@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import html2pdf from 'html2pdf.js'
 import { isSupabaseEnabled, supabase, supabaseEnvStatus } from './lib/supabaseClient'
+import downloadPdfIcon from './assets/download-pdf-icon.png'
+import openPlaylistIcon from './assets/open-playlist-icon.png'
 
 type Role = 'admin' | 'user' | null
 type Screen = 'setlists' | 'builder' | 'song' | 'musicians'
@@ -352,8 +353,12 @@ function App() {
 
   const isAdmin = role === 'admin'
 
-  const filteredInstruments = instrumentCatalog.filter((instrument) =>
-    instrument.toLowerCase().includes(instrumentFilter.toLowerCase()),
+  const filteredInstruments = useMemo(
+    () =>
+      instrumentCatalog.filter((instrument) =>
+        instrument.toLowerCase().includes(instrumentFilter.toLowerCase()),
+      ),
+    [instrumentCatalog, instrumentFilter],
   )
   const normalizeTagList = (tags: string[]) => {
     const seen = new Set<string>()
@@ -632,17 +637,38 @@ function App() {
   }, [appState.songs, appState.specialRequests, currentSetlist])
 
   const currentPlaylistEntry = playlistEntries[playlistIndex] ?? null
+  const isPlaylistEntryPlayable = (entry?: PlaylistEntry | null) =>
+    Boolean(entry?.audioUrl && entry.audioUrl.trim())
+
+  const findNextPlayableIndex = (startIndex: number, delta: number) => {
+    if (!playlistEntries.length) return -1
+    for (let step = 0; step < playlistEntries.length; step += 1) {
+      const candidate =
+        (startIndex + delta * step + playlistEntries.length) % playlistEntries.length
+      if (isPlaylistEntryPlayable(playlistEntries[candidate])) {
+        return candidate
+      }
+    }
+    return -1
+  }
+
   const jumpToPlaylistIndex = (index: number) => {
     if (!playlistEntries.length) return
-    setPlaylistIndex(index)
+    const playable = isPlaylistEntryPlayable(playlistEntries[index])
+      ? index
+      : findNextPlayableIndex(index, 1)
+    if (playable < 0) return
+    setPlaylistIndex(playable)
     setPlaylistPlayNonce((current) => current + 1)
   }
   const movePlaylistBy = (delta: number) => {
     if (!playlistEntries.length) return
-    setPlaylistIndex((current) => {
-      const next = (current + delta + playlistEntries.length) % playlistEntries.length
-      return next
-    })
+    const next = findNextPlayableIndex(
+      (playlistIndex + delta + playlistEntries.length) % playlistEntries.length,
+      delta >= 0 ? 1 : -1,
+    )
+    if (next < 0) return
+    setPlaylistIndex(next)
     setPlaylistPlayNonce((current) => current + 1)
   }
 
@@ -2835,6 +2861,7 @@ function App() {
     }
 
     try {
+      const html2pdf = (await import('html2pdf.js')).default
       // @ts-ignore
       await html2pdf().set(opt).from(container).save()
     } catch (err) {
@@ -2925,12 +2952,12 @@ function App() {
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="pointer-events-none inline-flex items-center gap-1 rounded-full bg-slate-950/30 px-3 py-2 text-xs text-slate-950/90 sm:hidden">
+              <div className="pointer-events-none inline-flex items-center gap-1 rounded-full bg-slate-950/30 px-3 py-2 text-xs text-slate-950/90">
                 <span className="text-base">↔</span>
                 <span>Swipe</span>
               </div>
               <button
-                className="relative z-10 hidden rounded-full bg-slate-950/30 px-4 py-2 text-sm sm:inline-flex"
+                className="relative z-10 inline-flex min-h-[44px] items-center rounded-full bg-slate-950/30 px-4 py-2 text-sm"
                 onClick={(event) => {
                   event.stopPropagation()
                   if (appState.currentSongId) {
@@ -3295,7 +3322,7 @@ function App() {
                 Charts and lead sheets will filter to your part.
               </p>
             </div>
-            <div className="max-h-[calc(85vh-92px)] overflow-auto px-6 pb-10">
+            <div className="max-h-[calc(85vh-92px)] overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
               <div className="mt-4 grid grid-cols-2 gap-2">
                 {INSTRUMENTS.map((instrument) => (
                   <button
@@ -3324,7 +3351,9 @@ function App() {
             <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 via-white/5 to-white/0 p-5">
               <h2 className="text-xl font-semibold">Upcoming gigs</h2>
               <p className="mt-1 text-sm text-slate-300">
-                Duplicate a previous setlist, or jump straight into editing.
+                {isAdmin
+                  ? 'Duplicate a previous setlist, or jump straight into editing.'
+                  : 'Tap a gig, then use Musicians or Gig Info.'}
               </p>
               <div className="mt-4 flex flex-col gap-3">
                 {upcomingGigs.map((setlist) => {
@@ -3361,21 +3390,21 @@ function App() {
                       }
                     }}
                   >
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-3">
                       <div>
-                        <h3 className="font-semibold">{setlist.gigName}</h3>
-                        <p className="text-xs text-slate-400">
+                        <h3 className="text-lg font-semibold leading-tight">{setlist.gigName}</h3>
+                        <p className="mt-1 text-sm text-slate-400">
                           {formatGigDate(setlist.date)}
                         </p>
                         {isToday && (
-                          <span className="mt-2 inline-flex items-center gap-2 rounded-full bg-teal-400/20 px-2 py-1 text-[10px] uppercase tracking-wide text-teal-200">
+                          <span className="mt-2 inline-flex items-center gap-2 rounded-full bg-teal-400/20 px-2 py-1 text-xs uppercase tracking-wide text-teal-200">
                             Today’s gig
                           </span>
                         )}
                       </div>
                       {setlist.venueAddress ? (
                         <a
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
+                          className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
                           href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
                             setlist.venueAddress,
                           )}`}
@@ -3387,7 +3416,7 @@ function App() {
                           📍
                         </a>
                       ) : (
-                        <div className="h-7 w-7" />
+                        <div className="h-11 w-11" />
                       )}
                     </div>
                     {isAdmin && (
@@ -3404,9 +3433,9 @@ function App() {
                       </div>
                     )}
                     {!isAdmin && (
-                      <div className="mt-3 grid grid-cols-2 gap-2">
+                      <div className="mt-4 grid grid-cols-2 gap-3">
                         <button
-                          className="flex min-h-[74px] flex-col items-start justify-between rounded-2xl border border-white/10 bg-gradient-to-br from-indigo-500/35 via-slate-900/50 to-slate-900/70 px-3 py-3 text-left text-white shadow-[0_0_14px_rgba(79,70,229,0.25)]"
+                          className="flex min-h-[88px] flex-col items-start justify-between rounded-2xl border border-white/10 bg-gradient-to-br from-indigo-500/35 via-slate-900/50 to-slate-900/70 px-3 py-3 text-left text-white shadow-[0_0_14px_rgba(79,70,229,0.25)]"
                           onClick={(event) => {
                             event.stopPropagation()
                             setSelectedSetlistId(setlist.id)
@@ -3415,10 +3444,10 @@ function App() {
                           }}
                         >
                           <span className="text-lg">🎤</span>
-                          <span className="text-xs font-semibold">Musicians</span>
+                          <span className="text-sm font-semibold">Musicians</span>
                         </button>
                         <button
-                          className="flex min-h-[74px] flex-col items-start justify-between rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500/35 via-slate-900/50 to-slate-900/70 px-3 py-3 text-left text-white shadow-[0_0_14px_rgba(16,185,129,0.25)]"
+                          className="flex min-h-[88px] flex-col items-start justify-between rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500/35 via-slate-900/50 to-slate-900/70 px-3 py-3 text-left text-white shadow-[0_0_14px_rgba(16,185,129,0.25)]"
                           onClick={(event) => {
                             event.stopPropagation()
                             setSelectedSetlistId(setlist.id)
@@ -3427,7 +3456,7 @@ function App() {
                           }}
                         >
                           <span className="text-lg">🎶</span>
-                          <span className="text-xs font-semibold">Gig Info</span>
+                          <span className="text-sm font-semibold">Gig Info</span>
                         </button>
                       </div>
                     )}
@@ -3516,7 +3545,7 @@ function App() {
                         </div>
                         {setlist.venueAddress ? (
                           <a
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
+                            className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
                             href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
                               setlist.venueAddress,
                             )}`}
@@ -3528,7 +3557,7 @@ function App() {
                             📍
                           </a>
                         ) : (
-                          <div className="h-7 w-7" />
+                          <div className="h-11 w-11" />
                         )}
                       </div>
                       {isAdmin && (
@@ -3731,7 +3760,7 @@ function App() {
                           />
                           {currentSetlist.venueAddress && (
                             <a
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
+                              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
                               href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
                                 currentSetlist.venueAddress,
                               )}`}
@@ -3772,12 +3801,12 @@ function App() {
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   <button
-                    className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-teal-400/90 text-xl font-semibold text-slate-950 shadow-[0_0_18px_rgba(45,212,191,0.35)]"
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-teal-300/40 bg-slate-800/95 text-xl font-semibold text-slate-100 shadow-[0_0_18px_rgba(20,184,166,0.2)]"
                     onClick={handlePrintSetlist}
                     title="Download setlist PDF"
                     aria-label="Download setlist PDF"
                   >
-                    ⬇️
+                  <img src={downloadPdfIcon} alt="" className="h-6 w-6 object-contain" />
                   </button>
                   {isAdmin && (
                     <button
@@ -4030,7 +4059,7 @@ function App() {
                           <div className="mt-2 flex items-center gap-2 text-[10px]">
                           {(request.externalAudioUrl || song?.youtubeUrl) && (
                               <button
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-slate-200"
+                                className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-slate-200"
                               onClick={() =>
                                 openAudioForUrl(
                                   request.externalAudioUrl ?? song?.youtubeUrl ?? '',
@@ -4045,7 +4074,7 @@ function App() {
                             )}
                             {hasDocsForSong(song?.id) && (
                               <button
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-slate-200"
+                                className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-slate-200"
                                 onClick={() => openDocsForSong(song?.id)}
                                 aria-label="Documents"
                                 title="Documents"
@@ -4531,7 +4560,7 @@ function App() {
                         (doc) => doc.songId === song.id && doc.type === 'Lyrics',
                       ) && (
                         <button
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
+                          className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
                           title="Open lyrics"
                           aria-label="Open lyrics"
                           onClick={(event) => {
@@ -4544,7 +4573,7 @@ function App() {
                       )}
                       {song.youtubeUrl && (
                         <button
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
+                          className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
                           title="Play audio"
                           aria-label="Play audio"
                           onClick={(event) => {
@@ -4744,7 +4773,7 @@ function App() {
                         <div className="flex items-center gap-2 text-sm">
                           {musician.email && (
                             <a
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-base"
+                              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-base"
                               href={`mailto:${musician.email}`}
                               title="Email"
                               onClick={(event) => event.stopPropagation()}
@@ -4755,7 +4784,7 @@ function App() {
                           {musician.phone && (
                             <>
                               <a
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-base"
+                                className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-base"
                                 href={`tel:${musician.phone}`}
                                 title="Call"
                                 onClick={(event) => event.stopPropagation()}
@@ -4763,7 +4792,7 @@ function App() {
                                 📞
                               </a>
                               <a
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-base"
+                                className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-base"
                                 href={`sms:${musician.phone}`}
                                 title="Text"
                                 onClick={(event) => event.stopPropagation()}
@@ -4784,17 +4813,26 @@ function App() {
       </main>
 
       <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-white/10 bg-slate-950/90 backdrop-blur">
-        <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3 text-sm">
-          <NavButton active={screen === 'setlists'} onClick={() => setScreen('setlists')}>
-            Home
-          </NavButton>
-          <NavButton active={screen === 'song'} onClick={() => setScreen('song')}>
-            Songs
-          </NavButton>
+        <div className="mx-auto flex max-w-3xl items-center justify-between gap-2 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 text-sm">
+          <NavButton
+            active={screen === 'setlists'}
+            onClick={() => setScreen('setlists')}
+            icon="🏠"
+            label="Home"
+          />
+          <NavButton
+            active={screen === 'song'}
+            onClick={() => setScreen('song')}
+            icon="🎵"
+            label="Songs"
+          />
           {isAdmin && (
-            <NavButton active={screen === 'musicians'} onClick={() => setScreen('musicians')}>
-              Musicians
-            </NavButton>
+            <NavButton
+              active={screen === 'musicians'}
+              onClick={() => setScreen('musicians')}
+              icon="🎤"
+              label="Musicians"
+            />
           )}
         </div>
       </nav>
@@ -5039,7 +5077,7 @@ function App() {
                 Pick your instrument to open the right chart or lyrics.
               </p>
             </div>
-            <div className="max-h-[calc(80vh-92px)] overflow-auto px-5 pb-10">
+            <div className="max-h-[calc(80vh-92px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
               <div className="mt-4 grid grid-cols-2 gap-2">
                 {INSTRUMENTS.map((instrument) => (
                   <button
@@ -5098,7 +5136,7 @@ function App() {
                 </button>
               </div>
             </div>
-            <div className="max-h-[70vh] overflow-auto px-6 pb-10">
+            <div className="max-h-[70vh] overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
               {!docModalContent && (
                 <div className="mt-4 space-y-2">
                   {appState.documents
@@ -5174,7 +5212,7 @@ function App() {
                 </button>
               </div>
             </div>
-            <div className="max-h-[calc(80vh-72px)] overflow-auto px-6 pb-10 pt-4">
+            <div className="max-h-[calc(80vh-72px)] overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))] pt-4">
               <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-4">
                 <div className="flex items-center justify-between">
                   <div>
@@ -5297,7 +5335,7 @@ function App() {
               </div>
             </div>
 
-            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-10">
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
               <div className="mt-4 grid gap-2 md:grid-cols-2">
                 <input
                   className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
@@ -5412,7 +5450,7 @@ function App() {
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">Delete this gig?</h3>
             </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10">
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
               <p className="mt-2 text-sm text-slate-300">
                 This will remove the gig, assignments, and special requests.
               </p>
@@ -5447,7 +5485,7 @@ function App() {
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">Assign musicians first</h3>
             </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10">
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
               <p className="mt-2 text-sm text-slate-300">
                 Add musicians to this gig first. Singer assignment will use active assigned
                 musicians (vocalists preferred).
@@ -5477,7 +5515,7 @@ function App() {
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">Assign singers first</h3>
             </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10">
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
               <p className="mt-2 text-sm text-slate-300">
                 Add singer assignments for every song in this set before marking it complete.
               </p>
@@ -5518,7 +5556,7 @@ function App() {
                 </button>
               </div>
             </div>
-            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-10 pt-4">
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))] pt-4">
               <div className="rounded-2xl border border-white/10 bg-slate-950/50 p-4">
                 <div className="text-[10px] text-slate-400">
                   Original key: {singerModalSong.originalKey || '—'}
@@ -5680,7 +5718,7 @@ function App() {
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">Remove this song?</h3>
             </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10">
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
               <p className="mt-2 text-sm text-slate-300">
                 This will remove the song from the gig setlist.
               </p>
@@ -5729,7 +5767,7 @@ function App() {
                 </button>
               </div>
             </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10">
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
               <p className="mt-2 text-sm text-slate-300">
                 We found similar songs. Confirm before saving.
               </p>
@@ -5760,6 +5798,9 @@ function App() {
           >
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">Musicians on this gig</h3>
+              <p className="mt-1 text-sm text-slate-300">
+                {currentSetlist.gigName} • {formatGigDate(currentSetlist.date)}
+              </p>
               <div className="mt-3 flex items-center gap-2">
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
@@ -5769,7 +5810,7 @@ function App() {
                 </button>
               </div>
             </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10 pt-4">
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))] pt-4">
               {appState.gigMusicians.filter((row) => row.gigId === currentSetlist.id)
                 .map((row) => appState.musicians.find((musician) => musician.id === row.musicianId))
                 .filter((musician): musician is Musician => Boolean(musician))
@@ -5782,7 +5823,7 @@ function App() {
                 .map((musician) => (
                   <div
                     key={musician.id}
-                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-950/50 px-3 py-2 text-sm"
+                    className="flex items-start justify-between rounded-2xl border border-white/10 bg-slate-950/50 px-3 py-3 text-sm"
                   >
                     <div>
                       <div className="font-semibold">{musician.name}</div>
@@ -5793,7 +5834,7 @@ function App() {
                     <div className="flex items-center gap-2">
                       {musician.email && (
                         <a
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px]"
+                          className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[12px]"
                           href={`mailto:${musician.email}`}
                           title="Email"
                         >
@@ -5803,14 +5844,14 @@ function App() {
                       {musician.phone && (
                         <>
                           <a
-                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px]"
+                            className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[12px]"
                             href={`tel:${musician.phone}`}
                             title="Call"
                           >
                             📞
                           </a>
                           <a
-                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px]"
+                            className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[12px]"
                             href={`sms:${musician.phone}`}
                             title="Text"
                           >
@@ -5868,7 +5909,7 @@ function App() {
                   📍 {currentSetlist.venueAddress}
                 </a>
               )}
-              <div className="mt-3 flex items-center gap-2">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => setShowSetlistModal(false)}
@@ -5876,12 +5917,12 @@ function App() {
                   Close
                 </button>
                 <button
-                  className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-teal-400/90 text-xl text-slate-950 shadow-[0_0_18px_rgba(45,212,191,0.35)]"
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-teal-300/40 bg-slate-800/95 text-xl text-slate-100 shadow-[0_0_18px_rgba(20,184,166,0.2)]"
                   onClick={handlePrintSetlist}
                   title="Download setlist PDF"
                   aria-label="Download setlist PDF"
                 >
-                  ⬇️
+                  <img src={downloadPdfIcon} alt="" className="h-6 w-6 object-contain" />
                 </button>
                 <button
                   className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-indigo-300/60 bg-indigo-500/20 text-xl text-indigo-100 shadow-[0_0_18px_rgba(99,102,241,0.28)]"
@@ -5893,11 +5934,11 @@ function App() {
                   title="Open setlist playlist"
                   aria-label="Open setlist playlist"
                 >
-                  🎧
+                  <img src={openPlaylistIcon} alt="" className="h-6 w-6 object-contain" />
                 </button>
               </div>
             </div>
-            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4">
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-5">
               <div
                 className={`rounded-3xl border p-5 ${
                   currentSetlist.date === new Date().toISOString().slice(0, 10)
@@ -5915,7 +5956,7 @@ function App() {
                 </div>
 
                 <div className="mt-4 space-y-3">
-                  <div className="grid gap-2 text-[10px] uppercase tracking-wide text-slate-400 md:grid-cols-[.9fr_1.4fr_1fr_.6fr_.4fr]">
+                  <div className="grid gap-2 text-xs uppercase tracking-wide text-slate-400 md:grid-cols-[.9fr_1.4fr_1fr_.6fr_.4fr]">
                     <span>Category</span>
                     <span>Song</span>
                     <span>Vocal</span>
@@ -5933,9 +5974,9 @@ function App() {
                         >
                           <div className="text-xs text-teal-300">
                             Special Request
-                            <div className="text-[10px] text-slate-400">{request.type}</div>
+                            <div className="text-xs text-slate-400">{request.type}</div>
                             {request.djOnly && (
-                              <div className="mt-1 inline-flex items-center rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-red-200">
+                              <div className="mt-1 inline-flex items-center rounded-full bg-red-500/20 px-2 py-0.5 text-xs uppercase tracking-wide text-red-200">
                                 DJ Only
                               </div>
                             )}
@@ -5945,12 +5986,12 @@ function App() {
                               {request.songTitle}
                             </div>
                             {song?.artist && (
-                              <div className="text-[10px] text-slate-400">{song.artist}</div>
+                              <div className="text-xs text-slate-400">{song.artist}</div>
                             )}
-                            <div className="mt-2 flex items-center gap-2 text-[10px]">
+                            <div className="mt-2 flex items-center gap-2 text-xs">
                               {(request.externalAudioUrl || song?.youtubeUrl) && (
                                 <button
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-slate-200"
+                                  className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-slate-200"
                                   onClick={() =>
                                     openAudioForUrl(
                                       request.externalAudioUrl ?? song?.youtubeUrl ?? '',
@@ -5967,7 +6008,7 @@ function App() {
                               )}
                               {hasDocsForSong(song?.id) && (
                                 <button
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-slate-200"
+                                  className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-slate-200"
                                   onClick={() => openDocsForSong(song?.id)}
                                   aria-label="Documents"
                                   title="Documents"
@@ -6025,7 +6066,7 @@ function App() {
                                 <div className="text-base font-semibold md:text-lg">
                                   {song.title}
                                 </div>
-                                <div className="text-[10px] text-slate-400">{song.artist}</div>
+                                <div className="text-xs text-slate-400">{song.artist}</div>
                                 {currentSetlist && (() => {
                                   const assignments = getGigSingerAssignments(
                                     song.id,
@@ -6042,7 +6083,7 @@ function App() {
                                       : `${singers.join(', ')} · Multiple keys`
                                   return (
                                     <div
-                                      className={`mt-2 text-[10px] ${
+                                      className={`mt-2 text-xs ${
                                         assignments.length === 0
                                           ? 'text-red-300'
                                           : 'text-teal-200'
@@ -6056,7 +6097,7 @@ function App() {
                               <div className="flex items-center gap-2">
                                 {song.youtubeUrl && (
                                   <button
-                                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
+                                    className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
                                     onClick={() =>
                                       openAudioForUrl(song.youtubeUrl ?? '', 'YouTube audio')
                                     }
@@ -6068,7 +6109,7 @@ function App() {
                                 )}
                                 {hasDocsForSong(song.id) && (
                                   <button
-                                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200"
+                                    className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200"
                                     onClick={() => openDocsForSong(song.id)}
                                     aria-label="Documents"
                                     title="Documents"
@@ -6113,10 +6154,10 @@ function App() {
                   Close
                 </button>
               </div>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
+              <div className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
                 <button
                   type="button"
-                  className="rounded-xl border border-white/10 px-3 py-2 text-sm"
+                  className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
                   disabled={playlistEntries.length === 0}
                   onClick={() => movePlaylistBy(-1)}
                 >
@@ -6124,7 +6165,7 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  className="rounded-xl border border-white/10 px-3 py-2 text-sm"
+                  className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
                   disabled={playlistEntries.length === 0}
                   onClick={() => movePlaylistBy(1)}
                 >
@@ -6132,7 +6173,7 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  className={`rounded-xl border px-3 py-2 text-sm ${
+                  className={`col-span-2 min-h-[44px] rounded-xl border px-3 py-2 text-sm sm:col-span-1 ${
                     playlistAutoAdvance
                       ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
                       : 'border-white/10 text-slate-300'
@@ -6141,7 +6182,7 @@ function App() {
                 >
                   Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
                 </button>
-                <span className="text-xs text-slate-400">
+                <span className="col-span-2 text-xs text-slate-400 sm:col-span-1">
                   {playlistEntries.length
                     ? `${playlistIndex + 1} / ${playlistEntries.length}`
                     : 'No playable songs'}
@@ -6208,7 +6249,7 @@ function App() {
                         src={currentPlaylistEntry.audioUrl}
                         onEnded={() => {
                           if (!playlistAutoAdvance || playlistEntries.length <= 1) return
-                          setPlaylistIndex((current) => (current + 1) % playlistEntries.length)
+                          movePlaylistBy(1)
                         }}
                       />
                     ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
@@ -6631,7 +6672,7 @@ function App() {
                 Choose the correct key for all singers.
               </div>
             </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-10 pt-4">
+            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))] pt-4">
               <div className="flex flex-wrap gap-2">
                 {Array.from(
                   new Set(
@@ -6713,7 +6754,7 @@ function App() {
                 </button>
               </div>
             </div>
-            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-10 pt-4">
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))] pt-4">
               <div className="grid gap-2 md:grid-cols-2">
                 <input
                   className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
@@ -6853,7 +6894,7 @@ function App() {
                 </button>
               </div>
             </div>
-            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-10 pt-4">
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))] pt-4">
               <div className="grid gap-2 md:grid-cols-2">
                 <input
                   className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-2 text-sm"
@@ -7499,7 +7540,7 @@ function App() {
                                 )}
                                 {hasDocsForSong(song?.id) && (
                                   <button
-                                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-slate-200"
+                                    className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-slate-200"
                                     onClick={(event) => {
                                       event.stopPropagation()
                                       openDocsForSong(song?.id)
@@ -8121,7 +8162,7 @@ function App() {
                                 <div className="flex items-center gap-2">
                                   {song.youtubeUrl && (
                                     <button
-                                      className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
+                                      className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
                                       onClick={(event) => {
                                         event.stopPropagation()
                                         openAudioForUrl(song.youtubeUrl ?? '', 'YouTube audio')
@@ -8134,7 +8175,7 @@ function App() {
                                   )}
                                   {hasDocsForSong(song.id) && (
                                     <button
-                                      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200"
+                                      className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200"
                                       onClick={(event) => {
                                         event.stopPropagation()
                                         openDocsForSong(song.id)
@@ -8150,7 +8191,7 @@ function App() {
                                       section.toLowerCase() as 'dinner' | 'latin' | 'dance'
                                     ] && (
                                       <button
-                                        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-[12px] text-red-200"
+                                        className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[12px] text-red-200"
                                         onClick={(event) => {
                                           event.stopPropagation()
                                           requestRemoveSong(song.id)
@@ -8229,20 +8270,23 @@ function Stat({ label, value }: { label: string; value: number }) {
 function NavButton({
   active,
   onClick,
-  children,
+  icon,
+  label,
 }: {
   active: boolean
   onClick: () => void
-  children: string
+  icon: string
+  label: string
 }) {
   return (
     <button
-      className={`rounded-full px-4 py-3.5 text-base font-semibold ${
+      className={`flex min-h-[62px] min-w-0 flex-1 flex-col items-center justify-center rounded-2xl px-2 py-2 text-center ${
         active ? 'bg-teal-400/20 text-teal-200' : 'text-slate-300'
       }`}
       onClick={onClick}
     >
-      {children}
+      <span className="text-2xl leading-none">{icon}</span>
+      <span className="mt-1 text-xs font-semibold">{label}</span>
     </button>
   )
 }

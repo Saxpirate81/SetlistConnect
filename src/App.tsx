@@ -10192,32 +10192,32 @@ function App() {
       {showGigSetlistSheet && gigMode && currentSetlist && (
         <div className="fixed inset-0 z-[98] bg-gradient-to-b from-slate-950 via-yellow-900/50 to-slate-950 backdrop-blur-sm">
           <div className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-slate-950/55">
-            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
-              <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[1fr_minmax(260px,1.3fr)_1fr] md:items-center">
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-3 backdrop-blur">
+              <div className="grid grid-cols-1 items-start gap-2 md:grid-cols-[1fr_minmax(260px,1.3fr)_1fr] md:items-center">
                 <div className="min-w-0">
                   <h3 className="text-lg font-semibold">Setlist Sheet</h3>
                   <div className="text-xs text-slate-400">
                     {currentSetlist.gigName} · {formatGigDate(currentSetlist.date)}
                   </div>
-                  <label className="mt-2 block">
+                  <label className="mt-1.5 block">
                     <span className="sr-only">Search songs by title or artist</span>
                     <input
                       type="text"
                       value={gigSheetSongSearch}
                       onChange={(event) => setGigSheetSongSearch(event.target.value)}
                       placeholder="Search by song or artist"
-                      className="w-full max-w-xs rounded-xl border border-white/15 bg-slate-950/45 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-400 focus:border-teal-300/60 focus:outline-none"
+                      className="w-full max-w-xs rounded-xl border border-white/15 bg-slate-950/45 px-3 py-1.5 text-sm text-slate-100 placeholder:text-slate-400 focus:border-teal-300/60 focus:outline-none"
                     />
                   </label>
                 </div>
                 <div
-                  className={`gig-sheet-upnext rounded-2xl border px-3 py-2 ${
+                  className={`gig-sheet-upnext rounded-2xl border px-2.5 py-1.5 ${
                     gigSheetQueuedSong
                       ? 'liquid-button upnext-flash border-emerald-300/60 bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
                       : 'border-teal-300/35 bg-teal-400/10'
                   }`}
                 >
-                  <div className="flex min-h-[40px] items-center justify-between gap-2">
+                  <div className="flex min-h-[34px] items-center justify-between gap-2">
                     <span
                       className={`text-[10px] font-semibold uppercase tracking-[0.2em] ${
                         gigSheetQueuedSong ? 'text-slate-950/80' : 'text-teal-200/90'
@@ -10227,7 +10227,7 @@ function App() {
                     </span>
                     <div className="grid w-[250px] shrink-0 grid-cols-2 items-center gap-2 md:w-[280px]">
                         <button
-                          className={`gig-sheet-clear-upnext relative z-10 flex h-9 w-full items-center justify-center whitespace-nowrap rounded-xl border border-slate-900/30 bg-slate-950/25 px-2 py-2 text-xs font-semibold text-slate-950 transition-opacity ${
+                          className={`gig-sheet-clear-upnext relative z-10 flex h-8 w-full items-center justify-center whitespace-nowrap rounded-xl border border-slate-900/30 bg-slate-950/25 px-2 py-1 text-[11px] font-semibold text-slate-950 transition-opacity ${
                             gigSheetQueuedSong ? 'opacity-100' : 'pointer-events-none opacity-0'
                           }`}
                           onClick={finishGigQueuedSong}
@@ -10235,7 +10235,7 @@ function App() {
                           Finished Song
                         </button>
                         <button
-                          className={`gig-sheet-clear-upnext relative z-10 flex h-9 w-full items-center justify-center whitespace-nowrap rounded-xl border border-red-400/35 bg-red-500/25 px-2 py-2 text-xs font-semibold text-red-100 transition-opacity ${
+                          className={`gig-sheet-clear-upnext relative z-10 flex h-8 w-full items-center justify-center whitespace-nowrap rounded-xl border border-red-400/35 bg-red-500/25 px-2 py-1 text-[11px] font-semibold text-red-100 transition-opacity ${
                             gigSheetQueuedSong ? 'opacity-100' : 'pointer-events-none opacity-0'
                           }`}
                           onClick={clearGigQueuedSong}
@@ -10245,7 +10245,7 @@ function App() {
                     </div>
                   </div>
                   <div
-                    className={`mt-1 truncate text-base font-semibold md:text-lg ${
+                    className={`mt-0.5 truncate text-sm font-semibold leading-tight md:text-base ${
                       gigSheetQueuedSong ? 'text-slate-950' : 'text-teal-50'
                     }`}
                   >

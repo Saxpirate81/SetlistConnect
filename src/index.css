@@ -867,11 +867,15 @@ button[aria-label="Close"] {
   .shared-setlist-shell {
     border-radius: 14px;
     padding: 12px;
+    overflow-x: hidden;
   }
 
   .shared-setlist-container {
     gap: 10px;
     font-size: 11px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
   }
 
   .shared-setlist-container .print-header {
@@ -906,11 +910,26 @@ button[aria-label="Close"] {
     grid-template-columns: 1fr;
     column-gap: 0;
     row-gap: 10px;
+    width: 100%;
+    min-width: 0;
   }
 
   .shared-setlist-container .print-section-box {
     padding: 8px;
     border-radius: 12px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    grid-column: 1 / -1 !important;
+  }
+
+  .shared-setlist-container .print-musicians,
+  .shared-setlist-container .print-special,
+  .shared-setlist-container .print-latin,
+  .shared-setlist-container .print-dinner,
+  .shared-setlist-container .print-dance,
+  .shared-setlist-container .print-generic-set {
+    grid-column: 1 / -1 !important;
   }
 
   .shared-setlist-container .print-section-title {
@@ -928,6 +947,8 @@ button[aria-label="Close"] {
   .shared-setlist-container .print-list {
     gap: 6px;
     padding: 6px;
+    width: 100%;
+    min-width: 0;
   }
 
   .shared-setlist-container .print-row {
@@ -935,6 +956,8 @@ button[aria-label="Close"] {
     min-height: 0;
     row-gap: 4px;
     padding: 8px 9px;
+    width: 100%;
+    min-width: 0;
   }
 
   .shared-setlist-container .print-row-title {
@@ -975,6 +998,13 @@ button[aria-label="Close"] {
   .shared-setlist-container .print-assignee-names {
     font-size: 0.68rem;
     line-height: 1.2;
+  }
+
+  .shared-setlist-container .print-dance .print-list,
+  .shared-setlist-container .print-dinner .print-list {
+    display: grid;
+    column-count: unset;
+    column-gap: 0;
   }
 
   .shared-setlist-container .print-icon-link {

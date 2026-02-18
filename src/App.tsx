@@ -181,6 +181,8 @@ const REQUEST_TYPE_TAG_EXCLUSIONS = [
 ]
 const SETLIST_PANEL_PREFIX = 'set:'
 const ACTIVE_BAND_KEY = 'setlist:activeBandId'
+const GIG_LOCKED_SONGS_KEY = 'setlist:gigLockedSongs'
+const GIG_LAST_LOCKED_SONG_KEY = 'setlist:gigLastLockedSong'
 
 const initialState: AppState = {
   songs: [],
@@ -303,6 +305,37 @@ function App() {
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null)
   const [activeGigId, setActiveGigId] = useState(initialSetlistId)
   const [nowPlayingByGig, setNowPlayingByGig] = useState<Record<string, string | null>>({})
+  const [gigLockedSongIdsByGig, setGigLockedSongIdsByGig] = useState<Record<string, string[]>>(() => {
+    try {
+      const raw = localStorage.getItem(GIG_LOCKED_SONGS_KEY)
+      if (!raw) return {}
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      const next: Record<string, string[]> = {}
+      Object.entries(parsed).forEach(([gigId, value]) => {
+        if (!Array.isArray(value)) return
+        next[gigId] = value.filter((item): item is string => typeof item === 'string')
+      })
+      return next
+    } catch {
+      return {}
+    }
+  })
+  const [gigLastLockedSongByGig, setGigLastLockedSongByGig] = useState<Record<string, string | null>>(
+    () => {
+      try {
+        const raw = localStorage.getItem(GIG_LAST_LOCKED_SONG_KEY)
+        if (!raw) return {}
+        const parsed = JSON.parse(raw) as Record<string, unknown>
+        const next: Record<string, string | null> = {}
+        Object.entries(parsed).forEach(([gigId, value]) => {
+          next[gigId] = typeof value === 'string' ? value : null
+        })
+        return next
+      } catch {
+        return {}
+      }
+    },
+  )
   const [newMusicianName, setNewMusicianName] = useState('')
   const [newMusicianRoster, setNewMusicianRoster] = useState<'core' | 'sub'>('core')
   const [newMusicianEmail, setNewMusicianEmail] = useState('')
@@ -1570,6 +1603,46 @@ function App() {
       runSupabase(
         client.from('SetlistGigNowPlaying').delete().eq('gig_id', currentSetlist.id),
       )
+    }
+  }
+  const isGigSongLocked = useCallback((songId: string) => {
+    if (!currentSetlist) return false
+    return (gigLockedSongIdsByGig[currentSetlist.id] ?? []).includes(songId)
+  }, [currentSetlist, gigLockedSongIdsByGig])
+  const markGigSongAsSelected = (songId: string) => {
+    if (!currentSetlist) return
+    if (isGigSongLocked(songId)) return
+    setGigLockedSongIdsByGig((prev) => {
+      const current = prev[currentSetlist.id] ?? []
+      if (current.includes(songId)) return prev
+      return {
+        ...prev,
+        [currentSetlist.id]: [...current, songId],
+      }
+    })
+    setGigLastLockedSongByGig((prev) => ({
+      ...prev,
+      [currentSetlist.id]: songId,
+    }))
+    setGigCurrentSong(songId)
+  }
+  const undoLastGigSongSelection = () => {
+    if (!currentSetlist) return
+    const lastSongId = gigLastLockedSongByGig[currentSetlist.id]
+    if (!lastSongId) return
+    setGigLockedSongIdsByGig((prev) => {
+      const current = prev[currentSetlist.id] ?? []
+      return {
+        ...prev,
+        [currentSetlist.id]: current.filter((songId) => songId !== lastSongId),
+      }
+    })
+    setGigLastLockedSongByGig((prev) => ({
+      ...prev,
+      [currentSetlist.id]: null,
+    }))
+    if (appState.currentSongId === lastSongId) {
+      setGigCurrentSong(null)
     }
   }
   const buildPanelGradient =
@@ -4600,6 +4673,17 @@ function App() {
               >
                 Clear
               </button>
+              {gigMode && currentSetlist && gigLastLockedSongByGig[currentSetlist.id] && (
+                <button
+                  className="relative z-10 inline-flex min-h-[44px] items-center rounded-full bg-slate-950/30 px-4 py-2 text-sm"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    undoLastGigSongSelection()
+                  }}
+                >
+                  Undo song
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -5048,6 +5132,14 @@ function App() {
   }, [specialRequestOrderByGig])
 
   useEffect(() => {
+    localStorage.setItem(GIG_LOCKED_SONGS_KEY, JSON.stringify(gigLockedSongIdsByGig))
+  }, [gigLockedSongIdsByGig])
+
+  useEffect(() => {
+    localStorage.setItem(GIG_LAST_LOCKED_SONG_KEY, JSON.stringify(gigLastLockedSongByGig))
+  }, [gigLastLockedSongByGig])
+
+  useEffect(() => {
     setBuildPanelDirty(false)
   }, [activeBuildPanel])
 
@@ -5250,6 +5342,11 @@ function App() {
                   </p>
                 )}
               </div>
+              <div className="text-xs text-slate-400">
+                {visiblePlaylistEntries.length
+                  ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
+                  : 'No playable songs'}
+              </div>
             </div>
             {sharedPlaylistLoading && (
               <div className="mt-4 rounded-xl border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-200">
@@ -5307,89 +5404,86 @@ function App() {
                     ))}
                   </select>
                   </div>
-                  <span className="text-xs text-slate-400">
-                    {visiblePlaylistEntries.length
-                      ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
-                      : 'No playable songs'}
-                  </span>
                 </div>
-                <div className="mt-4">
-                  {currentPlaylistEntry ? (
-                    <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-lg font-semibold">{currentPlaylistEntry.title}</p>
-                          <p className="text-xs text-slate-400">{currentPlaylistEntry.artist || ' '}</p>
-                          <p className="mt-1 text-xs text-teal-200">
-                            {getPlaylistAssignmentText(currentPlaylistEntry)}
-                          </p>
+                <div className="mt-4 h-[calc(100vh-250px)] min-h-[360px] overflow-hidden">
+                  <div className="flex h-full min-h-0 flex-col">
+                    <div>
+                      {currentPlaylistEntry ? (
+                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-lg font-semibold">{currentPlaylistEntry.title}</p>
+                              <p className="text-xs text-slate-400">{currentPlaylistEntry.artist || ' '}</p>
+                              <p className="mt-1 text-xs text-teal-200">
+                                {getPlaylistAssignmentText(currentPlaylistEntry)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                            {!currentPlaylistEntry.audioUrl ? (
+                              <div className="text-sm text-slate-400">
+                                No audio URL saved for this song yet.
+                              </div>
+                            ) : isSpotifyUrl(currentPlaylistEntry.audioUrl) ? (
+                              <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
+                                <div className="text-sm text-slate-200">
+                                  Spotify track ready. Tap to open in Spotify.
+                                </div>
+                                <a
+                                  className="rounded-lg bg-emerald-500/90 px-3 py-2 text-xs font-semibold text-slate-950"
+                                  href={currentPlaylistEntry.audioUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Open Spotify
+                                </a>
+                              </div>
+                            ) : isAudioFileUrl(currentPlaylistEntry.audioUrl) ? (
+                              <audio
+                                key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared`}
+                                className="w-full"
+                                controls
+                                autoPlay
+                                src={currentPlaylistEntry.audioUrl}
+                                onEnded={() => {
+                                  if (!playlistAutoAdvance || visiblePlaylistEntries.length <= 1) return
+                                  movePlaylistBy(1)
+                                }}
+                              />
+                            ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
+                              <iframe
+                                key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared`}
+                                className="h-[150px] w-full rounded-xl border border-white/10 sm:h-[180px]"
+                                src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
+                                title="YouTube playlist item"
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                allowFullScreen
+                              />
+                            ) : (
+                              <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
+                                <div className="text-sm text-slate-200">
+                                  External audio link ready. Open in a new tab.
+                                </div>
+                                <a
+                                  className="rounded-lg bg-teal-500/90 px-3 py-2 text-xs font-semibold text-slate-950"
+                                  href={currentPlaylistEntry.audioUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Open Link
+                                </a>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                      <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                        {!currentPlaylistEntry.audioUrl ? (
-                          <div className="text-sm text-slate-400">
-                            No audio URL saved for this song yet.
-                          </div>
-                        ) : isSpotifyUrl(currentPlaylistEntry.audioUrl) ? (
-                          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
-                            <div className="text-sm text-slate-200">
-                              Spotify track ready. Tap to open in Spotify.
-                            </div>
-                            <a
-                              className="rounded-lg bg-emerald-500/90 px-3 py-2 text-xs font-semibold text-slate-950"
-                              href={currentPlaylistEntry.audioUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              Open Spotify
-                            </a>
-                          </div>
-                        ) : isAudioFileUrl(currentPlaylistEntry.audioUrl) ? (
-                          <audio
-                            key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared`}
-                            className="w-full"
-                            controls
-                            autoPlay
-                            src={currentPlaylistEntry.audioUrl}
-                            onEnded={() => {
-                              if (!playlistAutoAdvance || visiblePlaylistEntries.length <= 1) return
-                              movePlaylistBy(1)
-                            }}
-                          />
-                        ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
-                          <iframe
-                            key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared`}
-                            className="h-[180px] w-full rounded-xl border border-white/10 sm:h-[210px]"
-                            src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
-                            title="YouTube playlist item"
-                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                            allowFullScreen
-                          />
-                        ) : (
-                          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
-                            <div className="text-sm text-slate-200">
-                              External audio link ready. Open in a new tab.
-                            </div>
-                            <a
-                              className="rounded-lg bg-teal-500/90 px-3 py-2 text-xs font-semibold text-slate-950"
-                              href={currentPlaylistEntry.audioUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              Open Link
-                            </a>
-                          </div>
-                        )}
-                      </div>
+                      ) : (
+                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">
+                          No playlist songs found for this gig yet.
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">
-                      No playlist songs found for this gig yet.
-                    </div>
-                  )}
-                </div>
-                <div className="mt-4 space-y-3">
-                  {groupedPlaylistSections.map((group) => (
+                    <div className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                      {groupedPlaylistSections.map((group) => (
                     <div
                       key={`shared-playlist-group-${group.section}`}
                       className={`rounded-2xl border p-2 ${getPlaylistToneClasses(group.section)}`}
@@ -5442,7 +5536,9 @@ function App() {
                         ))}
                       </div>
                     </div>
-                  ))}
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </>
             )}
@@ -9409,15 +9505,22 @@ function App() {
                     {formatGigDate(currentSetlist.date)}
                   </h3>
                 </div>
-                <button
-                  type="button"
-                  className="rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
-                  onClick={() => setShowPlaylistModal(false)}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-slate-400">
+                    {visiblePlaylistEntries.length
+                      ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
+                      : 'No playable songs'}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
+                    onClick={() => setShowPlaylistModal(false)}
+                    aria-label="Close"
+                    title="Close"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
               <div className="mt-4 space-y-2">
                 <div className="grid grid-cols-2 gap-2">
@@ -9470,11 +9573,6 @@ function App() {
                   ))}
                 </select>
                 </div>
-                <span className="text-xs text-slate-400">
-                  {visiblePlaylistEntries.length
-                    ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
-                    : 'No playable songs'}
-                </span>
                 {playlistShareStatus && (
                   <span className="text-xs text-teal-200">{playlistShareStatus}</span>
                 )}
@@ -10846,6 +10944,8 @@ function App() {
                         const song = appState.songs.find(
                           (item) => item.id === request.songId,
                         )
+                        const isLockedInGigMode =
+                          gigMode && request.songId ? isGigSongLocked(request.songId) : false
                         return (
                           <div key={request.id} className="space-y-2">
                             {draggedSpecialRequestId &&
@@ -10859,6 +10959,8 @@ function App() {
                               draggable={!gigMode}
                               className={`grid items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm md:grid-cols-[.9fr_1.4fr_1fr_.6fr_.4fr] ${
                                 gigMode ? 'cursor-pointer' : ''
+                              } ${
+                                isLockedInGigMode ? 'opacity-45' : ''
                               }`}
                               onDragStart={(event) => {
                                 if (gigMode) {
@@ -10893,7 +10995,7 @@ function App() {
                               }}
                               onClick={() => {
                                 if (gigMode && request.songId) {
-                                  setGigCurrentSong(request.songId)
+                                  markGigSongAsSelected(request.songId)
                                   return
                                 }
                                 if (!gigMode && request.songId) {
@@ -10903,7 +11005,9 @@ function App() {
                               onKeyDown={(event) => {
                                 if (event.key === 'Enter' || event.key === ' ') {
                                   event.preventDefault()
-                                  if (!gigMode && request.songId) {
+                                  if (gigMode && request.songId) {
+                                    markGigSongAsSelected(request.songId)
+                                  } else if (!gigMode && request.songId) {
                                     openSingerModal(request.songId)
                                   }
                                 }
@@ -11275,7 +11379,9 @@ function App() {
                         </div>
                       )}
                       <div className="mt-4 space-y-2">
-                        {sectionSongs.map((song) => (
+                        {sectionSongs.map((song) => {
+                            const isLockedInGigMode = gigMode && isGigSongLocked(song.id)
+                            return (
                             <div key={song.id} className="space-y-2">
                               {draggedSectionSongId &&
                                 draggedSectionSongId !== song.id &&
@@ -11295,6 +11401,8 @@ function App() {
                                   appState.currentSongId === song.id
                                     ? 'border-emerald-300/70 bg-emerald-400/15 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
                                     : 'border-white/10 bg-slate-950/40'
+                                } ${
+                                  isLockedInGigMode ? 'opacity-45' : ''
                                 } ${
                                   recentlyMovedSongId === song.id
                                     ? 'ring-2 ring-teal-300/80 bg-teal-300/20'
@@ -11351,7 +11459,8 @@ function App() {
                                 }}
                                 onClick={() => {
                                   if (gigMode) {
-                                    setGigCurrentSong(song.id)
+                                    markGigSongAsSelected(song.id)
+                                    if (isLockedInGigMode) return
                                   }
                                   openDocsForSong(song.id)
                                 }}
@@ -11359,7 +11468,8 @@ function App() {
                                   if (event.key === 'Enter' || event.key === ' ') {
                                     event.preventDefault()
                                     if (gigMode) {
-                                      setGigCurrentSong(song.id)
+                                      markGigSongAsSelected(song.id)
+                                      if (isLockedInGigMode) return
                                     }
                                     openDocsForSong(song.id)
                                   }
@@ -11483,7 +11593,7 @@ function App() {
                                 })()}
                             </div>
                           </div>
-                        ))}
+                        )})}
                       </div>
                     </div>
                   )

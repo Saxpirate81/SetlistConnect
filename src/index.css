@@ -862,6 +862,128 @@ button[aria-label="Close"] {
   background: #f1f5f9;
 }
 
+/* Shared link setlist needs a screen-optimized layout on phones. */
+@media (max-width: 900px) {
+  .shared-setlist-shell {
+    border-radius: 14px;
+    padding: 12px;
+  }
+
+  .shared-setlist-container {
+    gap: 10px;
+    font-size: 11px;
+  }
+
+  .shared-setlist-container .print-header {
+    grid-template-columns: 1fr;
+    row-gap: 7px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+
+  .shared-setlist-container .print-band-name {
+    grid-column: auto;
+    grid-row: auto;
+    justify-self: start;
+    text-align: left;
+    font-size: 20px;
+    line-height: 1.1;
+    white-space: normal;
+  }
+
+  .shared-setlist-container .print-header-details {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .shared-setlist-container .print-badge {
+    grid-column: auto;
+    grid-row: auto;
+    justify-self: start;
+  }
+
+  .shared-setlist-container .print-layout {
+    grid-template-columns: 1fr;
+    column-gap: 0;
+    row-gap: 10px;
+  }
+
+  .shared-setlist-container .print-section-box {
+    padding: 8px;
+    border-radius: 12px;
+  }
+
+  .shared-setlist-container .print-section-title {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    padding: 7px 8px;
+    margin-bottom: 6px;
+  }
+
+  .shared-setlist-container .print-grid {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .shared-setlist-container .print-list {
+    gap: 6px;
+    padding: 6px;
+  }
+
+  .shared-setlist-container .print-row {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    row-gap: 4px;
+    padding: 8px 9px;
+  }
+
+  .shared-setlist-container .print-row-title {
+    font-size: 0.98rem;
+    line-height: 1.25;
+    padding-top: 0;
+    min-height: 0;
+  }
+
+  .shared-setlist-container .artist-name {
+    font-size: 0.74rem;
+  }
+
+  .shared-setlist-container .print-row-subtitle {
+    grid-column: 1;
+    text-align: left;
+    font-size: 0.76rem;
+    line-height: 1.2;
+    margin-top: 0;
+  }
+
+  .shared-setlist-container .print-song-meta {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .shared-setlist-container .musical-key {
+    min-width: 0;
+    font-size: 0.78rem;
+    border-radius: 999px;
+    background: #e2e8f0;
+    padding: 1px 6px;
+  }
+
+  .shared-setlist-container .print-assignee-names {
+    font-size: 0.68rem;
+    line-height: 1.2;
+  }
+
+  .shared-setlist-container .print-icon-link {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+}
+
 .pdf-export-mode .print-section-title {
   position: static;
 }

@@ -6279,8 +6279,8 @@ function App() {
                         {sharedDocsError}
                       </div>
                     )}
-                    <div className="w-full bg-white p-4 sm:p-6">
-                      <div className="print-container">
+                    <div className="w-full bg-white p-3 sm:p-6 shared-setlist-shell">
+                      <div className="print-container shared-setlist-container">
                         <div className="print-header">
                           <div className="print-band-name">
                             {sharedPlaylistView.bandName?.trim() || activeBandName || sharedPlaylistView.gigName || 'Band'}

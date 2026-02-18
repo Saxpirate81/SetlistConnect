@@ -174,9 +174,9 @@ a:hover {
 
 .print-container {
   display: grid;
-  gap: 10px;
+  gap: 6px;
   font-family: "Inter", system-ui, -apple-system, sans-serif;
-  font-size: 11px;
+  font-size: 9.5px;
   color: #0b0f14;
 }
 
@@ -217,20 +217,20 @@ a:hover {
 
 .print-layout {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-areas:
-    "special musicians"
-    "special latin"
-    "dinner dance";
-  gap: 10px;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  align-items: start;
+  grid-auto-flow: row;
 }
 
 .print-section-box {
   border: 1px solid #e2e8f0;
   border-radius: 16px;
-  padding: 12px;
-  background: #f8fafc;
+  padding: 8px;
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 
 .print-special {
@@ -253,13 +253,59 @@ a:hover {
   grid-area: dance;
 }
 
+.print-band-name {
+  grid-column: 1 / -1;
+  margin: 0 0 4px;
+  text-align: center;
+  font-size: 30px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+  color: #f8fafc;
+  text-transform: uppercase;
+}
+
 .print-section-title {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   color: #0f172a;
+  background: rgba(148, 163, 184, 0.18);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 10px;
+  padding: 6px 8px;
+}
+
+.print-tone-special {
+  background: linear-gradient(180deg, #fdf4ff 0%, #fae8ff 100%);
+  border-color: #e9d5ff;
+}
+
+.print-tone-musicians {
+  background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%);
+  border-color: #bfdbfe;
+}
+
+.print-tone-dinner {
+  background: linear-gradient(180deg, #fffbeb 0%, #fef3c7 100%);
+  border-color: #fde68a;
+}
+
+.print-tone-dance {
+  background: linear-gradient(180deg, #ecfeff 0%, #cffafe 100%);
+  border-color: #a5f3fc;
+}
+
+.print-tone-latin {
+  background: linear-gradient(180deg, #fff1f2 0%, #ffe4e6 100%);
+  border-color: #fecdd3;
+}
+
+.print-tone-default {
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border-color: #e2e8f0;
 }
 
 .print-grid {
@@ -274,6 +320,8 @@ a:hover {
   padding: 8px 10px;
   background: #ffffff;
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 
 .print-card-title {
@@ -289,14 +337,20 @@ a:hover {
 
 .print-list {
   display: grid;
-  gap: 6px;
+  gap: 4px;
+  background: rgba(226, 232, 240, 0.35);
+  border: 1px solid rgba(203, 213, 225, 0.7);
+  border-radius: 12px;
+  padding: 6px;
 }
 
 .print-row {
   border: 1px solid #e2e8f0;
   border-radius: 12px;
-  padding: 8px 10px;
+  padding: 6px 8px;
   background: #ffffff;
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 
 .print-row-title {
@@ -360,7 +414,7 @@ a:hover {
 @media print {
   @page {
     size: letter;
-    margin: 0.4in;
+    margin: 0.35in;
   }
 
   body {
@@ -374,15 +428,40 @@ a:hover {
     visibility: hidden;
   }
 
-  #printable-setlist,
-  #printable-setlist * {
+  #printable-setlist-hidden,
+  #printable-setlist-hidden * {
     visibility: visible;
   }
 
-  #printable-setlist {
-    position: absolute;
-    inset: 0;
+  #printable-setlist-hidden {
+    position: static;
+    inset: auto;
     display: block;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  .print-layout {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    align-items: start;
+    grid-auto-flow: row;
+  }
+
+  .print-special,
+  .print-musicians,
+  .print-latin,
+  .print-dinner,
+  .print-dance {
+    grid-area: auto;
+  }
+
+  .print-list,
+  .print-grid {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 
 }

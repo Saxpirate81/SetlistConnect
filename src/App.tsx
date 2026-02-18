@@ -114,6 +114,7 @@ type SharedPlaylistView = {
   gigName: string
   date: string
   venueAddress?: string
+  musicians?: Musician[]
   entries: PlaylistEntry[]
 }
 
@@ -1585,12 +1586,17 @@ function App() {
           activePlaylistEntries.findIndex((entry) => entry.key === currentShareEntry.key),
         )
       : 0
+    const sharedMusicians: Musician[] = appState.gigMusicians
+      .filter((row) => row.gigId === currentSetlist.id && row.status !== 'out')
+      .map((row) => appState.musicians.find((musician) => musician.id === row.musicianId))
+      .filter((musician): musician is Musician => Boolean(musician))
     const payload = {
       setlistId: currentSetlist.id,
       bandName: activeBandName || 'Band',
       gigName: currentSetlist.gigName,
       date: currentSetlist.date,
       venueAddress: currentSetlist.venueAddress ?? '',
+      musicians: sharedMusicians,
       entries: activePlaylistEntries.map((entry) => ({
         key: entry.key,
         title: entry.title,
@@ -5352,6 +5358,7 @@ function App() {
           gigName: parsed.gigName || 'Shared Gig',
           date: parsed.date || '',
           venueAddress: parsed.venueAddress ?? '',
+          musicians: parsed.musicians ?? [],
           entries: parsed.entries,
         })
         setSharedPlaylistError(null)
@@ -5657,8 +5664,13 @@ function App() {
   }, [parseDocumentInstruments, sharedPlaylistView, supabase])
 
   useEffect(() => {
-    if (!sharedPlaylistView || !supabase) {
+    if (!sharedPlaylistView) {
       setSharedGigMusicians([])
+      return
+    }
+    const payloadMusicians = sharedPlaylistView.musicians ?? []
+    setSharedGigMusicians(payloadMusicians)
+    if (!supabase || payloadMusicians.length > 0) {
       return
     }
     const gigId = sharedPlaylistView.setlistId
@@ -5669,7 +5681,7 @@ function App() {
         .select('musician_id, status')
         .eq('gig_id', gigId)
       if (cancelled || gigMusicianError) {
-        setSharedGigMusicians([])
+        setSharedGigMusicians(payloadMusicians)
         return
       }
       const activeMusicianIds = Array.from(
@@ -5681,7 +5693,7 @@ function App() {
         ),
       )
       if (activeMusicianIds.length === 0) {
-        setSharedGigMusicians([])
+        setSharedGigMusicians(payloadMusicians)
         return
       }
       const { data: musicianRows, error: musiciansError } = await supabase
@@ -5690,7 +5702,7 @@ function App() {
         .in('id', activeMusicianIds)
         .is('deleted_at', null)
       if (cancelled || musiciansError) {
-        setSharedGigMusicians([])
+        setSharedGigMusicians(payloadMusicians)
         return
       }
       const musicians: Musician[] = (musicianRows ?? []).map((row) => ({

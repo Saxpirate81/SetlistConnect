@@ -6277,7 +6277,7 @@ function App() {
                       <div className="print-container">
                         <div className="print-header">
                           <div className="print-band-name">
-                            {sharedPlaylistView.bandName?.trim() || activeBandName || 'Band'}
+                            {sharedPlaylistView.bandName?.trim() || activeBandName || sharedPlaylistView.gigName || 'Band'}
                           </div>
                           <div className="print-header-details">
                             <div className="print-title">{sharedPlaylistView.gigName}</div>
@@ -6373,8 +6373,8 @@ function App() {
                                         </div>
                                       </div>
                                       <div className="print-row-subtitle print-song-meta">
-                                        <span className="musical-key">{keyLabel}</span>
-                                        <span className="print-assignee-names text-[0.86em]">
+                                        <span className="musical-key text-[0.72em]">{keyLabel}</span>
+                                        <span className="print-assignee-names text-[0.62em]">
                                           {singerNames.length ? formatSingerAssignmentNames(singerNames) : 'No singers'}
                                         </span>
                                       </div>

@@ -399,6 +399,10 @@ function App() {
   const [sharedPlaylistView, setSharedPlaylistView] = useState<SharedPlaylistView | null>(null)
   const [sharedPlaylistLoading, setSharedPlaylistLoading] = useState(false)
   const [sharedPlaylistError, setSharedPlaylistError] = useState<string | null>(null)
+  const [sharedPublicTab, setSharedPublicTab] = useState<'setlist' | 'playlist'>('setlist')
+  const [sharedDocuments, setSharedDocuments] = useState<Document[]>([])
+  const [sharedDocsLoading, setSharedDocsLoading] = useState(false)
+  const [sharedDocsError, setSharedDocsError] = useState<string | null>(null)
   const [playlistSingerFilter, setPlaylistSingerFilter] = useState('__all__')
   const [playlistShareStatus, setPlaylistShareStatus] = useState('')
   const playlistShareTimerRef = useRef<number | null>(null)
@@ -932,6 +936,44 @@ function App() {
     }
     return 'border-slate-300/25 bg-slate-700/30 text-slate-100'
   }
+  const getPlaylistTagClasses = (tag: string) => {
+    const normalized = tag.trim().toLowerCase()
+    if (normalized === 'special request' || normalized === 'special requests') {
+      return 'bg-fuchsia-500/20 text-fuchsia-100'
+    }
+    if (normalized.includes('dinner')) {
+      return 'bg-amber-500/20 text-amber-100'
+    }
+    if (normalized.includes('dance')) {
+      return 'bg-cyan-500/20 text-cyan-100'
+    }
+    if (normalized.includes('latin')) {
+      return 'bg-pink-500/20 text-pink-100'
+    }
+    return 'bg-slate-500/20 text-slate-200'
+  }
+  const getPlaylistQueueItemButtonClasses = (isActive: boolean) =>
+    `w-full rounded-2xl border px-3 py-3 text-left transition ${
+      isActive ? 'border-teal-300/70 bg-teal-400/10' : 'border-white/10 bg-slate-950/40'
+    }`
+  const getPlaylistSectionCardClasses = (section: string) =>
+    `rounded-2xl border p-2 ${getPlaylistToneClasses(section)}`
+  const playlistSectionHeaderClasses =
+    'mb-2 rounded-lg bg-black/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]'
+  const getSharedSongDocuments = useCallback(
+    (songId?: string) => {
+      if (!songId) return []
+      return sharedDocuments.filter((doc) => doc.songId === songId)
+    },
+    [sharedDocuments],
+  )
+  const getSharedVisibleSongDocuments = useCallback(
+    (songId?: string) =>
+      getSharedSongDocuments(songId).filter(
+        (doc) => doc.type === 'Lyrics' || documentMatchesActiveInstruments(doc),
+      ),
+    [documentMatchesActiveInstruments, getSharedSongDocuments],
+  )
   const getOrderedSpecialRequests = useCallback((gigId: string) => {
     const base = appState.specialRequests.filter((request) => request.gigId === gigId)
     const order = specialRequestOrderByGig[gigId] ?? []
@@ -5544,6 +5586,62 @@ function App() {
   }, [appState.setlists, isSetlistTypeTag, normalizePlaylistSection])
 
   useEffect(() => {
+    if (!sharedPlaylistView) {
+      setSharedDocuments([])
+      setSharedDocsError(null)
+      setSharedDocsLoading(false)
+      return
+    }
+    setSharedPublicTab('setlist')
+    if (!supabase) {
+      setSharedDocsError('Documents are unavailable right now.')
+      setSharedDocsLoading(false)
+      return
+    }
+    const songIds = Array.from(
+      new Set(sharedPlaylistView.entries.map((entry) => entry.songId).filter(Boolean)),
+    )
+    if (songIds.length === 0) {
+      setSharedDocuments([])
+      setSharedDocsError(null)
+      setSharedDocsLoading(false)
+      return
+    }
+    let cancelled = false
+    setSharedDocsLoading(true)
+    setSharedDocsError(null)
+    void (async () => {
+      const { data, error } = await supabase
+        .from('SetlistDocuments')
+        .select('id, song_id, title, type, instrument, url, content')
+        .in('song_id', songIds)
+      if (cancelled) return
+      if (error) {
+        setSharedDocuments([])
+        setSharedDocsError(error.message ?? 'Failed to load shared documents.')
+        setSharedDocsLoading(false)
+        return
+      }
+      const docs: Document[] = (data ?? [])
+        .map((row) => ({
+          id: row.id,
+          songId: row.song_id,
+          title: row.title,
+          type: row.type,
+          instrument: parseDocumentInstruments(row.instrument ?? 'All').join('||'),
+          url: row.url ?? undefined,
+          content: row.content ?? undefined,
+        }))
+        .filter((doc) => doc.type === 'Chart' || doc.type === 'Lead Sheet' || doc.type === 'Lyrics')
+      setSharedDocuments(docs)
+      setSharedDocsLoading(false)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [parseDocumentInstruments, sharedPlaylistView, supabase])
+
+  useEffect(() => {
     if (playlistSingerFilter === '__all__') return
     const hasSelected = playlistSingerOptions.some(
       (option) => option.toLowerCase() === playlistSingerFilter.toLowerCase(),
@@ -5908,7 +6006,59 @@ function App() {
 
   if ((sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && !authUserId) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-4 py-6 text-white">
+      <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-4 pb-24 pt-6 text-white">
+        {appState.instrument === null && (
+          <div
+            className="fixed inset-0 z-[110] flex items-center bg-slate-950/80 py-6"
+            onClick={() => setAppState((prev) => ({ ...prev, instrument: ['All'] }))}
+          >
+            <div
+              className="mx-auto w-full max-w-md max-h-[85vh] overflow-hidden rounded-t-3xl bg-slate-900 sm:rounded-3xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
+                <h2 className="text-lg font-semibold">Select your instrument</h2>
+                <p className="mt-1 text-sm text-slate-300">
+                  Pick one or more instruments to view matching charts and lyrics.
+                </p>
+              </div>
+              <div className="max-h-[calc(85vh-92px)] overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  {INSTRUMENTS.map((instrument) => (
+                    <button
+                      key={`shared-instrument-${instrument}`}
+                      className={`rounded-xl border px-3 py-2 text-sm ${
+                        instrumentSelectionDraft.includes(instrument)
+                          ? 'border-teal-300 bg-teal-400/10 text-teal-100'
+                          : 'border-white/10 bg-white/5'
+                      }`}
+                      onClick={() =>
+                        setInstrumentSelectionDraft((current) =>
+                          current.includes(instrument)
+                            ? current.filter((item) => item !== instrument)
+                            : [...current, instrument],
+                        )
+                      }
+                    >
+                      {instrument}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  className="mt-4 w-full rounded-xl bg-teal-400/90 px-3 py-2 text-sm font-semibold text-slate-950"
+                  onClick={() =>
+                    setAppState((prev) => ({
+                      ...prev,
+                      instrument: instrumentSelectionDraft.length ? instrumentSelectionDraft : ['All'],
+                    }))
+                  }
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="mx-auto w-full max-w-3xl">
           <div className="rounded-3xl border border-white/10 bg-slate-900/90 p-4">
             <div className="flex items-start justify-between gap-3">
@@ -5938,194 +6088,64 @@ function App() {
             )}
             {sharedPlaylistView && (
               <>
-                <div className="mt-4 space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
+                <div className="mt-4 flex items-center justify-between gap-2">
+                  <span className="text-xs text-slate-300">
+                    Instrument filter:{' '}
+                    <span className="font-semibold text-teal-200">
+                      {(appState.instrument ?? ['All']).join(', ')}
+                    </span>
+                  </span>
                   <button
                     type="button"
-                    className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
-                    disabled={visiblePlaylistEntries.length === 0}
-                    onClick={() => movePlaylistBy(-1)}
+                    className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-slate-300"
+                    onClick={() => {
+                      setInstrumentSelectionDraft(appState.instrument ?? [])
+                      setAppState((prev) => ({ ...prev, instrument: null }))
+                    }}
                   >
-                    ⏮ Prev
+                    Change
                   </button>
-                  <button
-                    type="button"
-                    className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
-                    disabled={visiblePlaylistEntries.length === 0}
-                    onClick={() => movePlaylistBy(1)}
-                  >
-                    ⏭ Next
-                  </button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    className={`min-h-[44px] rounded-xl border px-3 py-2 text-sm ${
-                      playlistAutoAdvance
-                        ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
-                        : 'border-white/10 text-slate-300'
-                    }`}
-                    onClick={() => setPlaylistAutoAdvance((current) => !current)}
-                  >
-                    Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
-                  </button>
-                  <select
-                    className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-300"
-                    value={playlistSingerFilter}
-                    onChange={(event) => setPlaylistSingerFilter(event.target.value)}
-                  >
-                    <option value="__all__">All singers</option>
-                    {playlistSingerOptions.map((singer) => (
-                      <option key={`shared-playlist-singer-${singer}`} value={singer}>
-                        {singer}
-                      </option>
-                    ))}
-                  </select>
-                  </div>
                 </div>
-                <div className="mt-4 h-[calc(100vh-250px)] min-h-[360px] overflow-hidden">
-                  <div className="relative h-full min-h-0">
-                    <div
-                      ref={sharedPlaylistPlayerBlockRef}
-                      className={`relative z-10 transition-opacity duration-200 ${
-                        sharedPlaylistDrawerOverlay ? 'pointer-events-none opacity-0' : 'opacity-100'
-                      }`}
-                    >
-                      {currentPlaylistEntry ? (
-                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 transition-all duration-300">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-lg font-semibold">{currentPlaylistEntry.title}</p>
-                              <p className="text-xs text-slate-400">{currentPlaylistEntry.artist || ' '}</p>
-                              <p className="mt-1 text-xs text-teal-200">
-                                {getPlaylistAssignmentText(currentPlaylistEntry)}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                            {!currentPlaylistEntry.audioUrl ? (
-                              <div className="text-sm text-slate-400">
-                                No audio URL saved for this song yet.
-                              </div>
-                            ) : isSpotifyUrl(currentPlaylistEntry.audioUrl) ? (
-                              <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
-                                <div className="text-sm text-slate-200">
-                                  Spotify track ready. Tap to open in Spotify.
-                                </div>
-                                <a
-                                  className="rounded-lg bg-emerald-500/90 px-3 py-2 text-xs font-semibold text-slate-950"
-                                  href={currentPlaylistEntry.audioUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  Open Spotify
-                                </a>
-                              </div>
-                            ) : isAudioFileUrl(currentPlaylistEntry.audioUrl) ? (
-                              <audio
-                                key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared`}
-                                className="w-full"
-                                controls
-                                autoPlay
-                                src={currentPlaylistEntry.audioUrl}
-                                onEnded={() => {
-                                  if (!playlistAutoAdvance || visiblePlaylistEntries.length <= 1) return
-                                  movePlaylistBy(1)
-                                }}
-                              />
-                            ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
-                              <iframe
-                                key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared`}
-                                className="h-[145px] w-full rounded-xl border border-white/10 sm:h-[170px]"
-                                src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
-                                title="YouTube playlist item"
-                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                                allowFullScreen
-                              />
-                            ) : (
-                              <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
-                                <div className="text-sm text-slate-200">
-                                  External audio link ready. Open in a new tab.
-                                </div>
-                                <a
-                                  className="rounded-lg bg-teal-500/90 px-3 py-2 text-xs font-semibold text-slate-950"
-                                  href={currentPlaylistEntry.audioUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  Open Link
-                                </a>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">
-                          No playlist songs found for this gig yet.
-                        </div>
-                      )}
-                    </div>
 
-                    <div
-                      className="absolute inset-x-0 bottom-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl transition-all duration-300"
-                      style={{
-                        top: sharedPlaylistDrawerOverlay ? 0 : sharedPlaylistDrawerDockTop,
-                      }}
-                      onTouchStart={handleSharedPlaylistDrawerTouchStart}
-                      onTouchMove={handleSharedPlaylistDrawerTouchMove}
-                      onTouchEnd={handleSharedPlaylistDrawerTouchEnd}
-                    >
-                      <div className="flex items-center justify-center py-2">
-                        <div className="h-1 w-12 rounded-full bg-white/25" />
+                {sharedPublicTab === 'setlist' ? (
+                  <div className="mt-4 h-[calc(100vh-260px)] min-h-[360px] overflow-y-auto pr-1">
+                    {sharedDocsLoading && (
+                      <div className="mb-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
+                        Loading charts and lyrics...
                       </div>
-                      <div
-                        className="max-h-full overflow-y-auto px-2 pb-2"
-                        onScroll={handleSharedPlaylistDrawerScroll}
-                      >
-                        <div className="space-y-3 pb-2">
-                          {groupedPlaylistSections.map((group) => (
-                            <div
-                              key={`shared-playlist-group-${group.section}`}
-                              className={`rounded-2xl border p-2 ${getPlaylistToneClasses(group.section)}`}
-                            >
-                              <div className="mb-2 rounded-lg bg-black/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]">
-                                {group.section}
-                              </div>
-                              <div className="space-y-2">
-                                {group.items.map(({ entry: item, index }) => (
+                    )}
+                    {sharedDocsError && (
+                      <div className="mb-3 rounded-xl border border-red-400/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                        {sharedDocsError}
+                      </div>
+                    )}
+                    <div className="space-y-3 pb-2">
+                      {groupedPlaylistSections.map((group) => (
+                        <div
+                          key={`shared-setlist-group-${group.section}`}
+                          className={getPlaylistSectionCardClasses(group.section)}
+                        >
+                          <div className={playlistSectionHeaderClasses}>{group.section}</div>
+                          <div className="space-y-2">
+                            {group.items.map(({ entry: item, index }) => {
+                              const docs = getSharedVisibleSongDocuments(item.songId)
+                              return (
+                                <div key={`${item.key}-shared-setlist-row`} className="rounded-2xl border border-white/10 bg-slate-950/40 p-2">
                                   <button
                                     type="button"
-                                    key={`${item.key}-shared-list`}
-                                    className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
-                                      index === playlistIndex
-                                        ? 'border-teal-300/70 bg-teal-400/10'
-                                        : 'border-white/10 bg-slate-950/40'
-                                    }`}
+                                    className={getPlaylistQueueItemButtonClasses(index === playlistIndex)}
                                     onClick={() => jumpToPlaylistIndex(index)}
                                   >
                                     <div className="flex items-center justify-between gap-3">
                                       <div>
                                         <div className="text-sm font-semibold text-slate-100">{item.title}</div>
                                         <div className="text-[11px] text-slate-400">{item.artist || ' '}</div>
-                                        <div className="mt-0.5 text-[11px] text-teal-200">
-                                          {getPlaylistAssignmentText(item)}
-                                        </div>
                                       </div>
                                       <div className="flex flex-wrap justify-end gap-1">
                                         {item.tags.map((tag) => (
                                           <span
-                                            key={`${item.key}-shared-tag-${tag}`}
-                                            className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
-                                              tag === 'Special Request' || tag === 'Special Requests'
-                                                ? 'bg-fuchsia-500/20 text-fuchsia-100'
-                                                : tag.toLowerCase().includes('dinner')
-                                                  ? 'bg-amber-500/20 text-amber-100'
-                                                  : tag.toLowerCase().includes('dance')
-                                                    ? 'bg-cyan-500/20 text-cyan-100'
-                                                    : tag.toLowerCase().includes('latin')
-                                                      ? 'bg-pink-500/20 text-pink-100'
-                                                      : 'bg-slate-500/20 text-slate-200'
-                                            }`}
+                                            key={`${item.key}-shared-setlist-tag-${tag}`}
+                                            className={`rounded-full px-2 py-1 text-[10px] font-semibold ${getPlaylistTagClasses(tag)}`}
                                           >
                                             {tag}
                                           </span>
@@ -6133,19 +6153,276 @@ function App() {
                                       </div>
                                     </div>
                                   </button>
-                                ))}
+                                  {docs.length > 0 && (
+                                    <div className="mt-2 space-y-1">
+                                      {docs.map((doc) => (
+                                        <div
+                                          key={`${item.key}-shared-doc-${doc.id}`}
+                                          className="rounded-lg border border-white/10 bg-slate-900/60 px-2 py-1.5 text-xs"
+                                        >
+                                          <div className="font-semibold text-slate-100">
+                                            {doc.title} · {doc.type}
+                                          </div>
+                                          {doc.url ? (
+                                            <a
+                                              className="mt-0.5 inline-block text-teal-200 underline"
+                                              href={getDocumentViewerUrl(doc.url)}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                            >
+                                              Open document
+                                            </a>
+                                          ) : null}
+                                          {doc.type === 'Lyrics' && doc.content ? (
+                                            <details className="mt-1 text-slate-300">
+                                              <summary className="cursor-pointer text-[11px] text-slate-400">
+                                                View lyrics
+                                              </summary>
+                                              <pre className="mt-1 whitespace-pre-wrap font-sans text-[11px]">
+                                                {doc.content}
+                                              </pre>
+                                            </details>
+                                          ) : null}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mt-4 space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
+                          disabled={visiblePlaylistEntries.length === 0}
+                          onClick={() => movePlaylistBy(-1)}
+                        >
+                          ⏮ Prev
+                        </button>
+                        <button
+                          type="button"
+                          className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
+                          disabled={visiblePlaylistEntries.length === 0}
+                          onClick={() => movePlaylistBy(1)}
+                        >
+                          ⏭ Next
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          className={`min-h-[44px] rounded-xl border px-3 py-2 text-sm ${
+                            playlistAutoAdvance
+                              ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
+                              : 'border-white/10 text-slate-300'
+                          }`}
+                          onClick={() => setPlaylistAutoAdvance((current) => !current)}
+                        >
+                          Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
+                        </button>
+                        <select
+                          className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-300"
+                          value={playlistSingerFilter}
+                          onChange={(event) => setPlaylistSingerFilter(event.target.value)}
+                        >
+                          <option value="__all__">All singers</option>
+                          {playlistSingerOptions.map((singer) => (
+                            <option key={`shared-playlist-singer-${singer}`} value={singer}>
+                              {singer}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="mt-4 h-[calc(100vh-300px)] min-h-[330px] overflow-hidden">
+                      <div className="relative h-full min-h-0">
+                        <div
+                          ref={sharedPlaylistPlayerBlockRef}
+                          className={`relative z-10 transition-opacity duration-200 ${
+                            sharedPlaylistDrawerOverlay ? 'pointer-events-none opacity-0' : 'opacity-100'
+                          }`}
+                        >
+                          {currentPlaylistEntry ? (
+                            <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 transition-all duration-300">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-lg font-semibold">{currentPlaylistEntry.title}</p>
+                                  <p className="text-xs text-slate-400">{currentPlaylistEntry.artist || ' '}</p>
+                                  <p className="mt-1 text-xs text-teal-200">
+                                    {getPlaylistAssignmentText(currentPlaylistEntry)}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                                {!currentPlaylistEntry.audioUrl ? (
+                                  <div className="text-sm text-slate-400">
+                                    No audio URL saved for this song yet.
+                                  </div>
+                                ) : isSpotifyUrl(currentPlaylistEntry.audioUrl) ? (
+                                  <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
+                                    <div className="text-sm text-slate-200">
+                                      Spotify track ready. Tap to open in Spotify.
+                                    </div>
+                                    <a
+                                      className="rounded-lg bg-emerald-500/90 px-3 py-2 text-xs font-semibold text-slate-950"
+                                      href={currentPlaylistEntry.audioUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      Open Spotify
+                                    </a>
+                                  </div>
+                                ) : isAudioFileUrl(currentPlaylistEntry.audioUrl) ? (
+                                  <audio
+                                    key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared`}
+                                    className="w-full"
+                                    controls
+                                    autoPlay
+                                    src={currentPlaylistEntry.audioUrl}
+                                    onEnded={() => {
+                                      if (!playlistAutoAdvance || visiblePlaylistEntries.length <= 1) return
+                                      movePlaylistBy(1)
+                                    }}
+                                  />
+                                ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
+                                  <iframe
+                                    key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared`}
+                                    className="h-[145px] w-full rounded-xl border border-white/10 sm:h-[170px]"
+                                    src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
+                                    title="YouTube playlist item"
+                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                    allowFullScreen
+                                  />
+                                ) : (
+                                  <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
+                                    <div className="text-sm text-slate-200">
+                                      External audio link ready. Open in a new tab.
+                                    </div>
+                                    <a
+                                      className="rounded-lg bg-teal-500/90 px-3 py-2 text-xs font-semibold text-slate-950"
+                                      href={currentPlaylistEntry.audioUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      Open Link
+                                    </a>
+                                  </div>
+                                )}
                               </div>
                             </div>
-                          ))}
+                          ) : (
+                            <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">
+                              No playlist songs found for this gig yet.
+                            </div>
+                          )}
+                        </div>
+
+                        <div
+                          className="absolute inset-x-0 bottom-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl transition-all duration-300"
+                          style={{
+                            top: sharedPlaylistDrawerOverlay ? 0 : sharedPlaylistDrawerDockTop,
+                          }}
+                          onTouchStart={handleSharedPlaylistDrawerTouchStart}
+                          onTouchMove={handleSharedPlaylistDrawerTouchMove}
+                          onTouchEnd={handleSharedPlaylistDrawerTouchEnd}
+                        >
+                          <div className="flex items-center justify-center py-2">
+                            <div className="h-1 w-12 rounded-full bg-white/25" />
+                          </div>
+                          <div
+                            className="max-h-full overflow-y-auto px-2 pb-2"
+                            onScroll={handleSharedPlaylistDrawerScroll}
+                          >
+                            <div className="space-y-3 pb-2">
+                              {groupedPlaylistSections.map((group) => (
+                                <div
+                                  key={`shared-playlist-group-${group.section}`}
+                                  className={getPlaylistSectionCardClasses(group.section)}
+                                >
+                                  <div className={playlistSectionHeaderClasses}>
+                                    {group.section}
+                                  </div>
+                                  <div className="space-y-2">
+                                    {group.items.map(({ entry: item, index }) => (
+                                      <button
+                                        type="button"
+                                        key={`${item.key}-shared-list`}
+                                        className={getPlaylistQueueItemButtonClasses(index === playlistIndex)}
+                                        onClick={() => jumpToPlaylistIndex(index)}
+                                      >
+                                        <div className="flex items-center justify-between gap-3">
+                                          <div>
+                                            <div className="text-sm font-semibold text-slate-100">{item.title}</div>
+                                            <div className="text-[11px] text-slate-400">{item.artist || ' '}</div>
+                                            <div className="mt-0.5 text-[11px] text-teal-200">
+                                              {getPlaylistAssignmentText(item)}
+                                            </div>
+                                          </div>
+                                          <div className="flex flex-wrap justify-end gap-1">
+                                            {item.tags.map((tag) => (
+                                              <span
+                                                key={`${item.key}-shared-tag-${tag}`}
+                                                className={`rounded-full px-2 py-1 text-[10px] font-semibold ${getPlaylistTagClasses(tag)}`}
+                                              >
+                                                {tag}
+                                              </span>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                </div>
+                  </>
+                )}
               </>
             )}
           </div>
         </div>
+        {sharedPlaylistView && (
+          <nav className="fixed bottom-0 left-0 right-0 z-[90] border-t border-white/10 bg-slate-950/95 backdrop-blur">
+            <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-2 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
+              <button
+                type="button"
+                className={`flex min-w-[140px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                  sharedPublicTab === 'setlist'
+                    ? 'border-teal-300/70 bg-teal-400/10 text-teal-100'
+                    : 'border-white/10 text-slate-300'
+                }`}
+                onClick={() => setSharedPublicTab('setlist')}
+              >
+                <img src={downloadPdfIcon} alt="" className="h-5 w-5 object-contain" />
+                Setlist
+              </button>
+              <button
+                type="button"
+                className={`flex min-w-[140px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                  sharedPublicTab === 'playlist'
+                    ? 'border-teal-300/70 bg-teal-400/10 text-teal-100'
+                    : 'border-white/10 text-slate-300'
+                }`}
+                onClick={() => setSharedPublicTab('playlist')}
+              >
+                <img src={openPlaylistIcon} alt="" className="h-5 w-5 object-contain" />
+                Audio Playlist
+              </button>
+            </div>
+          </nav>
+        )}
       </div>
     )
   }
@@ -10604,7 +10881,7 @@ function App() {
                 </div>
               </div>
               <div className="mt-4 space-y-2">
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-2 md:hidden">
                 <button
                   type="button"
                   className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
@@ -10661,15 +10938,17 @@ function App() {
             </div>
 
             <div className="min-h-0 flex-1 overflow-hidden px-5 pb-6 pt-4">
-              <div className="relative h-full min-h-0">
+              <div className="relative h-full min-h-0 md:flex md:gap-4">
               <div
                 ref={playlistPlayerBlockRef}
-                className={`relative z-10 transition-opacity duration-200 ${
-                  playlistDrawerOverlay ? 'pointer-events-none opacity-0' : 'opacity-100'
+                className={`relative z-10 transition-opacity duration-200 md:flex-1 ${
+                  playlistDrawerOverlay
+                    ? 'pointer-events-none opacity-0 md:pointer-events-auto md:opacity-100'
+                    : 'opacity-100'
                 }`}
               >
               {currentPlaylistEntry ? (
-                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 transition-all duration-300">
+                <div className="rounded-2xl bg-gradient-to-b from-slate-900/70 to-slate-950/60 p-4 shadow-[0_12px_36px_rgba(2,6,23,0.45)] ring-1 ring-white/10 transition-all duration-300">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-lg font-semibold">{currentPlaylistEntry.title}</p>
@@ -10682,15 +10961,7 @@ function App() {
                       {currentPlaylistEntry.tags.map((tag) => (
                         <span
                           key={`${currentPlaylistEntry.key}-${tag}`}
-                          className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
-                            tag === 'Special Request'
-                              ? 'bg-fuchsia-500/20 text-fuchsia-100'
-                              : tag === 'Dinner'
-                                ? 'bg-amber-500/20 text-amber-100'
-                                : tag === 'Dance'
-                                  ? 'bg-cyan-500/20 text-cyan-100'
-                                  : 'bg-pink-500/20 text-pink-100'
-                          }`}
+                          className={`rounded-full px-2 py-1 text-[10px] font-semibold ${getPlaylistTagClasses(tag)}`}
                         >
                           {tag}
                         </span>
@@ -10698,13 +10969,13 @@ function App() {
                     </div>
                   </div>
 
-                  <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                  <div className="mt-3 rounded-xl bg-slate-950/35 p-3">
                     {!currentPlaylistEntry.audioUrl ? (
                       <div className="text-sm text-slate-400">
                         No audio URL saved for this song yet.
                       </div>
                     ) : isSpotifyUrl(currentPlaylistEntry.audioUrl) ? (
-                      <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
+                      <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-900/70 p-3 ring-1 ring-white/10">
                         <div className="text-sm text-slate-200">
                           Spotify track ready. Tap to open in Spotify.
                         </div>
@@ -10732,14 +11003,14 @@ function App() {
                     ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
                       <iframe
                         key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
-                        className="h-[145px] w-full rounded-xl border border-white/10 sm:h-[170px]"
+                        className="h-[180px] w-full rounded-xl ring-1 ring-white/10 md:h-[min(58vh,520px)]"
                         src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
                         title="YouTube playlist item"
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                         allowFullScreen
                       />
                     ) : (
-                      <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
+                      <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-900/70 p-3 ring-1 ring-white/10">
                         <div className="text-sm text-slate-200">
                           External audio link ready. Open in a new tab.
                         </div>
@@ -10756,14 +11027,32 @@ function App() {
                   </div>
                 </div>
               ) : (
-                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">
+                <div className="rounded-2xl bg-gradient-to-b from-slate-900/70 to-slate-950/60 p-4 text-sm text-slate-300 shadow-[0_12px_36px_rgba(2,6,23,0.45)] ring-1 ring-white/10">
                   No playlist songs found for this gig yet.
                 </div>
               )}
+              <div className="mt-3 hidden grid-cols-2 gap-2 md:grid">
+                <button
+                  type="button"
+                  className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
+                  disabled={visiblePlaylistEntries.length === 0}
+                  onClick={() => movePlaylistBy(-1)}
+                >
+                  ⏮ Prev
+                </button>
+                <button
+                  type="button"
+                  className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
+                  disabled={visiblePlaylistEntries.length === 0}
+                  onClick={() => movePlaylistBy(1)}
+                >
+                  ⏭ Next
+                </button>
+              </div>
               </div>
 
               <div
-                className="absolute inset-x-0 bottom-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl transition-all duration-300"
+                className="absolute inset-x-0 bottom-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl transition-all duration-300 md:static md:inset-auto md:bottom-auto md:h-full md:w-[300px] md:shrink-0"
                 style={{
                   top: playlistDrawerOverlay ? 0 : playlistDrawerDockTop,
                 }}
@@ -10771,20 +11060,20 @@ function App() {
                 onTouchMove={handlePlaylistDrawerTouchMove}
                 onTouchEnd={handlePlaylistDrawerTouchEnd}
               >
-                <div className="flex items-center justify-center py-2">
+                <div className="flex items-center justify-center py-2 md:hidden">
                   <div className="h-1 w-12 rounded-full bg-white/25" />
                 </div>
                 <div
-                  className="max-h-full overflow-y-auto px-2 pb-2"
+                  className="max-h-full overflow-y-auto px-2 pb-2 md:h-full md:max-h-none"
                   onScroll={handlePlaylistDrawerScroll}
                 >
                   <div className="space-y-3 pb-2">
                     {groupedPlaylistSections.map((group) => (
                       <div
                         key={`playlist-group-${group.section}`}
-                        className={`rounded-2xl border p-2 ${getPlaylistToneClasses(group.section)}`}
+                        className={getPlaylistSectionCardClasses(group.section)}
                       >
-                        <div className="mb-2 rounded-lg bg-black/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]">
+                        <div className={playlistSectionHeaderClasses}>
                           {group.section}
                         </div>
                         <div className="space-y-2">
@@ -10792,11 +11081,7 @@ function App() {
                             <button
                               type="button"
                               key={item.key}
-                              className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
-                                index === playlistIndex
-                                  ? 'border-teal-300/70 bg-teal-400/10'
-                                  : 'border-white/10 bg-slate-950/40'
-                              }`}
+                              className={getPlaylistQueueItemButtonClasses(index === playlistIndex)}
                               onClick={() => jumpToPlaylistIndex(index)}
                             >
                               <div className="flex items-center justify-between gap-3">
@@ -10811,17 +11096,7 @@ function App() {
                                   {item.tags.map((tag) => (
                                     <span
                                       key={`${item.key}-list-${tag}`}
-                                      className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
-                                        tag === 'Special Request' || tag === 'Special Requests'
-                                          ? 'bg-fuchsia-500/20 text-fuchsia-100'
-                                          : tag.toLowerCase().includes('dinner')
-                                            ? 'bg-amber-500/20 text-amber-100'
-                                            : tag.toLowerCase().includes('dance')
-                                              ? 'bg-cyan-500/20 text-cyan-100'
-                                              : tag.toLowerCase().includes('latin')
-                                                ? 'bg-pink-500/20 text-pink-100'
-                                                : 'bg-slate-500/20 text-slate-200'
-                                      }`}
+                                      className={`rounded-full px-2 py-1 text-[10px] font-semibold ${getPlaylistTagClasses(tag)}`}
                                     >
                                       {tag}
                                     </span>

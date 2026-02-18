@@ -5656,7 +5656,7 @@ function App() {
                     </div>
 
                     <div
-                      className="absolute inset-x-0 bottom-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900/95 shadow-2xl transition-all duration-300"
+                      className="absolute inset-x-0 bottom-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl transition-all duration-300"
                       style={{
                         top: sharedPlaylistDrawerOverlay ? 0 : sharedPlaylistDrawerDockTop,
                       }}
@@ -9868,7 +9868,7 @@ function App() {
               </div>
 
               <div
-                className="absolute inset-x-0 bottom-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900/95 shadow-2xl transition-all duration-300"
+                className="absolute inset-x-0 bottom-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl transition-all duration-300"
                 style={{
                   top: playlistDrawerOverlay ? 0 : playlistDrawerDockTop,
                 }}

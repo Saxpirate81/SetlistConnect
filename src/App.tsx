@@ -110,6 +110,7 @@ type PlaylistEntry = {
 
 type SharedPlaylistView = {
   setlistId: string
+  bandName?: string
   gigName: string
   date: string
   venueAddress?: string
@@ -1586,6 +1587,7 @@ function App() {
       : 0
     const payload = {
       setlistId: currentSetlist.id,
+      bandName: activeBandName || 'Band',
       gigName: currentSetlist.gigName,
       date: currentSetlist.date,
       venueAddress: currentSetlist.venueAddress ?? '',
@@ -5346,6 +5348,7 @@ function App() {
       if (parsed) {
         setSharedPlaylistView({
           setlistId: parsed.setlistId || setlistId,
+          bandName: parsed.bandName ?? activeBandName ?? 'Band',
           gigName: parsed.gigName || 'Shared Gig',
           date: parsed.date || '',
           venueAddress: parsed.venueAddress ?? '',
@@ -5388,7 +5391,7 @@ function App() {
       const [gigRes, gigSongsRes, songsRes, specialReqRes] = await Promise.all([
         supabase
           .from('SetlistGigs')
-          .select('id, gig_name, gig_date, venue_address')
+          .select('id, band_id, gig_name, gig_date, venue_address')
           .eq('id', setlistId)
           .single(),
         supabase
@@ -5420,6 +5423,17 @@ function App() {
         setSharedPlaylistView(null)
         setSharedPlaylistLoading(false)
         return
+      }
+      let sharedBandName = activeBandName || 'Band'
+      if (gig.band_id) {
+        const { data: bandRow } = await supabase
+          .from('SetlistBands')
+          .select('name')
+          .eq('id', gig.band_id)
+          .single()
+        if (bandRow?.name?.trim()) {
+          sharedBandName = bandRow.name.trim()
+        }
       }
       const songsById = new Map((songsRes.data ?? []).map((song) => [song.id, song]))
       const orderedSongIds = (gigSongsRes.data ?? []).map((row) => row.song_id)
@@ -5571,6 +5585,7 @@ function App() {
       const playableEntries = entries.filter((entry) => Boolean(entry.audioUrl && entry.audioUrl.trim()))
       setSharedPlaylistView({
         setlistId: gig.id,
+        bandName: sharedBandName,
         gigName: gig.gig_name,
         date: typeof gig.gig_date === 'string' ? gig.gig_date.slice(0, 10) : '',
         venueAddress: gig.venue_address ?? '',
@@ -5583,7 +5598,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [appState.setlists, isSetlistTypeTag, normalizePlaylistSection])
+  }, [activeBandName, appState.setlists, isSetlistTypeTag, normalizePlaylistSection, supabase])
 
   useEffect(() => {
     if (!sharedPlaylistView) {
@@ -6261,7 +6276,9 @@ function App() {
                     <div className="w-full bg-white p-4 sm:p-6">
                       <div className="print-container">
                         <div className="print-header">
-                          <div className="print-band-name">Shared Setlist</div>
+                          <div className="print-band-name">
+                            {sharedPlaylistView.bandName?.trim() || activeBandName || 'Band'}
+                          </div>
                           <div className="print-header-details">
                             <div className="print-title">{sharedPlaylistView.gigName}</div>
                             <div className="print-subtitle">{formatGigDate(sharedPlaylistView.date)}</div>
@@ -6283,6 +6300,23 @@ function App() {
                                     <div className="print-musician-name">{musician.name}</div>
                                     <div className="print-musician-instruments">
                                       {(musician.instruments ?? []).join(', ') || 'No instruments'}
+                                    </div>
+                                    <div className="print-contact-row">
+                                      {musician.email && (
+                                        <a href={`mailto:${musician.email}`} className="print-icon-link" title="Email">
+                                          ✉️
+                                        </a>
+                                      )}
+                                      {musician.phone && (
+                                        <>
+                                          <a href={`tel:${musician.phone}`} className="print-icon-link" title="Call">
+                                            📞
+                                          </a>
+                                          <a href={`sms:${musician.phone}`} className="print-icon-link" title="Text">
+                                            💬
+                                          </a>
+                                        </>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -6340,7 +6374,7 @@ function App() {
                                       </div>
                                       <div className="print-row-subtitle print-song-meta">
                                         <span className="musical-key">{keyLabel}</span>
-                                        <span className="print-assignee-names text-[0.92em]">
+                                        <span className="print-assignee-names text-[0.86em]">
                                           {singerNames.length ? formatSingerAssignmentNames(singerNames) : 'No singers'}
                                         </span>
                                       </div>

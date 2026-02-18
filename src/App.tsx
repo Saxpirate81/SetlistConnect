@@ -183,6 +183,7 @@ const SETLIST_PANEL_PREFIX = 'set:'
 const ACTIVE_BAND_KEY = 'setlist:activeBandId'
 const GIG_LOCKED_SONGS_KEY = 'setlist:gigLockedSongs'
 const GIG_LAST_LOCKED_SONG_KEY = 'setlist:gigLastLockedSong'
+const GIG_SECTION_TAG_PREFIX = '__gigsection__'
 
 const initialState: AppState = {
   songs: [],
@@ -226,6 +227,9 @@ const chunkList = <T,>(items: T[], size: number): T[][] => {
 function App() {
   const [role, setRole] = useState<Role>(null)
   const [gigMode, setGigMode] = useState(false)
+  const [showGigModeLaunchModal, setShowGigModeLaunchModal] = useState(false)
+  const [showGigSetlistSheet, setShowGigSetlistSheet] = useState(false)
+  const [gigSheetSongSearch, setGigSheetSongSearch] = useState('')
   const [newSongTitle, setNewSongTitle] = useState('')
   const [newSongArtist, setNewSongArtist] = useState('')
   const [newSongAudio, setNewSongAudio] = useState('')
@@ -412,6 +416,10 @@ function App() {
   const [showPrintPreview, setShowPrintPreview] = useState(false)
   const [draggedSectionSongId, setDraggedSectionSongId] = useState<string | null>(null)
   const [dragOverSectionSongId, setDragOverSectionSongId] = useState<string | null>(null)
+  const [sheetDraggedSongId, setSheetDraggedSongId] = useState<string | null>(null)
+  const [sheetDraggedFromSection, setSheetDraggedFromSection] = useState<string | null>(null)
+  const [sheetDragOverSongId, setSheetDragOverSongId] = useState<string | null>(null)
+  const [sheetDragOverSection, setSheetDragOverSection] = useState<string | null>(null)
   const [recentlyMovedSongId, setRecentlyMovedSongId] = useState<string | null>(null)
   const movedSongTimerRef = useRef<number | null>(null)
   const [activeBuildPanel, setActiveBuildPanel] = useState<string | null>(null)
@@ -512,9 +520,18 @@ function App() {
   const [docFormError, setDocFormError] = useState('')
   const [showDocInstrumentWarning, setShowDocInstrumentWarning] = useState(false)
   const [showDocUrlAccessWarning, setShowDocUrlAccessWarning] = useState(false)
+  const [showGigLockedSongWarning, setShowGigLockedSongWarning] = useState(false)
+  const [pendingResendGigSongId, setPendingResendGigSongId] = useState<string | null>(null)
+  const [gigSongSectionOverrides, setGigSongSectionOverrides] = useState<
+    Record<string, Record<string, string>>
+  >({})
   const [, setLoginPhase] = useState<'login' | 'transition' | 'app'>('login')
   const loginTimerRef = useRef<number | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
+  const sheetLongPressTimerRef = useRef<number | null>(null)
+  const sheetLongPressTriggeredRef = useRef(false)
+  const sheetDragOverSongRef = useRef<string | null>(null)
+  const sheetDragOverSectionRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!authLoading) return
@@ -673,6 +690,50 @@ function App() {
       : null
   const normalizeSetlistSectionLabel = (value: string) =>
     value.replace(/\s+/g, ' ').trim()
+  const makeGigSectionTag = (gigId: string, section: string) =>
+    `${GIG_SECTION_TAG_PREFIX}${gigId}::${encodeURIComponent(normalizeSetlistSectionLabel(section))}`
+  const parseGigSectionTag = (value: string): { gigId: string; section: string } | null => {
+    if (!value.startsWith(GIG_SECTION_TAG_PREFIX)) return null
+    const payload = value.slice(GIG_SECTION_TAG_PREFIX.length)
+    const separatorIndex = payload.indexOf('::')
+    if (separatorIndex <= 0) return null
+    const gigId = payload.slice(0, separatorIndex)
+    const encodedSection = payload.slice(separatorIndex + 2)
+    const decodedSection = normalizeSetlistSectionLabel(
+      decodeURIComponent(encodedSection || ''),
+    )
+    if (!gigId || !decodedSection) return null
+    return { gigId, section: decodedSection }
+  }
+  const getGigSongSectionOverride = useCallback(
+    (gigId: string, songId: string) => {
+      const override = gigSongSectionOverrides[gigId]?.[songId]
+      return override ? normalizeSetlistSectionLabel(override) : ''
+    },
+    [gigSongSectionOverrides],
+  )
+  const songMatchesGigSection = useCallback(
+    (song: Song, section: string, gigId: string) => {
+      const normalizedSection = normalizeSetlistSectionLabel(section).toLowerCase()
+      if (!normalizedSection) return false
+      const override = getGigSongSectionOverride(gigId, song.id)
+      if (override) {
+        return override.toLowerCase() === normalizedSection
+      }
+      // Numbered set names should still map to the base tag bucket.
+      if (normalizedSection === 'dance set 1' || normalizedSection === 'dance set 2' || normalizedSection === 'dance set 3' || normalizedSection.startsWith('dance set ')) {
+        return hasSongTag(song, 'Dance')
+      }
+      if (normalizedSection === 'dinner set 1' || normalizedSection === 'dinner set 2' || normalizedSection === 'dinner set 3' || normalizedSection.startsWith('dinner set ')) {
+        return hasSongTag(song, 'Dinner')
+      }
+      if (normalizedSection === 'latin set 1' || normalizedSection === 'latin set 2' || normalizedSection === 'latin set 3' || normalizedSection.startsWith('latin set ')) {
+        return hasSongTag(song, 'Latin')
+      }
+      return hasSongTag(song, section)
+    },
+    [getGigSongSectionOverride],
+  )
   const normalizeTagIdentity = (value: string) =>
     value
       .toLowerCase()
@@ -689,6 +750,7 @@ function App() {
   const isSetlistTypeTag = useCallback((value: string) => {
     const normalized = normalizeSetlistSectionLabel(value)
     if (!normalized) return false
+    if (normalized.startsWith(GIG_SECTION_TAG_PREFIX)) return false
     const lower = normalized.toLowerCase()
     if (lower === 'special request' || lower === 'special requests') return false
     const identity = normalizeTagIdentity(normalized)
@@ -707,6 +769,11 @@ function App() {
     () => appState.setlists.find((setlist) => setlist.id === selectedSetlistId),
     [appState.setlists, selectedSetlistId],
   )
+  const gigSheetQueuedSong = useMemo(
+    () => appState.songs.find((song) => song.id === appState.currentSongId) ?? null,
+    [appState.currentSongId, appState.songs],
+  )
+  const gigSheetSongSearchQuery = useMemo(() => gigSheetSongSearch.trim().toLowerCase(), [gigSheetSongSearch])
   const activeBandName = useMemo(
     () => bands.find((band) => band.id === activeBandId)?.name ?? '',
     [bands, activeBandId],
@@ -724,11 +791,13 @@ function App() {
     const hidden = new Set(
       (gigHiddenSetlistSections[currentSetlist.id] ?? []).map((item) => item.toLowerCase()),
     )
-    const fromSongs = currentSetlist.songIds
-      .map((songId) => appState.songs.find((song) => song.id === songId))
-      .filter((song): song is Song => Boolean(song))
-      .flatMap((song) => song.tags)
-      .filter((tag) => isSetlistTypeTag(tag))
+    const fromSongs = currentSetlist.songIds.flatMap((songId) => {
+      const song = appState.songs.find((item) => item.id === songId)
+      if (!song) return []
+      const override = getGigSongSectionOverride(currentSetlist.id, song.id)
+      if (override) return [override]
+      return song.tags.filter((tag) => isSetlistTypeTag(tag))
+    })
     const seen = new Set<string>()
     const merged = [...saved, ...fromSongs]
       .map(normalizeSetlistSectionLabel)
@@ -742,7 +811,14 @@ function App() {
         return true
       })
     return merged
-  }, [appState.songs, currentSetlist, gigSetlistSections, gigHiddenSetlistSections, isSetlistTypeTag])
+  }, [
+    appState.songs,
+    currentSetlist,
+    gigHiddenSetlistSections,
+    gigSetlistSections,
+    getGigSongSectionOverride,
+    isSetlistTypeTag,
+  ])
   const printableSetSections = useMemo(() => {
     if (!currentSetlist) return []
     const seen = new Set<string>()
@@ -1205,8 +1281,10 @@ function App() {
       .map((songId) => appState.songs.find((song) => song.id === songId))
       .filter((song): song is Song => Boolean(song))
       .forEach((song) => {
+        const overrideSection = getGigSongSectionOverride(currentSetlist.id, song.id)
         const sectionTags = normalizeTagList(song.tags)
-          .filter((tag) => isSetlistTypeTag(tag))
+          .filter((tag) => (overrideSection ? false : isSetlistTypeTag(tag)))
+          .concat(overrideSection ? [overrideSection] : [])
           .map(normalizePlaylistSection)
           .filter(Boolean)
         const assignments = song.keys
@@ -1230,6 +1308,7 @@ function App() {
   }, [
     appState.songs,
     currentSetlist,
+    getGigSongSectionOverride,
     getOrderedSpecialRequests,
     isSetlistTypeTag,
     normalizePlaylistSection,
@@ -1688,6 +1767,11 @@ function App() {
   }
   const formatSingerAssignmentNames = (values: string[]) =>
     values.map((name) => formatSingerShortName(name)).filter(Boolean).join(', ')
+  const formatSingerFirstNames = (values: string[]) =>
+    values
+      .map((name) => name.trim().split(/\s+/).filter(Boolean)[0] ?? '')
+      .filter(Boolean)
+      .join(', ')
 
   const setGigCurrentSong = (songId: string | null) => {
     if (!currentSetlist) return
@@ -1697,15 +1781,19 @@ function App() {
     if (!client) return
     if (songId) {
       runSupabase(
-        client.from('SetlistGigNowPlaying').upsert({
+        client.from('SetlistGigNowPlaying').upsert(withBandId({
           gig_id: currentSetlist.id,
           song_id: songId,
           updated_at: new Date().toISOString(),
-        }),
+        })),
       )
     } else {
       runSupabase(
-        client.from('SetlistGigNowPlaying').delete().eq('gig_id', currentSetlist.id),
+        client
+          .from('SetlistGigNowPlaying')
+          .delete()
+          .eq('band_id', activeBandId)
+          .eq('gig_id', currentSetlist.id),
       )
     }
   }
@@ -1713,9 +1801,14 @@ function App() {
     if (!currentSetlist) return false
     return (gigLockedSongIdsByGig[currentSetlist.id] ?? []).includes(songId)
   }, [currentSetlist, gigLockedSongIdsByGig])
-  const markGigSongAsSelected = (songId: string) => {
+  const markGigSongAsSelected = (songId: string, options?: { forceResend?: boolean }) => {
     if (!currentSetlist) return
-    if (isGigSongLocked(songId)) return
+    const forceResend = Boolean(options?.forceResend)
+    if (isGigSongLocked(songId) && !forceResend) {
+      setPendingResendGigSongId(songId)
+      setShowGigLockedSongWarning(true)
+      return
+    }
     setGigLockedSongIdsByGig((prev) => {
       const current = prev[currentSetlist.id] ?? []
       if (current.includes(songId)) return prev
@@ -1729,6 +1822,34 @@ function App() {
       [currentSetlist.id]: songId,
     }))
     setGigCurrentSong(songId)
+    logPlayedSong(songId)
+  }
+  const clearGigQueuedSong = () => {
+    if (!currentSetlist || !appState.currentSongId) return
+    const queuedSongId = appState.currentSongId
+    setGigCurrentSong(null)
+    setGigLockedSongIdsByGig((prev) => ({
+      ...prev,
+      [currentSetlist.id]: (prev[currentSetlist.id] ?? []).filter((songId) => songId !== queuedSongId),
+    }))
+    setGigLastLockedSongByGig((prev) => ({
+      ...prev,
+      [currentSetlist.id]:
+        (prev[currentSetlist.id] ?? null) === queuedSongId ? null : prev[currentSetlist.id] ?? null,
+    }))
+  }
+  const finishGigQueuedSong = () => {
+    if (!currentSetlist || !appState.currentSongId) return
+    setGigCurrentSong(null)
+  }
+  const closeGigSetlistSheet = () => {
+    if (currentSetlist) {
+      setSelectedSetlistId(currentSetlist.id)
+      setActiveGigId(currentSetlist.id)
+    }
+    setGigSheetSongSearch('')
+    setScreen('builder')
+    setShowGigSetlistSheet(false)
   }
   const undoLastGigSongSelection = () => {
     if (!currentSetlist) return
@@ -2300,62 +2421,66 @@ function App() {
       }
     })
     if (supabase && activeBandId) {
-      runSupabase(
-        supabase.from('SetlistGigs').insert(withBandId({
+      void (async () => {
+        const { error: gigInsertError } = await supabase.from('SetlistGigs').insert(withBandId({
           id: newId,
           gig_name: `${source.gigName} (Copy)`,
           gig_date: new Date().toISOString().slice(0, 10),
           venue_address: source.venueAddress ?? '',
-        })),
-      )
-      if (uniqueSourceSongIds.length) {
-        runSupabase(
-          supabase.from('SetlistGigSongs').insert(
+        }))
+        if (gigInsertError) {
+          reportSupabaseError(gigInsertError)
+          return
+        }
+
+        if (uniqueSourceSongIds.length) {
+          const { error: gigSongsInsertError } = await supabase.from('SetlistGigSongs').insert(
             uniqueSourceSongIds.map((songId, index) => withBandId({
               id: createId(),
               gig_id: newId,
               song_id: songId,
               sort_order: index,
             })),
-          ),
-        )
-      }
-      const gigMusicianRows = appState.gigMusicians
-        .filter((gm) => gm.gigId === source.id)
-        .map((gm) => ({
-          id: createId(),
-          gig_id: newId,
-          musician_id: gm.musicianId,
-          status: gm.status,
-          note: gm.note ?? null,
-        }))
-      if (gigMusicianRows.length) {
-        runSupabase(
-          supabase.from('SetlistGigMusicians').insert(
-            gigMusicianRows.map((row) => withBandId(row)),
-          ),
-        )
-      }
-      const gigSingerRows = uniqueSourceSongIds.flatMap((songId) => {
-        const song = appState.songs.find((item) => item.id === songId)
-        if (!song) return []
-        return song.keys
-          .filter((key) => key.gigOverrides[source.id])
-          .map((key) => ({
+          )
+          reportSupabaseError(gigSongsInsertError)
+        }
+
+        const gigMusicianRows = appState.gigMusicians
+          .filter((gm) => gm.gigId === source.id)
+          .map((gm) => ({
             id: createId(),
             gig_id: newId,
-            song_id: songId,
-            singer_name: key.singer,
-            gig_key: key.gigOverrides[source.id],
+            musician_id: gm.musicianId,
+            status: gm.status,
+            note: gm.note ?? null,
           }))
-      })
-      if (gigSingerRows.length) {
-        runSupabase(
-          supabase.from('SetlistGigSingerKeys').insert(
+        if (gigMusicianRows.length) {
+          const { error: gigMusiciansInsertError } = await supabase.from('SetlistGigMusicians').insert(
+            gigMusicianRows.map((row) => withBandId(row)),
+          )
+          reportSupabaseError(gigMusiciansInsertError)
+        }
+
+        const gigSingerRows = uniqueSourceSongIds.flatMap((songId) => {
+          const song = appState.songs.find((item) => item.id === songId)
+          if (!song) return []
+          return song.keys
+            .filter((key) => key.gigOverrides[source.id])
+            .map((key) => ({
+              id: createId(),
+              gig_id: newId,
+              song_id: songId,
+              singer_name: key.singer,
+              gig_key: key.gigOverrides[source.id],
+            }))
+        })
+        if (gigSingerRows.length) {
+          const { error: gigSingerKeysInsertError } = await supabase.from('SetlistGigSingerKeys').insert(
             gigSingerRows.map((row) => withBandId(row)),
-          ),
-        )
-      }
+          )
+          reportSupabaseError(gigSingerKeysInsertError)
+        }
+      })()
     }
     setGigHiddenSpecialSection((prev) => ({ ...prev, [newId]: false }))
   }
@@ -2809,16 +2934,16 @@ function App() {
     if (!currentSetlist) return []
     return currentSetlist.songIds.filter((songId) => {
       const song = appState.songs.find((item) => item.id === songId)
-      return song ? hasSongTag(song, section) : false
+      return song ? songMatchesGigSection(song, section, currentSetlist.id) : false
     })
-  }, [appState.songs, currentSetlist])
+  }, [appState.songs, currentSetlist, songMatchesGigSection])
   const getSectionSongs = useCallback((section: string) => {
     if (!currentSetlist) return []
     return currentSetlist.songIds
       .map((songId) => appState.songs.find((song) => song.id === songId))
       .filter((song): song is Song => Boolean(song))
-      .filter((song) => hasSongTag(song, section))
-  }, [appState.songs, currentSetlist])
+      .filter((song) => songMatchesGigSection(song, section, currentSetlist.id))
+  }, [appState.songs, currentSetlist, songMatchesGigSection])
   const manualSectionOrderSongs = useMemo(() => {
     if (!currentSetlist || !manualSectionOrderSection) return []
     return getSectionSongs(manualSectionOrderSection)
@@ -2867,6 +2992,94 @@ function App() {
     const insertIndex = fromIndex < toIndex ? toIndex - 1 : toIndex
     reorderedSectionSongIds.splice(insertIndex, 0, moved)
     applySectionSongOrder(section, reorderedSectionSongIds)
+  }
+  const assignGigSongSection = (gigId: string, songId: string, section: string) => {
+    const normalizedSection = normalizeSetlistSectionLabel(section)
+    if (!normalizedSection) return
+    setGigSongSectionOverrides((prev) => ({
+      ...prev,
+      [gigId]: {
+        ...(prev[gigId] ?? {}),
+        [songId]: normalizedSection,
+      },
+    }))
+    if (!supabase) return
+    const client = supabase
+    const tagPrefix = `${GIG_SECTION_TAG_PREFIX}${gigId}::%`
+    void (async () => {
+      const { error: clearError } = await client
+        .from('SetlistSongTags')
+        .delete()
+        .eq('song_id', songId)
+        .like('tag', tagPrefix)
+      reportSupabaseError(clearError)
+      const { error: insertError } = await client.from('SetlistSongTags').insert(withBandId({
+        id: createId(),
+        song_id: songId,
+        tag: makeGigSectionTag(gigId, normalizedSection),
+      }))
+      reportSupabaseError(insertError)
+    })()
+  }
+  const moveSongToGigSection = (
+    fromSection: string,
+    toSection: string,
+    songId: string,
+    beforeSongId?: string,
+  ) => {
+    if (!currentSetlist) return
+    const sourceSong = appState.songs.find((song) => song.id === songId)
+    if (!sourceSong) return
+    const normalizedToSection = normalizeSetlistSectionLabel(toSection)
+    if (!normalizedToSection) return
+
+    if (fromSection.trim().toLowerCase() === normalizedToSection.trim().toLowerCase()) {
+      if (beforeSongId) {
+        reorderSectionSongs(fromSection, songId, beforeSongId)
+      }
+      return
+    }
+
+    const withoutSong = currentSetlist.songIds.filter((id) => id !== songId)
+    const targetSongs = withoutSong.filter((id) => {
+      const song = appState.songs.find((item) => item.id === id)
+      if (!song) return false
+      return songMatchesGigSection(song, normalizedToSection, currentSetlist.id)
+    })
+
+    let insertionIndex = withoutSong.length
+    if (beforeSongId) {
+      const beforeIndex = withoutSong.indexOf(beforeSongId)
+      insertionIndex = beforeIndex >= 0 ? beforeIndex : insertionIndex
+    } else if (targetSongs.length > 0) {
+      const lastTargetId = targetSongs[targetSongs.length - 1]
+      const lastTargetIndex = withoutSong.indexOf(lastTargetId)
+      insertionIndex = lastTargetIndex >= 0 ? lastTargetIndex + 1 : insertionIndex
+    }
+    const nextSongIds = [...withoutSong]
+    nextSongIds.splice(insertionIndex, 0, songId)
+
+    setBuildPanelDirty(true)
+    commitChange(`Move song to ${normalizedToSection}`, (prev) => ({
+      ...prev,
+      setlists: prev.setlists.map((setlist) =>
+        setlist.id === currentSetlist.id ? { ...setlist, songIds: nextSongIds } : setlist,
+      ),
+    }))
+    assignGigSongSection(currentSetlist.id, songId, normalizedToSection)
+    flashMovedSong(songId)
+
+    if (supabase) {
+      const client = supabase
+      nextSongIds.forEach((id, index) => {
+        runSupabase(
+          client.from('SetlistGigSongs').update({ sort_order: index }).eq('gig_id', currentSetlist.id).eq(
+            'song_id',
+            id,
+          ),
+        )
+      })
+    }
   }
 
   const reorderSpecialRequests = (fromId: string, toId: string) => {
@@ -3027,6 +3240,79 @@ function App() {
       [currentSetlist.id]: reordered,
     }))
   }
+  const renameGigSetlistSectionLabel = (fromSection: string, toSection: string) => {
+    if (!currentSetlist) return
+    const normalizedFrom = normalizeSetlistSectionLabel(fromSection)
+    const normalizedTo = normalizeSetlistSectionLabel(toSection)
+    if (!normalizedFrom || !normalizedTo) return
+    if (normalizedFrom.toLowerCase() === normalizedTo.toLowerCase()) return
+
+    setGigSetlistSections((prev) => ({
+      ...prev,
+      [currentSetlist.id]: (prev[currentSetlist.id] ?? []).map((section) =>
+        section.toLowerCase() === normalizedFrom.toLowerCase() ? normalizedTo : section,
+      ),
+    }))
+    setGigHiddenSetlistSections((prev) => ({
+      ...prev,
+      [currentSetlist.id]: (prev[currentSetlist.id] ?? []).map((section) =>
+        section.toLowerCase() === normalizedFrom.toLowerCase() ? normalizedTo : section,
+      ),
+    }))
+    setBuildCompleteOverrides((prev) => {
+      const gigOverrides = prev[currentSetlist.id] ?? {}
+      const fromKey = setlistPanelKey(normalizedFrom)
+      const toKey = setlistPanelKey(normalizedTo)
+      if (!(fromKey in gigOverrides)) return prev
+      const nextGigOverrides = { ...gigOverrides, [toKey]: gigOverrides[fromKey] }
+      delete nextGigOverrides[fromKey]
+      return {
+        ...prev,
+        [currentSetlist.id]: nextGigOverrides,
+      }
+    })
+    setStarterPasteOpen((prev) => {
+      if (!(normalizedFrom in prev)) return prev
+      const next = { ...prev, [normalizedTo]: prev[normalizedFrom] }
+      delete next[normalizedFrom]
+      return next
+    })
+    setStarterPasteBySection((prev) => {
+      if (!(normalizedFrom in prev)) return prev
+      const next = { ...prev, [normalizedTo]: prev[normalizedFrom] }
+      delete next[normalizedFrom]
+      return next
+    })
+    setGigSongSectionOverrides((prev) => {
+      const bySong = prev[currentSetlist.id]
+      if (!bySong) return prev
+      const nextBySong = Object.fromEntries(
+        Object.entries(bySong).map(([songId, section]) => [
+          songId,
+          section.toLowerCase() === normalizedFrom.toLowerCase() ? normalizedTo : section,
+        ]),
+      )
+      return {
+        ...prev,
+        [currentSetlist.id]: nextBySong,
+      }
+    })
+    if (getSectionFromPanel(activeBuildPanel)?.toLowerCase() === normalizedFrom.toLowerCase()) {
+      setActiveBuildPanel(setlistPanelKey(normalizedTo))
+    }
+
+    if (supabase) {
+      const oldTag = makeGigSectionTag(currentSetlist.id, normalizedFrom)
+      const newTag = makeGigSectionTag(currentSetlist.id, normalizedTo)
+      runSupabase(
+        supabase
+          .from('SetlistSongTags')
+          .update({ tag: newTag })
+          .eq('band_id', activeBandId)
+          .eq('tag', oldTag),
+      )
+    }
+  }
 
   const addGigSetlistSectionFromTemplate = (template: string) => {
     const current = orderedSetSections
@@ -3034,6 +3320,12 @@ function App() {
       const danceCount = current.filter((section) =>
         section.toLowerCase().startsWith('dance'),
       ).length
+      if (
+        danceCount === 1 &&
+        current.some((section) => section.toLowerCase() === 'dance')
+      ) {
+        renameGigSetlistSectionLabel('Dance', 'Dance Set 1')
+      }
       const label = danceCount === 0 ? 'Dance' : `Dance Set ${danceCount + 1}`
       addGigSetlistSection(label)
       return
@@ -3042,6 +3334,12 @@ function App() {
       const dinnerCount = current.filter((section) =>
         section.toLowerCase().startsWith('dinner'),
       ).length
+      if (
+        dinnerCount === 1 &&
+        current.some((section) => section.toLowerCase() === 'dinner')
+      ) {
+        renameGigSetlistSectionLabel('Dinner', 'Dinner Set 1')
+      }
       const label = dinnerCount === 0 ? 'Dinner' : `Dinner Set ${dinnerCount + 1}`
       addGigSetlistSection(label)
       return
@@ -3050,6 +3348,12 @@ function App() {
       const latinCount = current.filter((section) =>
         section.toLowerCase().startsWith('latin'),
       ).length
+      if (
+        latinCount === 1 &&
+        current.some((section) => section.toLowerCase() === 'latin')
+      ) {
+        renameGigSetlistSectionLabel('Latin', 'Latin Set 1')
+      }
       const label = latinCount === 0 ? 'Latin' : `Latin Set ${latinCount + 1}`
       addGigSetlistSection(label)
       return
@@ -3143,6 +3447,41 @@ function App() {
       movedSongTimerRef.current = null
     }, 850)
   }
+  const clearSheetLongPress = () => {
+    if (sheetLongPressTimerRef.current) {
+      window.clearTimeout(sheetLongPressTimerRef.current)
+      sheetLongPressTimerRef.current = null
+    }
+  }
+  const startGigSheetLongPress = (songId: string) => {
+    clearSheetLongPress()
+    sheetLongPressTriggeredRef.current = false
+    sheetLongPressTimerRef.current = window.setTimeout(() => {
+      sheetLongPressTriggeredRef.current = true
+      markGigSongAsSelected(songId)
+      sheetLongPressTimerRef.current = null
+    }, 1000)
+  }
+  const endGigSheetLongPress = () => {
+    clearSheetLongPress()
+  }
+  const updateSheetDragHover = (section: string, songId: string | null) => {
+    if (sheetDragOverSectionRef.current !== section) {
+      sheetDragOverSectionRef.current = section
+      setSheetDragOverSection(section)
+    }
+    if (sheetDragOverSongRef.current !== songId) {
+      sheetDragOverSongRef.current = songId
+      setSheetDragOverSongId(songId)
+    }
+  }
+  const clearSheetDragHover = () => {
+    sheetDragOverSongRef.current = null
+    sheetDragOverSectionRef.current = null
+    setSheetDragOverSongId(null)
+    setSheetDragOverSection(null)
+  }
+  useEffect(() => () => clearSheetLongPress(), [])
 
   const addMusician = () => {
     const name = newMusicianName.trim()
@@ -3973,6 +4312,25 @@ function App() {
     setEditingSpecialRequestId(request.id)
     setShowSpecialRequestModal(true)
   }
+  const deleteSpecialRequest = (requestId: string) => {
+    if (!currentSetlist) return
+    setBuildPanelDirty(true)
+    commitChange('Delete special request', (prev) => ({
+      ...prev,
+      specialRequests: prev.specialRequests.filter((request) => request.id !== requestId),
+    }))
+    setSpecialRequestOrderByGig((prev) => {
+      const ordered = prev[currentSetlist.id] ?? []
+      if (!ordered.includes(requestId)) return prev
+      return {
+        ...prev,
+        [currentSetlist.id]: ordered.filter((id) => id !== requestId),
+      }
+    })
+    if (supabase) {
+      runSupabase(supabase.from('SetlistSpecialRequests').delete().eq('id', requestId))
+    }
+  }
 
   const updateSpecialRequest = () => {
     if (!currentSetlist || !editingSpecialRequestId) return
@@ -4347,7 +4705,15 @@ function App() {
     }
 
     const tagsBySong = new Map<string, string[]>()
+    const gigSectionOverrideMap = new Map<string, Record<string, string>>()
     tagsRes.data?.forEach((row) => {
+      const gigSectionTag = parseGigSectionTag(row.tag)
+      if (gigSectionTag) {
+        const bySong = gigSectionOverrideMap.get(gigSectionTag.gigId) ?? {}
+        bySong[row.song_id] = gigSectionTag.section
+        gigSectionOverrideMap.set(gigSectionTag.gigId, bySong)
+        return
+      }
       const list = tagsBySong.get(row.song_id) ?? []
       list.push(row.tag)
       tagsBySong.set(row.song_id, list)
@@ -4487,7 +4853,10 @@ function App() {
       })) ?? []
 
     const tagsCatalog = Array.from(
-      new Set([...DEFAULT_TAGS, ...(tagsRes.data ?? []).map((t) => t.tag)]),
+      new Set([
+        ...DEFAULT_TAGS,
+        ...(tagsRes.data ?? []).map((t) => t.tag).filter((tag) => !tag.startsWith(GIG_SECTION_TAG_PREFIX)),
+      ]),
     ).filter((tag) => !isPollutedSpecialTypeTag(tag))
     const pollutedTagValues = dedupeTags(
       (tagsRes.data ?? [])
@@ -4508,6 +4877,15 @@ function App() {
         return acc
       }, {}) ?? {}
     setNowPlayingByGig(nowPlayingMap)
+    setGigSongSectionOverrides(
+      Array.from(gigSectionOverrideMap.entries()).reduce<Record<string, Record<string, string>>>(
+        (acc, [gigId, bySong]) => {
+          acc[gigId] = bySong
+          return acc
+        },
+        {},
+      ),
+    )
 
     if (pollutedTagValues.length > 0 && supabase && activeBandId) {
       void supabase
@@ -4706,7 +5084,15 @@ function App() {
                     ? 'bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950'
                     : 'border border-white/10 text-slate-200'
                 }`}
-                onClick={() => setGigMode((prev) => !prev)}
+                onClick={() => {
+                  if (gigMode) {
+                    setGigMode(false)
+                    setShowGigSetlistSheet(false)
+                    setShowGigModeLaunchModal(false)
+                    return
+                  }
+                  setShowGigModeLaunchModal(true)
+                }}
               >
                 <span>{gigMode ? 'Gig Mode On' : 'Gig Mode'}</span>
               </button>
@@ -4742,10 +5128,7 @@ function App() {
             if (bannerTouchStartX === null) return
             const endX = event.changedTouches[0]?.clientX ?? bannerTouchStartX
             if (endX - bannerTouchStartX > 60) {
-              if (appState.currentSongId) {
-                logPlayedSong(appState.currentSongId)
-                setDismissedUpNextId(appState.currentSongId)
-              }
+              if (appState.currentSongId) setDismissedUpNextId(appState.currentSongId)
             }
             setBannerTouchStartX(null)
           }}
@@ -4772,17 +5155,14 @@ function App() {
                 className="relative z-10 inline-flex min-h-[44px] items-center rounded-full bg-slate-950/30 px-4 py-2 text-sm"
                 onClick={(event) => {
                   event.stopPropagation()
-                  if (appState.currentSongId) {
-                    logPlayedSong(appState.currentSongId)
-                  }
                   if (isAdmin) {
-                    setGigCurrentSong(null)
+                    finishGigQueuedSong()
                   } else if (appState.currentSongId) {
                     setDismissedUpNextId(appState.currentSongId)
                   }
                 }}
               >
-                Clear
+                Finished Song
               </button>
               {gigMode && currentSetlist && gigLastLockedSongByGig[currentSetlist.id] && (
                 <button
@@ -5015,7 +5395,13 @@ function App() {
         return
       }
       const tagsBySong = new Map<string, string[]>()
+      const sharedGigSectionOverrides = new Map<string, string>()
       ;(tagsRes.data ?? []).forEach((row) => {
+        const gigSectionTag = parseGigSectionTag(row.tag)
+        if (gigSectionTag?.gigId === setlistId) {
+          sharedGigSectionOverrides.set(row.song_id, gigSectionTag.section)
+          return
+        }
         const list = tagsBySong.get(row.song_id) ?? []
         list.push(row.tag)
         tagsBySong.set(row.song_id, list)
@@ -5117,9 +5503,14 @@ function App() {
           })
         })
       orderedSongs.forEach((song) => {
+        const overrideSection = sharedGigSectionOverrides.get(song.id)
         const sectionTags = uniqueList(
-          (tagsBySong.get(song.id) ?? [])
-            .filter((tag) => isSetlistTypeTag(tag))
+          (
+            overrideSection
+              ? [overrideSection]
+              : (tagsBySong.get(song.id) ?? [])
+                .filter((tag) => isSetlistTypeTag(tag))
+          )
             .map(normalizePlaylistSection)
             .filter(Boolean),
         )
@@ -5191,6 +5582,12 @@ function App() {
     if (showPlaylistModal) return
     setPlaylistDrawerOverlay(false)
   }, [showPlaylistModal])
+
+  useEffect(() => {
+    if (gigMode) return
+    setShowGigSetlistSheet(false)
+    setShowGigModeLaunchModal(false)
+  }, [gigMode])
 
   useEffect(() => {
     if (sharedPlaylistView) return
@@ -8333,6 +8730,49 @@ function App() {
         </div>
       )}
 
+      {showGigLockedSongWarning && (
+        <div
+          className="fixed inset-0 z-[108] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => {
+            setShowGigLockedSongWarning(false)
+            setPendingResendGigSongId(null)
+          }}
+        >
+          <div
+            className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900 p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold">Song already selected</h3>
+            <p className="mt-2 text-sm text-slate-300">
+              This song is already in the gig queue. Do you want to re-send it anyway?
+            </p>
+            <div className="mt-4 flex items-center gap-2">
+              <button
+                className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                onClick={() => {
+                  setShowGigLockedSongWarning(false)
+                  setPendingResendGigSongId(null)
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                onClick={() => {
+                  if (pendingResendGigSongId) {
+                    markGigSongAsSelected(pendingResendGigSongId, { forceResend: true })
+                  }
+                  setShowGigLockedSongWarning(false)
+                  setPendingResendGigSongId(null)
+                }}
+              >
+                Re-send anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showSingerWarning && (
         <div
           className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
@@ -8444,7 +8884,7 @@ function App() {
 
       {showSectionAddSongsModal && currentSetlist && (
         <div
-          className="fixed inset-0 z-[92] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/80 px-4 py-6"
           onClick={() => setShowSectionAddSongsModal(false)}
         >
           <div
@@ -8718,7 +9158,7 @@ function App() {
 
       {showSpecialRequestModal && currentSetlist && (
         <div
-          className="fixed inset-0 z-[93] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/80 px-4 py-6"
           onClick={() => {
             resetPendingSpecialRequest()
             setShowSpecialRequestModal(false)
@@ -8906,7 +9346,7 @@ function App() {
 
       {showDeleteSetlistSectionConfirm && (
         <div
-          className="fixed inset-0 z-[94] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/80 px-4 py-6"
           onClick={cancelDeleteSetlistSection}
         >
           <div
@@ -8945,7 +9385,7 @@ function App() {
 
       {showAddSetlistModal && currentSetlist && (
         <div
-          className="fixed inset-0 z-[92] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/80 px-4 py-6"
           onClick={() => setShowAddSetlistModal(false)}
         >
           <div
@@ -9228,7 +9668,7 @@ function App() {
 
       {showRemoveSongConfirm && (
         <div
-          className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/80 px-4 py-6"
           onClick={cancelRemoveSong}
         >
           <div
@@ -9694,6 +10134,436 @@ function App() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showGigModeLaunchModal && screen === 'builder' && currentSetlist && (
+        <div
+          className="fixed inset-0 z-[97] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowGigModeLaunchModal(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900 p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold">Choose Gig Mode View</h3>
+            <p className="mt-1 text-sm text-slate-300">
+              Start gig mode in your current builder layout or open the Setlist Sheet view.
+            </p>
+            <div className="mt-4 grid grid-cols-1 gap-2">
+              <button
+                className="rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-slate-100"
+                onClick={() => {
+                  setGigMode(true)
+                  setShowGigSetlistSheet(false)
+                  setShowGigModeLaunchModal(false)
+                }}
+              >
+                Use Current View
+              </button>
+              <button
+                className="rounded-xl bg-teal-400/90 px-4 py-3 text-sm font-semibold text-slate-950"
+                onClick={() => {
+                  setGigMode(true)
+                  setShowGigSetlistSheet(true)
+                  setShowGigModeLaunchModal(false)
+                }}
+              >
+                Open Setlist Sheet
+              </button>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300"
+                onClick={() => setShowGigModeLaunchModal(false)}
+                aria-label="Close"
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showGigSetlistSheet && gigMode && currentSetlist && (
+        <div className="fixed inset-0 z-[98] bg-gradient-to-b from-slate-950 via-yellow-900/50 to-slate-950 backdrop-blur-sm">
+          <div className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-slate-950/55">
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[1fr_minmax(260px,1.3fr)_1fr] md:items-center">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold">Setlist Sheet</h3>
+                  <div className="text-xs text-slate-400">
+                    {currentSetlist.gigName} · {formatGigDate(currentSetlist.date)}
+                  </div>
+                  <label className="mt-2 block">
+                    <span className="sr-only">Search songs by title or artist</span>
+                    <input
+                      type="text"
+                      value={gigSheetSongSearch}
+                      onChange={(event) => setGigSheetSongSearch(event.target.value)}
+                      placeholder="Search by song or artist"
+                      className="w-full max-w-xs rounded-xl border border-white/15 bg-slate-950/45 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-400 focus:border-teal-300/60 focus:outline-none"
+                    />
+                  </label>
+                </div>
+                <div
+                  className={`gig-sheet-upnext rounded-2xl border px-3 py-2 ${
+                    gigSheetQueuedSong
+                      ? 'liquid-button upnext-flash border-emerald-300/60 bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
+                      : 'border-teal-300/35 bg-teal-400/10'
+                  }`}
+                >
+                  <div className="flex min-h-[40px] items-center justify-between gap-2">
+                    <span
+                      className={`text-[10px] font-semibold uppercase tracking-[0.2em] ${
+                        gigSheetQueuedSong ? 'text-slate-950/80' : 'text-teal-200/90'
+                      }`}
+                    >
+                      Up Next
+                    </span>
+                    <div className="grid w-[250px] shrink-0 grid-cols-2 items-center gap-2 md:w-[280px]">
+                        <button
+                          className={`gig-sheet-clear-upnext relative z-10 flex h-9 w-full items-center justify-center whitespace-nowrap rounded-xl border border-slate-900/30 bg-slate-950/25 px-2 py-2 text-xs font-semibold text-slate-950 transition-opacity ${
+                            gigSheetQueuedSong ? 'opacity-100' : 'pointer-events-none opacity-0'
+                          }`}
+                          onClick={finishGigQueuedSong}
+                        >
+                          Finished Song
+                        </button>
+                        <button
+                          className={`gig-sheet-clear-upnext relative z-10 flex h-9 w-full items-center justify-center whitespace-nowrap rounded-xl border border-red-400/35 bg-red-500/25 px-2 py-2 text-xs font-semibold text-red-100 transition-opacity ${
+                            gigSheetQueuedSong ? 'opacity-100' : 'pointer-events-none opacity-0'
+                          }`}
+                          onClick={clearGigQueuedSong}
+                        >
+                          Take Back
+                        </button>
+                    </div>
+                  </div>
+                  <div
+                    className={`mt-1 truncate text-base font-semibold md:text-lg ${
+                      gigSheetQueuedSong ? 'text-slate-950' : 'text-teal-50'
+                    }`}
+                  >
+                    {gigSheetQueuedSong?.title ?? 'No song queued'}
+                  </div>
+                </div>
+                <div className="flex items-center justify-start gap-2 md:justify-end">
+                  {isAdmin && (
+                    <button
+                      className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                      onClick={() => setShowAddSetlistModal(true)}
+                    >
+                      Add Setlist Type
+                    </button>
+                  )}
+                  <button
+                    className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-300"
+                    onClick={closeGigSetlistSheet}
+                    aria-label="Close"
+                    title="Close"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div
+              className="min-h-0 flex-1 overflow-auto px-4 pb-4 pt-4 md:px-6"
+              data-drag-scroll-container="build-panel"
+            >
+              <div className="grid grid-cols-1 gap-4 md:flex md:h-full md:flex-nowrap md:items-stretch md:gap-4 md:overflow-x-auto md:overflow-y-hidden md:snap-x md:snap-mandatory">
+                <div
+                  className={`print-section-box gig-sheet-card ${getPrintToneClass('special requests')} md:min-w-[340px] md:w-[340px] md:shrink-0 md:snap-start`}
+                >
+                  <div className="print-section-title flex items-center justify-between gap-2">
+                    <span>Special Requests</span>
+                    {isAdmin && (
+                      <button
+                        className="rounded-lg border border-white/20 px-2 py-1 text-[10px]"
+                        onClick={() => {
+                          resetPendingSpecialRequest()
+                          setShowSpecialRequestModal(true)
+                        }}
+                      >
+                        Add
+                      </button>
+                    )}
+                  </div>
+                  <div className="print-list">
+                    {getOrderedSpecialRequests(currentSetlist.id).map((request) => {
+                      const isLocked = request.songId ? isGigSongLocked(request.songId) : false
+                      return (
+                        <div
+                          key={`gig-sheet-special-${request.id}`}
+                          role={request.songId ? 'button' : undefined}
+                          tabIndex={request.songId ? 0 : -1}
+                          className={`print-row ${isLocked ? 'opacity-45' : ''} ${
+                            request.songId && appState.currentSongId === request.songId
+                              ? 'ring-2 ring-emerald-300/80 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
+                              : ''
+                          }`}
+                          onMouseDown={() => request.songId && startGigSheetLongPress(request.songId)}
+                          onMouseUp={endGigSheetLongPress}
+                          onMouseLeave={endGigSheetLongPress}
+                          onTouchStart={() => request.songId && startGigSheetLongPress(request.songId)}
+                          onTouchEnd={endGigSheetLongPress}
+                          onTouchCancel={endGigSheetLongPress}
+                          onClick={() => {
+                            if (sheetLongPressTriggeredRef.current) {
+                              sheetLongPressTriggeredRef.current = false
+                              return
+                            }
+                            if (request.songId) {
+                              markGigSongAsSelected(request.songId)
+                            }
+                          }}
+                          onKeyDown={(event) => {
+                            if (!request.songId) return
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              markGigSongAsSelected(request.songId)
+                            }
+                          }}
+                        >
+                          <div className="print-row-title">
+                            <div className="song-title-stack">
+                              <span className="song-name text-slate-900">{request.songTitle}</span>
+                            </div>
+                          </div>
+                          <div className="print-row-subtitle print-song-meta">
+                            <span>{request.type}</span>
+                            <span className="print-assignee-names">
+                              {request.djOnly
+                                ? 'DJ'
+                                : request.singers.length
+                                  ? formatSingerAssignmentNames(request.singers)
+                                  : 'No singers'}
+                            </span>
+                            <span className="musical-key">{request.djOnly ? '—' : request.key || 'No key'}</span>
+                            {isAdmin && (
+                              <span className="mt-1 inline-flex items-center gap-1 self-end">
+                                <button
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/20 text-[11px] text-slate-200"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    openSpecialRequestEditor(request)
+                                  }}
+                                  aria-label="Edit special request"
+                                  title="Edit special request"
+                                >
+                                  ✎
+                                </button>
+                                <button
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-red-400/40 text-[11px] text-red-200"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    deleteSpecialRequest(request.id)
+                                  }}
+                                  aria-label="Delete special request"
+                                  title="Delete special request"
+                                >
+                                  ✕
+                                </button>
+                              </span>
+                            )}
+                          </div>
+                          {request.note ? <div className="print-row-note">{request.note}</div> : null}
+                        </div>
+                      )
+                    })}
+                    {getOrderedSpecialRequests(currentSetlist.id).length === 0 && (
+                      <div className="print-empty">No special requests.</div>
+                    )}
+                  </div>
+                </div>
+
+                {orderedSetSections.map((section) => {
+                  const sectionSongs = getSectionSongs(section).filter((song) => {
+                    if (!gigSheetSongSearchQuery) return true
+                    const titleArtist = `${song.title} ${song.artist ?? ''}`.toLowerCase()
+                    return titleArtist.includes(gigSheetSongSearchQuery)
+                  })
+                  const toneClass = getPrintToneClass(section)
+                  return (
+                    <div
+                      key={`gig-sheet-${section}`}
+                      className={`print-section-box gig-sheet-card ${toneClass} md:min-w-[340px] md:w-[340px] md:shrink-0 md:snap-start`}
+                      onDragOver={(event) => {
+                        if (!isAdmin) return
+                        event.preventDefault()
+                        event.dataTransfer.dropEffect = 'move'
+                        autoScrollDragContainer(event)
+                        updateSheetDragHover(section, null)
+                      }}
+                      onDrop={(event) => {
+                        if (!isAdmin) return
+                        event.preventDefault()
+                        const fromSongId = sheetDraggedSongId ?? event.dataTransfer.getData('text/plain')
+                        const fromSection = sheetDraggedFromSection ?? ''
+                        if (!fromSongId || !fromSection) return
+                        moveSongToGigSection(fromSection, section, fromSongId)
+                        setSheetDraggedSongId(null)
+                        setSheetDraggedFromSection(null)
+                        clearSheetDragHover()
+                      }}
+                    >
+                      <div className="print-section-title flex items-center justify-between gap-2">
+                        <span>{section}</span>
+                        {isAdmin && (
+                          <div className="flex items-center gap-1">
+                            <button
+                              className="rounded-lg border border-white/20 px-2 py-1 text-[10px]"
+                              onClick={() => openAddSongsForSection(section)}
+                            >
+                              Add
+                            </button>
+                            <button
+                              className="rounded-lg border border-white/20 px-2 py-1 text-[10px]"
+                              onClick={() => requestDeleteSetlistSection(section)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <div className="print-list">
+                        {sheetDragOverSection === section && !sheetDragOverSongId && isAdmin && (
+                          <div className="h-3 rounded-xl border border-dashed border-teal-300/70 bg-teal-300/15" />
+                        )}
+                        {sectionSongs.map((song) => {
+                          const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
+                          const singers = assignments.map((entry) => entry.singer)
+                          const isLocked = isGigSongLocked(song.id)
+                          const isQueuedOrPlayed = isLocked || appState.currentSongId === song.id
+                          return (
+                            <div key={`gig-sheet-song-${section}-${song.id}`}>
+                              {sheetDraggedSongId &&
+                                sheetDraggedSongId !== song.id &&
+                                sheetDragOverSongId === song.id &&
+                                isAdmin && (
+                                  <div className="mb-2 h-3 rounded-xl border border-dashed border-teal-300/70 bg-teal-300/15" />
+                                )}
+                              <div
+                                role="button"
+                                tabIndex={0}
+                                draggable={isAdmin}
+                                className={`print-row song-row gig-sheet-row transition-all duration-300 ${isLocked ? 'opacity-45' : ''} ${
+                                  appState.currentSongId === song.id
+                                    ? 'ring-2 ring-emerald-300/80 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
+                                    : ''
+                                } ${
+                                  recentlyMovedSongId === song.id
+                                    ? 'ring-2 ring-teal-300/80 bg-teal-300/20'
+                                    : ''
+                                }`}
+                                onMouseDown={() => startGigSheetLongPress(song.id)}
+                                onMouseUp={endGigSheetLongPress}
+                                onMouseLeave={endGigSheetLongPress}
+                                onTouchStart={() => startGigSheetLongPress(song.id)}
+                                onTouchEnd={endGigSheetLongPress}
+                                onTouchCancel={endGigSheetLongPress}
+                                onDragStart={(event) => {
+                                  if (!isAdmin) return
+                                  clearSheetLongPress()
+                                  setSheetDraggedSongId(song.id)
+                                  setSheetDraggedFromSection(section)
+                                  updateSheetDragHover(section, null)
+                                  event.dataTransfer.effectAllowed = 'move'
+                                  event.dataTransfer.setData('text/plain', song.id)
+                                }}
+                                onDragOver={(event) => {
+                                  if (!isAdmin) return
+                                  event.preventDefault()
+                                  event.dataTransfer.dropEffect = 'move'
+                                  autoScrollDragContainer(event)
+                                  updateSheetDragHover(section, song.id)
+                                }}
+                                onDrop={(event) => {
+                                  if (!isAdmin) return
+                                  event.preventDefault()
+                                  event.stopPropagation()
+                                  const fromSongId =
+                                    sheetDraggedSongId ?? event.dataTransfer.getData('text/plain')
+                                  const fromSection = sheetDraggedFromSection ?? ''
+                                  if (!fromSongId || !fromSection) return
+                                  if (fromSection.toLowerCase() === section.toLowerCase()) {
+                                    reorderSectionSongs(section, fromSongId, song.id)
+                                    flashMovedSong(fromSongId)
+                                  } else {
+                                    moveSongToGigSection(fromSection, section, fromSongId, song.id)
+                                  }
+                                  setSheetDraggedSongId(null)
+                                  setSheetDraggedFromSection(null)
+                                  clearSheetDragHover()
+                                }}
+                                onDragEnd={() => {
+                                  setSheetDraggedSongId(null)
+                                  setSheetDraggedFromSection(null)
+                                  clearSheetDragHover()
+                                }}
+                                onClick={() => {
+                                  if (sheetLongPressTriggeredRef.current) {
+                                    sheetLongPressTriggeredRef.current = false
+                                    return
+                                  }
+                                  markGigSongAsSelected(song.id)
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault()
+                                    markGigSongAsSelected(song.id)
+                                  }
+                                }}
+                              >
+                                <div className="gig-sheet-song-main">
+                                  <div
+                                    className={`song-name text-slate-900 ${
+                                      isQueuedOrPlayed ? 'line-through decoration-2 opacity-70' : ''
+                                    }`}
+                                  >
+                                    <span className="gig-sheet-title-inline">{song.title}</span>{' '}
+                                    <span className="gig-sheet-artist-inline">- {song.artist || 'Unknown'}</span>
+                                  </div>
+                                  <div
+                                    className={`gig-sheet-singer-line ${
+                                      isQueuedOrPlayed ? 'line-through decoration-2 opacity-70' : ''
+                                    }`}
+                                  >
+                                    {singers.length ? formatSingerFirstNames(singers) : 'No singers'}
+                                  </div>
+                                </div>
+                                {isAdmin && !isQueuedOrPlayed && (
+                                  <button
+                                    className="gig-sheet-remove-inline"
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      requestRemoveSong(song.id)
+                                    }}
+                                    aria-label="Remove song"
+                                    title="Remove song"
+                                  >
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                        {sectionSongs.length === 0 && (
+                          <div className="print-empty">
+                            {gigSheetSongSearchQuery ? 'No matching songs.' : 'No songs.'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           </div>

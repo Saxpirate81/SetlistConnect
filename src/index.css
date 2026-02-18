@@ -46,6 +46,139 @@ a:hover {
   box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.2), 0 8px 20px rgba(0, 0, 0, 0.25);
 }
 
+button[aria-label="Close"] {
+  min-width: auto !important;
+  padding: 0.5rem 0.75rem !important;
+  border-radius: 0.75rem !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  font-size: 0.875rem !important;
+  font-weight: 400 !important;
+  line-height: 1.25rem !important;
+  color: rgb(203 213 225) !important;
+}
+
+.gig-sheet-upnext {
+  width: 100%;
+}
+
+.gig-sheet-clear-upnext {
+  min-height: 38px;
+}
+
+.gig-sheet-card {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 220px);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.print-section-box.gig-sheet-card {
+  padding-top: 0;
+}
+
+@media (min-width: 768px) {
+  .gig-sheet-card {
+    height: 100%;
+    max-height: none;
+  }
+}
+
+.gig-sheet-card .print-section-title {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  margin-top: 0;
+  margin-bottom: 4px;
+  background: #cbd5e1;
+  border-color: rgba(100, 116, 139, 0.45);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.08);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  padding: 6px;
+}
+
+.gig-sheet-card .print-list {
+  flex: 1;
+  min-height: 0;
+  gap: 4px;
+  align-content: start;
+  grid-auto-rows: max-content;
+}
+
+.gig-sheet-remove-inline {
+  margin-top: 0;
+  align-self: center;
+  justify-self: end;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  border: 1px solid rgba(185, 28, 28, 0.55);
+  border-radius: 6px;
+  background: rgba(127, 29, 29, 0.9);
+  color: #fee2e2;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin-right: 0;
+}
+
+.gig-sheet-row {
+  height: 44px;
+  min-height: 44px;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  column-gap: 6px;
+  align-items: center;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.gig-sheet-song-main {
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+  padding-right: 4px;
+}
+
+.gig-sheet-row .song-name {
+  display: block;
+  margin: 0;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gig-sheet-title-inline {
+  font-size: inherit;
+}
+
+.gig-sheet-artist-inline {
+  font-size: 0.82em;
+  color: #475569;
+}
+
+.gig-sheet-singer-line {
+  font-family: "Arial Narrow", "Roboto Condensed", "Inter", system-ui, -apple-system, sans-serif;
+  display: block;
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
+  line-height: 1.2;
+  color: #1e3a8a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .liquid-button {
   position: relative;
   overflow: hidden;
@@ -339,14 +472,6 @@ a:hover {
   border: 1px solid rgba(148, 163, 184, 0.3);
   border-radius: 8px;
   padding: 5px 7px;
-}
-
-.print-dinner .print-section-title,
-.print-latin .print-section-title,
-.print-dance .print-section-title {
-  position: sticky;
-  top: 0;
-  z-index: 2;
 }
 
 .print-tone-special {

@@ -398,6 +398,8 @@ function App() {
   const [playlistSingerFilter, setPlaylistSingerFilter] = useState('__all__')
   const [playlistShareStatus, setPlaylistShareStatus] = useState('')
   const playlistShareTimerRef = useRef<number | null>(null)
+  const [playlistIsScrolling, setPlaylistIsScrolling] = useState(false)
+  const playlistScrollTimerRef = useRef<number | null>(null)
   const [showAddMusicianModal, setShowAddMusicianModal] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
   const [draggedSectionSongId, setDraggedSectionSongId] = useState<string | null>(null)
@@ -1341,6 +1343,16 @@ function App() {
     if (playable < 0) return
     setPlaylistIndex(playable)
     setPlaylistPlayNonce((current) => current + 1)
+  }
+  const handlePlaylistListScroll = () => {
+    setPlaylistIsScrolling(true)
+    if (playlistScrollTimerRef.current) {
+      window.clearTimeout(playlistScrollTimerRef.current)
+    }
+    playlistScrollTimerRef.current = window.setTimeout(() => {
+      setPlaylistIsScrolling(false)
+      playlistScrollTimerRef.current = null
+    }, 220)
   }
   const movePlaylistBy = (delta: number) => {
     if (!visiblePlaylistEntries.length) return
@@ -5057,6 +5069,14 @@ function App() {
   }, [playlistSingerFilter])
 
   useEffect(() => {
+    return () => {
+      if (playlistScrollTimerRef.current) {
+        window.clearTimeout(playlistScrollTimerRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     if (playlistIndex < visiblePlaylistEntries.length) return
     setPlaylistIndex(Math.max(0, visiblePlaylistEntries.length - 1))
   }, [playlistIndex, visiblePlaylistEntries.length])
@@ -5409,7 +5429,7 @@ function App() {
                   <div className="flex h-full min-h-0 flex-col">
                     <div>
                       {currentPlaylistEntry ? (
-                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 transition-all duration-300">
                           <div className="flex items-start justify-between gap-3">
                             <div>
                               <p className="text-lg font-semibold">{currentPlaylistEntry.title}</p>
@@ -5453,7 +5473,11 @@ function App() {
                             ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
                               <iframe
                                 key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared`}
-                                className="h-[150px] w-full rounded-xl border border-white/10 sm:h-[180px]"
+                                className={`w-full rounded-xl border border-white/10 transition-all duration-300 ${
+                                  playlistIsScrolling
+                                    ? 'h-[120px] sm:h-[145px]'
+                                    : 'h-[145px] sm:h-[170px]'
+                                }`}
                                 src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
                                 title="YouTube playlist item"
                                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -5482,7 +5506,12 @@ function App() {
                         </div>
                       )}
                     </div>
-                    <div className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                    <div
+                      className={`min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 transition-all duration-300 ${
+                        playlistIsScrolling ? '-mt-2' : 'mt-4'
+                      }`}
+                      onScroll={handlePlaylistListScroll}
+                    >
                       {groupedPlaylistSections.map((group) => (
                     <div
                       key={`shared-playlist-group-${group.section}`}
@@ -9582,7 +9611,7 @@ function App() {
             <div className="min-h-0 flex-1 overflow-hidden px-5 pb-6 pt-4">
               <div className="flex h-full min-h-0 flex-col">
               {currentPlaylistEntry ? (
-                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 transition-all duration-300">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-lg font-semibold">{currentPlaylistEntry.title}</p>
@@ -9645,7 +9674,11 @@ function App() {
                     ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
                       <iframe
                         key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
-                            className="h-[180px] w-full rounded-xl border border-white/10 sm:h-[210px]"
+                        className={`w-full rounded-xl border border-white/10 transition-all duration-300 ${
+                          playlistIsScrolling
+                            ? 'h-[120px] sm:h-[145px]'
+                            : 'h-[145px] sm:h-[170px]'
+                        }`}
                         src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
                         title="YouTube playlist item"
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -9674,7 +9707,12 @@ function App() {
                 </div>
               )}
 
-              <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+              <div
+                className={`min-h-0 flex-1 overflow-y-auto pr-1 transition-all duration-300 ${
+                  playlistIsScrolling ? '-mt-2' : 'mt-4'
+                }`}
+                onScroll={handlePlaylistListScroll}
+              >
               <div className="space-y-3 pb-2">
                 {groupedPlaylistSections.map((group) => (
                   <div

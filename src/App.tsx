@@ -163,6 +163,22 @@ const INSTRUMENTS = ['Vocals', 'Guitar', 'Keys', 'Bass', 'Drums', 'Sax', 'Trumpe
 const INSTRUMENTAL_LABEL = 'Instrumental'
 const DEFAULT_TAGS = ['Special Request', 'Dinner', 'Latin', 'Dance']
 const DEFAULT_SPECIAL_TYPES = ['First Dance', 'Last Dance', 'Parent Dance', 'Anniversary']
+const REQUEST_TYPE_TAG_EXCLUSIONS = [
+  'Special Request',
+  'Special Requests',
+  'Additional Request',
+  'Bride/Father',
+  'Bride/Father Dance',
+  'First Dance',
+  'Last Dance',
+  'Parent Dance',
+  'Wedding Party Intro',
+  'Anniversary',
+  'Anniversary Dance',
+  'Hora',
+  'HORA',
+  'HORA!',
+]
 const SETLIST_PANEL_PREFIX = 'set:'
 const ACTIVE_BAND_KEY = 'setlist:activeBandId'
 
@@ -268,6 +284,7 @@ function App() {
   const [pendingSpecialExternalUrl, setPendingSpecialExternalUrl] = useState('')
   const [specialRequestError, setSpecialRequestError] = useState('')
   const [showSpecialRequestModal, setShowSpecialRequestModal] = useState(false)
+  const [editingSpecialRequestId, setEditingSpecialRequestId] = useState<string | null>(null)
   const [selectedSongIds, setSelectedSongIds] = useState<string[]>([])
   const [docModalSongId, setDocModalSongId] = useState<string | null>(null)
   const [docModalContent, setDocModalContent] = useState<Document | null>(null)
@@ -622,6 +639,10 @@ function App() {
     () => new Set(appState.specialTypes.map((type) => normalizeTagIdentity(type))),
     [appState.specialTypes],
   )
+  const requestTypeIdentitySet = useMemo(
+    () => new Set(REQUEST_TYPE_TAG_EXCLUSIONS.map((value) => normalizeTagIdentity(value))),
+    [],
+  )
   const isSetlistTypeTag = useCallback((value: string) => {
     const normalized = normalizeSetlistSectionLabel(value)
     if (!normalized) return false
@@ -629,8 +650,9 @@ function App() {
     if (lower === 'special request' || lower === 'special requests') return false
     const identity = normalizeTagIdentity(normalized)
     if (!identity) return false
+    if (requestTypeIdentitySet.has(identity)) return false
     return !specialTypeIdentitySet.has(identity)
-  }, [specialTypeIdentitySet])
+  }, [requestTypeIdentitySet, specialTypeIdentitySet])
   const setlistTypeTags = useMemo(
     () => normalizeTagList(appState.tagsCatalog.filter((tag) => isSetlistTypeTag(tag))),
     [appState.tagsCatalog, isSetlistTypeTag],
@@ -699,6 +721,20 @@ function App() {
       .forEach(addSection)
     return sections
   }, [appState.songs, currentSetlist, isSetlistTypeTag, orderedSetSections])
+  const orderedPrintableSongSections = useMemo(() => {
+    const rankSection = (section: string) => {
+      const lower = section.trim().toLowerCase()
+      if (lower.includes('dinner')) return 0
+      if (lower.includes('latin')) return 1
+      if (lower.includes('dance')) return 2
+      return 10
+    }
+    return [...printableSetSections].sort((a, b) => {
+      const rankDiff = rankSection(a) - rankSection(b)
+      if (rankDiff !== 0) return rankDiff
+      return a.localeCompare(b)
+    })
+  }, [printableSetSections])
   const printableGigMusicians = useMemo(() => {
     if (!currentSetlist) return []
     const seen = new Set<string>()
@@ -728,6 +764,15 @@ function App() {
     if (normalized.includes('latin')) return 'print-tone-latin'
     if (normalized.includes('musician')) return 'print-tone-musicians'
     return 'print-tone-default'
+  }
+  const getPrintLayoutClass = (section: string) => {
+    const normalized = section.trim().toLowerCase()
+    if (normalized === 'special requests' || normalized === 'special request') return 'print-special'
+    if (normalized.includes('musician')) return 'print-musicians'
+    if (normalized.includes('dinner')) return 'print-dinner'
+    if (normalized.includes('dance')) return 'print-dance'
+    if (normalized.includes('latin')) return 'print-latin'
+    return 'print-generic-set'
   }
   const normalizePlaylistSection = useCallback((value: string) => {
     const normalized = normalizeSetlistSectionLabel(value)
@@ -1052,11 +1097,21 @@ function App() {
     const addOrMerge = (entry: PlaylistEntry) => {
       const existing = byKey.get(entry.key)
       if (existing) {
+        const hasSpecialRequestTag = (tags: string[]) =>
+          tags.some((item) => {
+            const lower = item.trim().toLowerCase()
+            return lower === 'special request' || lower === 'special requests'
+          })
+        const treatAsSpecialRequest = hasSpecialRequestTag(existing.tags) || hasSpecialRequestTag(entry.tags)
         entry.tags.forEach((tag) => {
+          if (treatAsSpecialRequest && tag.trim().toLowerCase() === 'setlist') return
           if (!existing.tags.some((item) => item.toLowerCase() === tag.toLowerCase())) {
             existing.tags.push(tag)
           }
         })
+        if (treatAsSpecialRequest) {
+          existing.tags = existing.tags.filter((tag) => tag.trim().toLowerCase() !== 'setlist')
+        }
         if (!existing.audioUrl && entry.audioUrl) {
           existing.audioUrl = entry.audioUrl
         }
@@ -1090,9 +1145,7 @@ function App() {
       .filter((request) => !request.djOnly)
       .forEach((request) => {
         const linkedSong = appState.songs.find((song) => song.id === request.songId)
-        const key = request.songId
-          ? `song:${request.songId}`
-          : `special:${request.songTitle.trim().toLowerCase()}`
+        const key = `special-request:${request.id}`
         addOrMerge({
           key,
           title: linkedSong?.title || request.songTitle,
@@ -1130,7 +1183,7 @@ function App() {
           assignmentKeys: assignments.map((entry) => entry.key),
         })
       })
-    return ordered
+    return ordered.filter((entry) => Boolean(entry.audioUrl && entry.audioUrl.trim()))
   }, [
     appState.songs,
     currentSetlist,
@@ -1485,6 +1538,19 @@ function App() {
       year: 'numeric',
     })
   }
+  const formatSingerShortName = (value: string) => {
+    const parts = value
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+    if (parts.length === 0) return ''
+    if (parts.length === 1) return parts[0]
+    const first = parts[0]
+    const lastInitial = parts[parts.length - 1]?.[0]?.toUpperCase() ?? ''
+    return lastInitial ? `${first} ${lastInitial}` : first
+  }
+  const formatSingerAssignmentNames = (values: string[]) =>
+    values.map((name) => formatSingerShortName(name)).filter(Boolean).join(', ')
 
   const setGigCurrentSong = (songId: string | null) => {
     if (!currentSetlist) return
@@ -3701,6 +3767,11 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [showUndoToast])
 
+  useEffect(() => {
+    if (showSpecialRequestModal) return
+    setEditingSpecialRequestId(null)
+  }, [showSpecialRequestModal])
+
   const resetPendingSpecialRequest = () => {
     setPendingSpecialType('')
     setPendingSpecialSong('')
@@ -3710,6 +3781,86 @@ function App() {
     setPendingSpecialDjOnly(false)
     setPendingSpecialExternalUrl('')
     setSpecialRequestError('')
+    setEditingSpecialRequestId(null)
+  }
+
+  const openSpecialRequestEditor = (request: SpecialRequest) => {
+    setPendingSpecialType(request.type ?? '')
+    setPendingSpecialSong(request.songTitle ?? '')
+    setPendingSpecialSingers(request.djOnly ? [] : normalizeTagList(request.singers ?? []))
+    setPendingSpecialKey(request.djOnly ? '' : request.key ?? '')
+    setPendingSpecialNote(request.note ?? '')
+    setPendingSpecialDjOnly(Boolean(request.djOnly))
+    setPendingSpecialExternalUrl(request.externalAudioUrl ?? '')
+    setSpecialRequestError('')
+    setEditingSpecialRequestId(request.id)
+    setShowSpecialRequestModal(true)
+  }
+
+  const updateSpecialRequest = () => {
+    if (!currentSetlist || !editingSpecialRequestId) return
+    setBuildPanelDirty(true)
+    setSpecialRequestError('')
+    const type = pendingSpecialType.trim()
+    const customSong = pendingSpecialSong.trim()
+    if (!type || !customSong) {
+      setSpecialRequestError('Request type and song title are required.')
+      return
+    }
+    const matchingSong = appState.songs.find(
+      (song) => song.title.trim().toLowerCase() === customSong.toLowerCase(),
+    )
+    const normalizedSingers = pendingSpecialDjOnly ? [] : normalizeTagList(pendingSpecialSingers)
+    const normalizedKey = pendingSpecialDjOnly ? '' : pendingSpecialKey.trim()
+    const nextSongId = matchingSong?.id
+    commitChange('Update special request', (prev) => ({
+      ...prev,
+      specialRequests: prev.specialRequests.map((request) =>
+        request.id === editingSpecialRequestId
+          ? {
+              ...request,
+              type,
+              songTitle: customSong,
+              songId: nextSongId,
+              singers: normalizedSingers,
+              key: normalizedKey,
+              note: pendingSpecialNote.trim() || undefined,
+              djOnly: pendingSpecialDjOnly,
+              externalAudioUrl: pendingSpecialExternalUrl.trim() || undefined,
+            }
+          : request,
+      ),
+      specialTypes: prev.specialTypes.includes(type) ? prev.specialTypes : [...prev.specialTypes, type],
+    }))
+    if (supabase) {
+      runSupabase(
+        supabase
+          .from('SetlistSpecialRequests')
+          .update(
+            withBandId({
+              request_type: type,
+              song_title: customSong,
+              song_id: nextSongId ?? null,
+              singers: normalizedSingers,
+              song_key: normalizedKey || null,
+              note: pendingSpecialNote.trim() || null,
+              dj_only: pendingSpecialDjOnly,
+              external_audio_url: pendingSpecialExternalUrl.trim() || null,
+            }),
+          )
+          .eq('id', editingSpecialRequestId),
+      )
+    }
+    resetPendingSpecialRequest()
+    setShowSpecialRequestModal(false)
+  }
+
+  const saveSpecialRequest = () => {
+    if (editingSpecialRequestId) {
+      updateSpecialRequest()
+      return
+    }
+    addSpecialRequest()
   }
 
   const addSpecialRequest = () => {
@@ -4282,11 +4433,47 @@ function App() {
     })
   }
 
-  const handleDownloadPDF = () => {
+  const getPrintableSetlistElement = () => {
+    const preview = document.getElementById('printable-setlist-preview')
+    if (preview) return preview
+    const hiddenInner = document.querySelector('#printable-setlist-hidden .print-container')
+    return hiddenInner instanceof HTMLElement ? hiddenInner : null
+  }
+
+  const handleDownloadPDF = async () => {
     if (!currentSetlist) return
-    window.requestAnimationFrame(() => {
-      window.print()
-    })
+    const element = getPrintableSetlistElement()
+    if (!element) {
+      setSupabaseError('Unable to generate PDF preview. Please reopen the preview and try again.')
+      return
+    }
+    const safeBand = (activeBandName || 'band').replace(/[^a-z0-9]/gi, '_').toLowerCase()
+    const safeGig = currentSetlist.gigName.replace(/[^a-z0-9]/gi, '_').toLowerCase()
+    const safeDate = (currentSetlist.date || '').replace(/[^0-9-]/g, '')
+    const exportName = `${safeBand}_${safeGig}_${safeDate || 'date'}_setlist.pdf`
+    try {
+      const html2pdf = (await import('html2pdf.js')).default
+      const pdfOptions = {
+        margin: 0.2,
+        filename: exportName,
+        enableLinks: true,
+        image: { type: 'jpeg', quality: 0.98 },
+        pagebreak: { mode: ['css', 'legacy'] },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: '#ffffff',
+        },
+        jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+      } as const
+      await html2pdf()
+        .set(pdfOptions as unknown as Record<string, unknown>)
+        .from(element)
+        .save()
+    } catch (error) {
+      console.error('PDF download failed:', error)
+      setSupabaseError('Download failed. Please try Print and choose "Save as PDF".')
+    }
   }
 
   const screenHeader = (
@@ -4598,7 +4785,7 @@ function App() {
           .is('deleted_at', null),
         supabase
           .from('SetlistSpecialRequests')
-          .select('song_id, song_title, singers, song_key, external_audio_url, dj_only')
+          .select('id, song_id, song_title, singers, song_key, external_audio_url, dj_only')
           .eq('gig_id', setlistId),
       ])
       if (cancelled) return
@@ -4674,11 +4861,22 @@ function App() {
       const addOrMerge = (entry: PlaylistEntry) => {
         const existing = byKey.get(entry.key)
         if (existing) {
+          const hasSpecialRequestTag = (tags: string[]) =>
+            tags.some((item) => {
+              const lower = item.trim().toLowerCase()
+              return lower === 'special request' || lower === 'special requests'
+            })
+          const treatAsSpecialRequest =
+            hasSpecialRequestTag(existing.tags) || hasSpecialRequestTag(entry.tags)
           entry.tags.forEach((tag) => {
+            if (treatAsSpecialRequest && tag.trim().toLowerCase() === 'setlist') return
             if (!existing.tags.some((item) => item.toLowerCase() === tag.toLowerCase())) {
               existing.tags.push(tag)
             }
           })
+          if (treatAsSpecialRequest) {
+            existing.tags = existing.tags.filter((tag) => tag.trim().toLowerCase() !== 'setlist')
+          }
           if (!existing.audioUrl && entry.audioUrl) {
             existing.audioUrl = entry.audioUrl
           }
@@ -4711,9 +4909,7 @@ function App() {
         .filter((request) => !request.dj_only)
         .forEach((request) => {
           const linkedSong = request.song_id ? songsById.get(request.song_id) : undefined
-          const key = request.song_id
-            ? `song:${request.song_id}`
-            : `special:${(request.song_title ?? '').trim().toLowerCase()}`
+          const key = `special-request:${request.id}`
           addOrMerge({
             key,
             title: linkedSong?.title || request.song_title || 'Special Request',
@@ -4744,14 +4940,15 @@ function App() {
           assignmentKeys: uniqueList(assignments.map((entry) => entry.key)),
         })
       })
+      const playableEntries = entries.filter((entry) => Boolean(entry.audioUrl && entry.audioUrl.trim()))
       setSharedPlaylistView({
         setlistId: gig.id,
         gigName: gig.gig_name,
         date: typeof gig.gig_date === 'string' ? gig.gig_date.slice(0, 10) : '',
         venueAddress: gig.venue_address ?? '',
-        entries,
+        entries: playableEntries,
       })
-      setPlaylistIndex(Math.min(requestedIndex, Math.max(0, entries.length - 1)))
+      setPlaylistIndex(Math.min(requestedIndex, Math.max(0, playableEntries.length - 1)))
       setPlaylistAutoAdvance(true)
       setSharedPlaylistLoading(false)
     })()
@@ -6926,27 +7123,31 @@ function App() {
                       return (
                       <div key={request.id} className="print-row">
                         <div className="print-row-title">
-                          {(request.externalAudioUrl || song?.youtubeUrl) ? (
-                            <a
-                              className="print-link"
-                              href={request.externalAudioUrl ?? song?.youtubeUrl ?? ''}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              {request.songTitle}
-                            </a>
-                          ) : (
-                            request.songTitle
-                          )}{' '}
-                          {request.djOnly ? <span className="print-pill">DJ Only</span> : null}
+                          <span className="print-title-line">
+                            {request.djOnly ? <span className="print-pill">DJ Only</span> : null}
+                            {request.externalAudioUrl || song?.youtubeUrl ? (
+                              <a
+                                className="print-link"
+                                href={request.externalAudioUrl ?? song?.youtubeUrl ?? ''}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {request.songTitle}
+                              </a>
+                            ) : (
+                              request.songTitle
+                            )}
+                          </span>
                         </div>
                         <div className="print-row-subtitle">
                           {request.type} ·{' '}
-                          {request.djOnly
-                            ? 'DJ'
-                            : request.singers.length
-                              ? request.singers.join(', ')
-                              : 'No singers'}{' '}
+                          <span className="print-assignee-names">
+                            {request.djOnly
+                              ? 'DJ'
+                              : request.singers.length
+                                ? formatSingerAssignmentNames(request.singers)
+                                : 'No singers'}
+                          </span>{' '}
                           · {request.djOnly ? '—' : request.key || 'No key'}
                         </div>
                         {request.note && <div className="print-row-note">{request.note}</div>}
@@ -6961,26 +7162,48 @@ function App() {
               <div className="print-section-box print-musicians">
                 <div className="print-section-title">Musicians</div>
                 <div className="print-grid">
-                  {appState.gigMusicians
-                    .filter((row) => row.gigId === currentSetlist.id)
-                    .map((row) =>
-                      appState.musicians.find((musician) => musician.id === row.musicianId),
-                    )
-                    .filter((musician): musician is Musician => Boolean(musician))
-                    .sort((a, b) => {
-                      const aCore = a.roster === 'core'
-                      const bCore = b.roster === 'core'
-                      if (aCore !== bCore) return aCore ? -1 : 1
-                      return a.name.localeCompare(b.name)
-                    })
-                    .map((musician) => (
-                      <div key={musician.id} className="print-card">
-                        <div className="print-card-title">{musician.name}</div>
-                        <div className="print-card-subtitle">
+                  {printableGigMusicians.map((musician) => (
+                    <div key={musician.id} className="print-card">
+                      <div className="print-musician-row">
+                        <div className="print-musician-name">{musician.name}</div>
+                        <div className="print-musician-instruments">
                           {(musician.instruments ?? []).join(', ') || 'No instruments'}
                         </div>
+                        <div className="print-contact-row">
+                          {musician.email && (
+                            <a
+                              href={`mailto:${musician.email}`}
+                              className="print-icon-link"
+                              title="Email"
+                            >
+                              ✉️
+                            </a>
+                          )}
+                          {musician.phone && (
+                            <>
+                              <a
+                                href={`tel:${musician.phone}`}
+                                className="print-icon-link"
+                                title="Call"
+                              >
+                                📞
+                              </a>
+                              <a
+                                href={`sms:${musician.phone}`}
+                                className="print-icon-link"
+                                title="Text"
+                              >
+                                💬
+                              </a>
+                            </>
+                          )}
+                        </div>
                       </div>
-                    ))}
+                    </div>
+                  ))}
+                  {printableGigMusicians.length === 0 && (
+                    <div className="print-empty">No musicians have been assigned yet.</div>
+                  )}
                 </div>
               </div>
 
@@ -7015,7 +7238,10 @@ function App() {
                           </div>
                           <div className="print-row-subtitle">
                             {song.artist || 'Unknown'} ·{' '}
-                            {singers.length ? singers.join(', ') : 'No singers'} · {keyLabel}
+                            <span className="print-assignee-names">
+                              {singers.length ? formatSingerAssignmentNames(singers) : 'No singers'}
+                            </span>{' '}
+                            · {keyLabel}
                           </div>
                         </div>
                       )
@@ -7060,7 +7286,10 @@ function App() {
                           </div>
                           <div className="print-row-subtitle">
                             {song.artist || 'Unknown'} ·{' '}
-                            {singers.length ? singers.join(', ') : 'No singers'} · {keyLabel}
+                            <span className="print-assignee-names">
+                              {singers.length ? formatSingerAssignmentNames(singers) : 'No singers'}
+                            </span>{' '}
+                            · {keyLabel}
                           </div>
                         </div>
                       )
@@ -7105,7 +7334,10 @@ function App() {
                           </div>
                           <div className="print-row-subtitle">
                             {song.artist || 'Unknown'} ·{' '}
-                            {singers.length ? singers.join(', ') : 'No singers'} · {keyLabel}
+                            <span className="print-assignee-names">
+                              {singers.length ? formatSingerAssignmentNames(singers) : 'No singers'}
+                            </span>{' '}
+                            · {keyLabel}
                           </div>
                         </div>
                       )
@@ -8180,22 +8412,29 @@ function App() {
       {showSpecialRequestModal && currentSetlist && (
         <div
           className="fixed inset-0 z-[93] flex items-center justify-center bg-slate-950/80 px-4 py-6"
-          onClick={() => setShowSpecialRequestModal(false)}
+          onClick={() => {
+            resetPendingSpecialRequest()
+            setShowSpecialRequestModal(false)
+          }}
         >
           <div
             className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
-              <h3 className="text-lg font-semibold">Add special request</h3>
+              <h3 className="text-lg font-semibold">
+                {editingSpecialRequestId ? 'Edit special request' : 'Add special request'}
+              </h3>
               <p className="mt-1 text-sm text-slate-300">
-                Enter request details. New songs are automatically saved to the song library.
+                {editingSpecialRequestId
+                  ? 'Update request details and save changes.'
+                  : 'Enter request details. New songs are automatically saved to the song library.'}
               </p>
               <div className="mt-3 flex items-center gap-2">
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => {
-                    setSpecialRequestError('')
+                    resetPendingSpecialRequest()
                     setShowSpecialRequestModal(false)
                   }}
                   aria-label="Close"
@@ -8205,9 +8444,9 @@ function App() {
                 </button>
                 <button
                   className="min-w-[120px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                  onClick={addSpecialRequest}
+                  onClick={saveSpecialRequest}
                 >
-                  Save request
+                  {editingSpecialRequestId ? 'Save changes' : 'Save request'}
                 </button>
               </div>
             </div>
@@ -9013,8 +9252,22 @@ function App() {
                           <div className="text-xs text-slate-200">
                             {request.djOnly ? '—' : request.key}
                           </div>
-                          <div className="text-xs text-slate-400">
+                          <div className="flex items-center justify-start gap-2 text-xs text-slate-400">
                             {request.note ? 'ℹ️' : ''}
+                            {!gigMode && (
+                              <button
+                                type="button"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-slate-300"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  openSpecialRequestEditor(request)
+                                }}
+                                aria-label="Edit special request"
+                                title="Edit special request"
+                              >
+                                ✎
+                              </button>
+                            )}
                           </div>
                         </div>
                       )
@@ -9151,7 +9404,10 @@ function App() {
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h3 className="text-lg font-semibold">Gig Playlist</h3>
+                  <h3 className="text-lg font-semibold">
+                    {activeBandName || 'Band'} · {currentSetlist.gigName} ·{' '}
+                    {formatGigDate(currentSetlist.date)}
+                  </h3>
                 </div>
                 <button
                   type="button"
@@ -9442,64 +9698,59 @@ function App() {
                     </div>
 
                     <div className="print-layout">
-                      {chunkList(printableGigMusicians, 10).map((musicianChunk, musicianChunkIndex) => (
-                        <div
-                          key={`musicians-${musicianChunkIndex}`}
-                          className={`print-section-box ${getPrintToneClass('musicians')}`}
-                        >
-                          <div className="print-section-title">
-                            Musicians{musicianChunkIndex > 0 ? ' (cont.)' : ''}
-                          </div>
-                          <div className="print-grid">
-                            {musicianChunk.map((musician) => (
-                              <div key={musician.id} className="print-card">
-                                <div className="flex items-start justify-between gap-2">
-                                  <div>
-                                    <div className="print-card-title">{musician.name}</div>
-                                    <div className="print-card-subtitle">
-                                      {(musician.instruments ?? []).join(', ') || 'No instruments'}
-                                    </div>
-                                  </div>
-                                  <div className="print-contact-row">
-                                    {musician.email && (
+                      <div
+                        className={`print-section-box ${getPrintToneClass('musicians')} ${getPrintLayoutClass('musicians')}`}
+                      >
+                        <div className="print-section-title">Musicians</div>
+                        <div className="print-grid">
+                          {printableGigMusicians.map((musician) => (
+                            <div key={musician.id} className="print-card">
+                              <div className="print-musician-row">
+                                <div className="print-musician-name">{musician.name}</div>
+                                <div className="print-musician-instruments">
+                                  {(musician.instruments ?? []).join(', ') || 'No instruments'}
+                                </div>
+                                <div className="print-contact-row">
+                                  {musician.email && (
+                                    <a
+                                      href={`mailto:${musician.email}`}
+                                      className="print-icon-link"
+                                      title="Email"
+                                    >
+                                      ✉️
+                                    </a>
+                                  )}
+                                  {musician.phone && (
+                                    <>
                                       <a
-                                        href={`mailto:${musician.email}`}
+                                        href={`tel:${musician.phone}`}
                                         className="print-icon-link"
-                                        title="Email"
+                                        title="Call"
                                       >
-                                        ✉️
+                                        📞
                                       </a>
-                                    )}
-                                    {musician.phone && (
-                                      <>
-                                        <a
-                                          href={`tel:${musician.phone}`}
-                                          className="print-icon-link"
-                                          title="Call"
-                                        >
-                                          📞
-                                        </a>
-                                        <a
-                                          href={`sms:${musician.phone}`}
-                                          className="print-icon-link"
-                                          title="Text"
-                                        >
-                                          💬
-                                        </a>
-                                      </>
-                                    )}
-                                  </div>
+                                      <a
+                                        href={`sms:${musician.phone}`}
+                                        className="print-icon-link"
+                                        title="Text"
+                                      >
+                                        💬
+                                      </a>
+                                    </>
+                                  )}
                                 </div>
                               </div>
-                            ))}
-                            {musicianChunk.length === 0 && (
-                              <div className="print-empty">No musicians have been assigned yet.</div>
-                            )}
-                          </div>
+                            </div>
+                          ))}
+                          {printableGigMusicians.length === 0 && (
+                            <div className="print-empty">No musicians have been assigned yet.</div>
+                          )}
                         </div>
-                      ))}
+                      </div>
 
-                      <div className={`print-section-box ${getPrintToneClass('special requests')}`}>
+                      <div
+                        className={`print-section-box ${getPrintToneClass('special requests')} ${getPrintLayoutClass('special requests')}`}
+                      >
                         <div className="print-section-title">Special Requests</div>
                         <div className="print-list">
                           {getOrderedSpecialRequests(currentSetlist.id)
@@ -9508,57 +9759,60 @@ function App() {
                               return (
                                 <div key={request.id} className="print-row">
                                   <div className="print-row-title">
-                                    {request.externalAudioUrl || song?.youtubeUrl ? (
-                                      <a
-                                        className="print-link"
-                                        href={request.externalAudioUrl ?? song?.youtubeUrl ?? ''}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                      >
-                                        {request.songTitle}
-                                      </a>
-                                    ) : (
-                                      request.songTitle
-                                    )}{' '}
-                                    {request.djOnly ? <span className="print-pill">DJ Only</span> : null}
+                                    <span className="print-title-line">
+                                      {request.djOnly ? <span className="print-pill">DJ Only</span> : null}
+                                      {request.externalAudioUrl || song?.youtubeUrl ? (
+                                        <a
+                                          className="print-link"
+                                          href={request.externalAudioUrl ?? song?.youtubeUrl ?? ''}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                        >
+                                          {request.songTitle}
+                                        </a>
+                                      ) : (
+                                        request.songTitle
+                                      )}
+                                    </span>
                                   </div>
                                   <div className="print-row-subtitle">
                                     {request.type} ·{' '}
-                                    {request.djOnly
-                                      ? 'DJ'
-                                      : request.singers.length
-                                        ? request.singers.join(', ')
-                                        : 'No singers'}{' '}
+                                        <span className="print-assignee-names">
+                                          {request.djOnly
+                                            ? 'DJ'
+                                            : request.singers.length
+                                              ? formatSingerAssignmentNames(request.singers)
+                                              : 'No singers'}
+                                        </span>{' '}
                                     · {request.djOnly ? '—' : request.key || 'No key'}
                                   </div>
-                                  {request.note && (
-                                    <div className="print-row-note">{request.note}</div>
-                                  )}
+                                  {request.note && <div className="print-row-note">{request.note}</div>}
                                 </div>
                               )
                             })}
-                          {getOrderedSpecialRequests(currentSetlist.id)
-                            .length === 0 && <div className="print-empty">No special requests.</div>}
+                          {getOrderedSpecialRequests(currentSetlist.id).length === 0 && (
+                            <div className="print-empty">No special requests.</div>
+                          )}
                         </div>
                       </div>
 
-                      {printableSetSections.flatMap((section) => {
+                      {orderedPrintableSongSections.flatMap((section) => {
                         const songs = currentSetlist.songIds
                           .map((songId) => appState.songs.find((song) => song.id === songId))
                           .filter((song): song is Song => Boolean(song))
                           .filter((song) => hasSongTag(song, section))
-                        const sectionChunks = chunkList(songs, 16)
+                        const isDanceSection = section.toLowerCase().includes('dance')
+                        const sectionChunks = isDanceSection ? [songs] : chunkList(songs, 20)
                         const sectionTitle = section.toLowerCase().includes('set')
                           ? section
                           : `${section} Set`
                         return sectionChunks.map((songChunk, chunkIndex) => (
                           <div
-                            key={`${section}-${chunkIndex}`}
-                            className={`print-section-box ${getPrintToneClass(section)}`}
+                            key={`stacked-${section}-${chunkIndex}`}
+                            className={`print-section-box ${getPrintToneClass(section)} ${getPrintLayoutClass(section)}`}
                           >
                             <div className="print-section-title">
                               {sectionTitle}
-                              {chunkIndex > 0 ? ' (cont.)' : ''}
                             </div>
                             <div className="print-list">
                               {songChunk.map((song) => {
@@ -9585,7 +9839,10 @@ function App() {
                                     </div>
                                     <div className="print-row-subtitle">
                                       {song.artist || 'Unknown'} ·{' '}
-                                      {singers.length ? singers.join(', ') : 'No singers'} · {keyLabel}
+                                      <span className="print-assignee-names">
+                                        {singers.length ? formatSingerAssignmentNames(singers) : 'No singers'}
+                                      </span>{' '}
+                                      · {keyLabel}
                                     </div>
                                   </div>
                                 )
@@ -10728,8 +10985,23 @@ function App() {
                             <div className="text-xs text-slate-200">
                               {request.djOnly ? '—' : request.key}
                             </div>
-                            <div className="text-xs text-slate-400">
+                            <div className="flex items-center justify-start gap-2 text-xs text-slate-400">
                               {request.note ? 'ℹ️' : ''}
+                              {!gigMode && (
+                                <button
+                                  type="button"
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-slate-300"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    openSpecialRequestEditor(request)
+                                  }}
+                                  onMouseDown={(event) => event.stopPropagation()}
+                                  aria-label="Edit special request"
+                                  title="Edit special request"
+                                >
+                                  ✎
+                                </button>
+                              )}
                             </div>
                             </div>
                           </div>

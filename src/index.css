@@ -868,21 +868,35 @@ button[aria-label="Close"] {
     border-radius: 14px;
     padding: 12px;
     overflow-x: hidden;
+    width: 100%;
+    max-width: 100%;
   }
 
   .shared-setlist-container {
     gap: 10px;
-    font-size: 11px;
+    font-size: clamp(9px, 2.6vw, 10px);
     width: 100%;
     max-width: 100%;
     min-width: 0;
   }
 
+  .shared-setlist-shell,
+  .shared-setlist-container,
+  .shared-setlist-container * {
+    box-sizing: border-box;
+  }
+
   .shared-setlist-container .print-header {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
     grid-template-columns: 1fr;
-    row-gap: 7px;
-    padding: 10px 12px;
-    margin-bottom: 8px;
+    row-gap: 5px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
   }
 
   .shared-setlist-container .print-band-name {
@@ -890,12 +904,14 @@ button[aria-label="Close"] {
     grid-row: auto;
     justify-self: start;
     text-align: left;
-    font-size: 20px;
+    font-size: clamp(14px, 5vw, 18px);
     line-height: 1.1;
     white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .shared-setlist-container .print-header-details {
+    width: 100%;
     grid-column: auto;
     grid-row: auto;
   }
@@ -909,13 +925,14 @@ button[aria-label="Close"] {
   .shared-setlist-container .print-layout {
     grid-template-columns: 1fr;
     column-gap: 0;
-    row-gap: 10px;
+    row-gap: 8px;
     width: 100%;
     min-width: 0;
+    overflow-x: hidden;
   }
 
   .shared-setlist-container .print-section-box {
-    padding: 8px;
+    padding: 6px;
     border-radius: 12px;
     width: 100%;
     max-width: 100%;
@@ -933,49 +950,74 @@ button[aria-label="Close"] {
   }
 
   .shared-setlist-container .print-section-title {
-    font-size: 11px;
+    font-size: 10px;
     letter-spacing: 0.08em;
-    padding: 7px 8px;
-    margin-bottom: 6px;
+    padding: 5px 7px;
+    margin-bottom: 4px;
   }
 
   .shared-setlist-container .print-grid {
     grid-template-columns: 1fr;
-    gap: 6px;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
   }
 
   .shared-setlist-container .print-list {
-    gap: 6px;
-    padding: 6px;
+    gap: 4px;
+    padding: 4px;
     width: 100%;
     min-width: 0;
+    overflow-x: hidden;
   }
 
   .shared-setlist-container .print-row {
     grid-template-columns: 1fr;
     min-height: 0;
-    row-gap: 4px;
-    padding: 8px 9px;
+    row-gap: 3px;
+    padding: 6px 7px;
     width: 100%;
     min-width: 0;
   }
 
+  .shared-setlist-container .print-musician-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .shared-setlist-container .print-musician-instruments {
+    grid-column: 2;
+    text-align: right;
+    font-size: 0.62rem;
+    white-space: nowrap;
+  }
+
+  .shared-setlist-container .print-contact-row {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
   .shared-setlist-container .print-row-title {
-    font-size: 0.98rem;
-    line-height: 1.25;
+    font-size: clamp(0.8rem, 3.1vw, 0.88rem);
+    line-height: 1.18;
     padding-top: 0;
     min-height: 0;
+    width: 100%;
+    min-width: 0;
   }
 
   .shared-setlist-container .artist-name {
-    font-size: 0.74rem;
+    font-size: clamp(0.56rem, 2.2vw, 0.62rem);
   }
 
   .shared-setlist-container .print-row-subtitle {
     grid-column: 1;
     text-align: left;
-    font-size: 0.76rem;
-    line-height: 1.2;
+    font-size: clamp(0.58rem, 2.4vw, 0.65rem);
+    line-height: 1.15;
     margin-top: 0;
   }
 
@@ -984,19 +1026,19 @@ button[aria-label="Close"] {
     align-items: center;
     justify-content: flex-start;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 6px;
   }
 
   .shared-setlist-container .musical-key {
     min-width: 0;
-    font-size: 0.78rem;
+    font-size: clamp(0.56rem, 2.3vw, 0.64rem);
     border-radius: 999px;
     background: #e2e8f0;
     padding: 1px 6px;
   }
 
   .shared-setlist-container .print-assignee-names {
-    font-size: 0.68rem;
+    font-size: clamp(0.5rem, 2.1vw, 0.56rem);
     line-height: 1.2;
   }
 
@@ -1008,9 +1050,108 @@ button[aria-label="Close"] {
   }
 
   .shared-setlist-container .print-icon-link {
-    width: 28px;
-    height: 28px;
-    font-size: 12px;
+    width: 24px;
+    height: 24px;
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 390px) {
+  .shared-setlist-shell {
+    padding: 8px;
+    border-radius: 12px;
+  }
+
+  .shared-setlist-container {
+    gap: 6px;
+    font-size: 8.5px;
+  }
+
+  .shared-setlist-container .print-header {
+    padding: 6px 8px;
+    row-gap: 4px;
+    margin-bottom: 4px;
+  }
+
+  .shared-setlist-container .print-band-name {
+    font-size: clamp(12px, 4.6vw, 16px);
+  }
+
+  .shared-setlist-container .print-title {
+    font-size: clamp(13px, 4.4vw, 16px);
+    line-height: 1.05;
+  }
+
+  .shared-setlist-container .print-subtitle {
+    font-size: clamp(8px, 2.8vw, 10px);
+    margin-top: 1px;
+  }
+
+  .shared-setlist-container .print-badge {
+    font-size: 7px;
+    letter-spacing: 0.16em;
+    padding: 2px 6px;
+  }
+
+  .shared-setlist-container .print-layout {
+    row-gap: 6px;
+  }
+
+  .shared-setlist-container .print-section-box {
+    padding: 5px;
+    border-radius: 10px;
+  }
+
+  .shared-setlist-container .print-section-title {
+    font-size: 9px;
+    padding: 4px 6px;
+    margin-bottom: 3px;
+  }
+
+  .shared-setlist-container .print-list {
+    gap: 3px;
+    padding: 3px;
+  }
+
+  .shared-setlist-container .print-row {
+    padding: 5px 6px;
+    row-gap: 2px;
+  }
+
+  .shared-setlist-container .print-row-title {
+    font-size: 0.74rem;
+    line-height: 1.1;
+  }
+
+  .shared-setlist-container .artist-name {
+    font-size: 0.52rem;
+  }
+
+  .shared-setlist-container .print-row-subtitle {
+    font-size: 0.54rem;
+  }
+
+  .shared-setlist-container .musical-key {
+    font-size: 0.52rem;
+    padding: 0 5px;
+  }
+
+  .shared-setlist-container .print-assignee-names {
+    font-size: 0.46rem;
+  }
+
+  .shared-setlist-container .print-musician-name {
+    font-size: 0.72rem;
+  }
+
+  .shared-setlist-container .print-musician-instruments {
+    font-size: 0.54rem;
+  }
+
+  .shared-setlist-container .print-icon-link {
+    width: 20px;
+    height: 20px;
+    font-size: 9px;
   }
 }
 

@@ -399,7 +399,8 @@ function App() {
   const [sharedPlaylistView, setSharedPlaylistView] = useState<SharedPlaylistView | null>(null)
   const [sharedPlaylistLoading, setSharedPlaylistLoading] = useState(false)
   const [sharedPlaylistError, setSharedPlaylistError] = useState<string | null>(null)
-  const [sharedPublicTab, setSharedPublicTab] = useState<'home' | 'setlist' | 'playlist'>('home')
+  const [sharedPublicTab, setSharedPublicTab] = useState<'setlist' | 'playlist'>('setlist')
+  const [sharedGigMusicians, setSharedGigMusicians] = useState<Musician[]>([])
   const [sharedDocuments, setSharedDocuments] = useState<Document[]>([])
   const [sharedDocsLoading, setSharedDocsLoading] = useState(false)
   const [sharedDocsError, setSharedDocsError] = useState<string | null>(null)
@@ -5591,7 +5592,7 @@ function App() {
       setSharedDocsLoading(false)
       return
     }
-    setSharedPublicTab('home')
+    setSharedPublicTab('setlist')
     if (!supabase) {
       setSharedDocsError('Documents are unavailable right now.')
       setSharedDocsLoading(false)
@@ -5639,6 +5640,61 @@ function App() {
       cancelled = true
     }
   }, [parseDocumentInstruments, sharedPlaylistView, supabase])
+
+  useEffect(() => {
+    if (!sharedPlaylistView || !supabase) {
+      setSharedGigMusicians([])
+      return
+    }
+    const gigId = sharedPlaylistView.setlistId
+    let cancelled = false
+    void (async () => {
+      const { data: gigMusicianRows, error: gigMusicianError } = await supabase
+        .from('SetlistGigMusicians')
+        .select('musician_id, status')
+        .eq('gig_id', gigId)
+      if (cancelled || gigMusicianError) {
+        setSharedGigMusicians([])
+        return
+      }
+      const activeMusicianIds = Array.from(
+        new Set(
+          (gigMusicianRows ?? [])
+            .filter((row) => (row.status ?? 'active') !== 'out')
+            .map((row) => row.musician_id)
+            .filter(Boolean),
+        ),
+      )
+      if (activeMusicianIds.length === 0) {
+        setSharedGigMusicians([])
+        return
+      }
+      const { data: musicianRows, error: musiciansError } = await supabase
+        .from('SetlistMusicians')
+        .select('id, name, roster, email, phone, instruments, singer, deleted_at')
+        .in('id', activeMusicianIds)
+        .is('deleted_at', null)
+      if (cancelled || musiciansError) {
+        setSharedGigMusicians([])
+        return
+      }
+      const musicians: Musician[] = (musicianRows ?? []).map((row) => ({
+        id: row.id,
+        name: row.name,
+        roster: row.roster,
+        email: row.email ?? undefined,
+        phone: row.phone ?? undefined,
+        instruments: (row.instruments ?? []).map((item: string) => normalizeInstrumentName(item)),
+        singer: row.singer ?? undefined,
+      }))
+      const rank = new Map(activeMusicianIds.map((id, index) => [id, index]))
+      musicians.sort((a, b) => (rank.get(a.id) ?? 9999) - (rank.get(b.id) ?? 9999))
+      setSharedGigMusicians(musicians)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [normalizeInstrumentName, sharedPlaylistView, supabase])
 
   useEffect(() => {
     if (!sharedPlaylistView || !supabase) return
@@ -6142,9 +6198,14 @@ function App() {
               <div>
                 <h2 className="text-lg font-semibold">Shared Gig Playlist</h2>
                 {sharedPlaylistView && (
-                  <p className="mt-1 text-xs text-slate-300">
-                    {sharedPlaylistView.gigName} · {formatGigDate(sharedPlaylistView.date)}
-                  </p>
+                  <>
+                    <p className="mt-1 text-xs text-slate-300">
+                      {sharedPlaylistView.gigName} · {formatGigDate(sharedPlaylistView.date)}
+                    </p>
+                    {sharedPlaylistView.venueAddress ? (
+                      <p className="mt-0.5 text-[11px] text-slate-400">{sharedPlaylistView.venueAddress}</p>
+                    ) : null}
+                  </>
                 )}
               </div>
               <div className="text-xs text-slate-400">
@@ -6185,39 +6246,7 @@ function App() {
                   </button>
                 </div>
 
-                {sharedPublicTab === 'home' ? (
-                  <div className="mt-4 min-h-0 flex-1 overflow-auto rounded-2xl bg-slate-950/50 p-3 sm:p-4">
-                    <div className="mx-auto w-full max-w-xl rounded-2xl border border-white/10 bg-gradient-to-br from-white/10 via-white/5 to-white/0 p-4">
-                      <div className="text-xs uppercase tracking-[0.2em] text-teal-300/80">Gig Info</div>
-                      <h3 className="mt-2 text-xl font-semibold text-white">{sharedPlaylistView.gigName}</h3>
-                      <div className="mt-2 text-sm text-slate-200">
-                        {formatGigDate(sharedPlaylistView.date)}
-                      </div>
-                      <div className="mt-1 text-sm text-slate-300">
-                        {sharedPlaylistView.venueAddress?.trim() || 'Venue location not provided'}
-                      </div>
-                      <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
-                        {visiblePlaylistEntries.length} playable songs shared
-                      </div>
-                      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        <button
-                          type="button"
-                          className="rounded-xl border border-teal-300/60 bg-teal-400/10 px-3 py-2 text-sm font-semibold text-teal-100"
-                          onClick={() => setSharedPublicTab('setlist')}
-                        >
-                          Open Setlist
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
-                          onClick={() => setSharedPublicTab('playlist')}
-                        >
-                          Open Audio Playlist
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ) : sharedPublicTab === 'setlist' ? (
+                {sharedPublicTab === 'setlist' ? (
                   <div className="mt-4 min-h-0 flex-1 overflow-auto rounded-2xl bg-slate-950/50 p-2 sm:p-4">
                     {sharedDocsLoading && (
                       <div className="mb-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
@@ -6243,6 +6272,26 @@ function App() {
                           <div className="print-badge">Setlist</div>
                         </div>
                         <div className="print-layout">
+                          <div
+                            className={`print-section-box ${getPrintToneClass('musicians')} ${getPrintLayoutClass('musicians')}`}
+                          >
+                            <div className="print-section-title">Musicians</div>
+                            <div className="print-grid">
+                              {sharedGigMusicians.map((musician) => (
+                                <div key={`shared-musician-${musician.id}`} className="print-card">
+                                  <div className="print-musician-row">
+                                    <div className="print-musician-name">{musician.name}</div>
+                                    <div className="print-musician-instruments">
+                                      {(musician.instruments ?? []).join(', ') || 'No instruments'}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                              {sharedGigMusicians.length === 0 && (
+                                <div className="print-empty">No musicians assigned.</div>
+                              )}
+                            </div>
+                          </div>
                           {groupedPlaylistSections.map((group) => (
                             <div
                               key={`shared-pdf-section-${group.section}`}
@@ -6274,13 +6323,24 @@ function App() {
                                     >
                                       <div className="print-row-title">
                                         <div className="song-title-stack">
-                                          <span className="song-name">{item.title}</span>
+                                          {item.audioUrl ? (
+                                            <a
+                                              className="print-link song-name text-[0.95em]"
+                                              href={item.audioUrl}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                            >
+                                              {item.title}
+                                            </a>
+                                          ) : (
+                                            <span className="song-name text-[0.95em]">{item.title}</span>
+                                          )}
                                           <span className="artist-name">{item.artist || 'Unknown'}</span>
                                         </div>
                                       </div>
                                       <div className="print-row-subtitle print-song-meta">
                                         <span className="musical-key">{keyLabel}</span>
-                                        <span className="print-assignee-names">
+                                        <span className="print-assignee-names text-[0.92em]">
                                           {singerNames.length ? formatSingerAssignmentNames(singerNames) : 'No singers'}
                                         </span>
                                       </div>
@@ -6502,18 +6562,6 @@ function App() {
         {sharedPlaylistView && (
           <nav className="fixed bottom-0 left-0 right-0 z-[90] border-t border-white/10 bg-slate-950/95 backdrop-blur">
             <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-2 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
-              <button
-                type="button"
-                className={`flex min-w-[110px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
-                  sharedPublicTab === 'home'
-                    ? 'border-teal-300/70 bg-teal-400/10 text-teal-100'
-                    : 'border-white/10 text-slate-300'
-                }`}
-                onClick={() => setSharedPublicTab('home')}
-              >
-                <span className="text-base">🏠</span>
-                Gig Info
-              </button>
               <button
                 type="button"
                 className={`flex min-w-[140px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${

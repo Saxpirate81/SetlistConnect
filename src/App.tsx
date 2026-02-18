@@ -363,10 +363,10 @@ function App() {
   const [showMissingSingerWarning, setShowMissingSingerWarning] = useState(false)
   const [starterPasteBySection, setStarterPasteBySection] = useState<Record<string, string>>({})
   const [starterPasteOpen, setStarterPasteOpen] = useState<Record<string, boolean>>({})
-  const [manualOrderModeBySection, setManualOrderModeBySection] = useState<Record<string, boolean>>({})
-  const [manualOrderDraftBySection, setManualOrderDraftBySection] = useState<
-    Record<string, Record<string, string>>
-  >({})
+  const [showManualSectionOrderModal, setShowManualSectionOrderModal] = useState(false)
+  const [manualSectionOrderSection, setManualSectionOrderSection] = useState<string | null>(null)
+  const [manualSectionOrderSelections, setManualSectionOrderSelections] = useState<string[]>([])
+  const [manualSectionOrderError, setManualSectionOrderError] = useState('')
   const [buildCompleteOverrides, setBuildCompleteOverrides] = useState<
     Record<string, Record<string, boolean>>
   >(() => {
@@ -2569,6 +2569,17 @@ function App() {
       return song ? hasSongTag(song, section) : false
     })
   }, [appState.songs, currentSetlist])
+  const getSectionSongs = useCallback((section: string) => {
+    if (!currentSetlist) return []
+    return currentSetlist.songIds
+      .map((songId) => appState.songs.find((song) => song.id === songId))
+      .filter((song): song is Song => Boolean(song))
+      .filter((song) => hasSongTag(song, section))
+  }, [appState.songs, currentSetlist])
+  const manualSectionOrderSongs = useMemo(() => {
+    if (!currentSetlist || !manualSectionOrderSection) return []
+    return getSectionSongs(manualSectionOrderSection)
+  }, [currentSetlist, getSectionSongs, manualSectionOrderSection])
   const applySectionSongOrder = (section: string, reorderedSectionSongIds: string[]) => {
     if (!currentSetlist || reorderedSectionSongIds.length === 0) return
     let cursor = 0
@@ -2663,52 +2674,60 @@ function App() {
       container.scrollTop += delta
     }
   }
-  const toggleManualSectionOrder = (section: string) => {
-    const enabling = !manualOrderModeBySection[section]
-    setManualOrderModeBySection((prev) => ({ ...prev, [section]: enabling }))
-    if (enabling) {
-      const sectionSongIds = getSectionSongIds(section)
-      const nextDraft = sectionSongIds.reduce<Record<string, string>>((acc, songId, index) => {
-        acc[songId] = String(index + 1)
-        return acc
-      }, {})
-      setManualOrderDraftBySection((prev) => ({ ...prev, [section]: nextDraft }))
-      return
-    }
-    setManualOrderDraftBySection((prev) => {
-      const next = { ...prev }
-      delete next[section]
-      return next
-    })
-  }
-  const applyManualSectionOrder = (section: string) => {
+  const openManualSectionOrderModal = (section: string) => {
     const sectionSongIds = getSectionSongIds(section)
     if (!sectionSongIds.length) return
-    const draft = manualOrderDraftBySection[section] ?? {}
-    const songTitleById = new Map(
-      appState.songs.map((song) => [song.id, (song.title ?? '').trim().toLowerCase()]),
-    )
-    const ranked = sectionSongIds.map((songId, index) => {
-      const parsed = Number.parseInt(draft[songId] ?? '', 10)
-      const rank =
-        Number.isFinite(parsed) && parsed > 0 ? parsed : sectionSongIds.length + index + 1
-      return { songId, rank, index }
-    })
-    ranked.sort((a, b) => {
-      if (a.rank !== b.rank) return a.rank - b.rank
-      const aTitle = songTitleById.get(a.songId) ?? ''
-      const bTitle = songTitleById.get(b.songId) ?? ''
-      if (aTitle !== bTitle) return aTitle.localeCompare(bTitle)
-      return a.index - b.index
-    })
-    const nextOrder = ranked.map((item) => item.songId)
-    applySectionSongOrder(section, nextOrder)
-    setManualOrderModeBySection((prev) => ({ ...prev, [section]: false }))
-    setManualOrderDraftBySection((prev) => {
-      const next = { ...prev }
-      delete next[section]
-      return next
-    })
+    setManualSectionOrderSection(section)
+    setManualSectionOrderSelections(Array.from({ length: sectionSongIds.length }, () => ''))
+    setManualSectionOrderError('')
+    setShowManualSectionOrderModal(true)
+  }
+  const closeManualSectionOrderModal = () => {
+    setShowManualSectionOrderModal(false)
+    setManualSectionOrderSection(null)
+    setManualSectionOrderSelections([])
+    setManualSectionOrderError('')
+  }
+  const applyManualSectionOrder = () => {
+    if (!manualSectionOrderSection) return
+    const sectionSongs = getSectionSongs(manualSectionOrderSection)
+    if (!sectionSongs.length) return
+    const firstEmptyIndex = manualSectionOrderSelections.findIndex((songId) => !songId)
+    const selectedPrefix =
+      firstEmptyIndex === -1
+        ? manualSectionOrderSelections
+        : manualSectionOrderSelections.slice(0, firstEmptyIndex)
+    if (!selectedPrefix.length) {
+      setManualSectionOrderError('Choose at least Position 1 to apply manual order.')
+      return
+    }
+    const hasGapAfterStart =
+      firstEmptyIndex !== -1 &&
+      manualSectionOrderSelections.slice(firstEmptyIndex + 1).some((songId) => Boolean(songId))
+    if (hasGapAfterStart) {
+      setManualSectionOrderError(
+        'Use consecutive positions from the top (no gaps between selected songs).',
+      )
+      return
+    }
+    const unique = new Set(selectedPrefix)
+    if (unique.size !== selectedPrefix.length) {
+      setManualSectionOrderError('Each song can only be selected once.')
+      return
+    }
+    const validIds = new Set(sectionSongs.map((song) => song.id))
+    const selectedTopSongs = selectedPrefix.filter((songId) => validIds.has(songId))
+    if (selectedTopSongs.length !== selectedPrefix.length) {
+      setManualSectionOrderError('One or more selections are invalid. Please reselect.')
+      return
+    }
+    const selectedSet = new Set(selectedTopSongs)
+    const remainingSongIds = sectionSongs
+      .map((song) => song.id)
+      .filter((songId) => !selectedSet.has(songId))
+    const nextOrder = [...selectedTopSongs, ...remainingSongIds]
+    applySectionSongOrder(manualSectionOrderSection, nextOrder)
+    closeManualSectionOrderModal()
   }
 
   const addGigSetlistSection = (requestedLabel: string) => {
@@ -4256,155 +4275,18 @@ function App() {
     }
   }
 
-  const getPrintableSetlistElement = () => {
-    // Prefer the visible preview canvas when open.
-    const preview = document.getElementById('printable-setlist-preview')
-    if (preview) return preview
-    // Fallback must target the inner print container, not the hidden wrapper.
-    const hiddenInner = document.querySelector('#printable-setlist-hidden .print-container')
-    return hiddenInner instanceof HTMLElement ? hiddenInner : null
+  const handlePrintSetlistPDF = () => {
+    if (!currentSetlist) return
+    window.requestAnimationFrame(() => {
+      window.print()
+    })
   }
 
-  const handleDownloadPDF = async () => {
-    const element = getPrintableSetlistElement()
-    if (!element || !currentSetlist) return
-
-    // Clone the element to render it in a clean context
-    const clone = element.cloneNode(true) as HTMLElement
-    clone.id = 'printable-setlist-clone'
-    clone.style.display = 'grid'
-    clone.style.visibility = 'visible'
-    clone.style.opacity = '1'
-    clone.style.maxHeight = 'none'
-    clone.style.overflow = 'visible'
-    
-    // Create a container that mimics the page view width
-    const container = document.createElement('div')
-    container.style.position = 'fixed'
-    container.style.left = '0'
-    container.style.top = '0'
-    container.style.transform = 'translateX(-200vw)'
-    container.style.width = '816px' // 8.5in at 96dpi
-    container.style.padding = '32px' // Match the p-8 padding
-    container.style.backgroundColor = '#ffffff'
-    container.style.color = '#0b0f14'
-    container.style.pointerEvents = 'none'
-    container.style.zIndex = '-1'
-    container.style.overflow = 'visible'
-    container.appendChild(clone)
-    
-    document.body.appendChild(container)
-
-    const opt = {
-      margin: 0.2, 
-      filename: `${currentSetlist.gigName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_setlist.pdf`,
-      image: { type: 'jpeg' as const, quality: 0.98 },
-      pagebreak: {
-        mode: ['css', 'legacy'],
-        avoid: ['.print-section-box', '.print-section-title', '.print-row', '.print-card'],
-      },
-      html2canvas: { 
-        scale: 2, 
-        useCORS: true, 
-        logging: false,
-        backgroundColor: '#ffffff',
-        windowWidth: 816,
-        scrollY: 0
-      },
-      jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' as const },
-    }
-
-    try {
-      const html2pdf = (await import('html2pdf.js')).default
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-      })
-      await html2pdf().set(opt).from(container).save()
-    } catch (err) {
-      console.error('PDF generation failed:', err)
-    } finally {
-      document.body.removeChild(container)
-    }
-  }
-
-  const handlePrintSetlistPDF = async () => {
-    const element = getPrintableSetlistElement()
-    if (!element || !currentSetlist) return
-
-    const clone = element.cloneNode(true) as HTMLElement
-    clone.id = 'printable-setlist-clone-print'
-    clone.style.display = 'grid'
-    clone.style.visibility = 'visible'
-    clone.style.opacity = '1'
-    clone.style.maxHeight = 'none'
-    clone.style.overflow = 'visible'
-
-    const container = document.createElement('div')
-    container.style.position = 'fixed'
-    container.style.left = '0'
-    container.style.top = '0'
-    container.style.transform = 'translateX(-200vw)'
-    container.style.width = '816px'
-    container.style.padding = '32px'
-    container.style.backgroundColor = '#ffffff'
-    container.style.color = '#0b0f14'
-    container.style.pointerEvents = 'none'
-    container.style.zIndex = '-1'
-    container.style.overflow = 'visible'
-    container.appendChild(clone)
-    document.body.appendChild(container)
-
-    try {
-      const html2pdf = (await import('html2pdf.js')).default
-      const opt = {
-        margin: 0.2,
-        image: { type: 'jpeg' as const, quality: 0.98 },
-        pagebreak: {
-          mode: ['css', 'legacy'],
-          avoid: ['.print-section-box', '.print-section-title', '.print-row', '.print-card'],
-        },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          logging: false,
-          backgroundColor: '#ffffff',
-          windowWidth: 816,
-          scrollY: 0,
-        },
-        jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' as const },
-      }
-
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-      })
-      const worker = html2pdf().set(opt).from(container)
-      const blob = await worker.outputPdf('blob')
-      const url = URL.createObjectURL(blob)
-      const iframe = document.createElement('iframe')
-      iframe.style.position = 'fixed'
-      iframe.style.right = '0'
-      iframe.style.bottom = '0'
-      iframe.style.width = '0'
-      iframe.style.height = '0'
-      iframe.style.border = '0'
-      iframe.src = url
-      document.body.appendChild(iframe)
-      iframe.onload = () => {
-        try {
-          iframe.contentWindow?.focus()
-          iframe.contentWindow?.print()
-        } finally {
-          window.setTimeout(() => {
-            URL.revokeObjectURL(url)
-            document.body.removeChild(iframe)
-          }, 2000)
-        }
-      }
-    } catch (err) {
-      console.error('Setlist print PDF generation failed:', err)
-    } finally {
-      document.body.removeChild(container)
-    }
+  const handleDownloadPDF = () => {
+    if (!currentSetlist) return
+    window.requestAnimationFrame(() => {
+      window.print()
+    })
   }
 
   const screenHeader = (
@@ -8203,6 +8085,98 @@ function App() {
         </div>
       )}
 
+      {showManualSectionOrderModal && currentSetlist && manualSectionOrderSection && (
+        <div
+          className="fixed inset-0 z-[92] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={closeManualSectionOrderModal}
+        >
+          <div
+            className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+              <h3 className="text-lg font-semibold">Manual Order: {manualSectionOrderSection}</h3>
+              <p className="mt-1 text-sm text-slate-300">
+                Pick as many top positions as you want (Position 1, 2, 3...). Remaining songs stay in
+                current order.
+              </p>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={closeManualSectionOrderModal}
+                  aria-label="Close"
+                  title="Close"
+                >
+                  ✕
+                </button>
+                <button
+                  className="min-w-[140px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                  onClick={applyManualSectionOrder}
+                >
+                  Apply order
+                </button>
+                <button
+                  className="min-w-[100px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() =>
+                    setManualSectionOrderSelections(
+                      Array.from({ length: manualSectionOrderSongs.length }, () => ''),
+                    )
+                  }
+                >
+                  Clear all
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4">
+              <div className="space-y-2">
+                {manualSectionOrderSelections.map((songId, index) => (
+                  <div
+                    key={`manual-order-slot-${index}`}
+                    className="grid items-center gap-3 rounded-2xl border border-white/10 bg-slate-950/50 px-3 py-3 md:grid-cols-[96px_1fr]"
+                  >
+                    <div className="text-xs font-semibold text-slate-300">Position {index + 1}</div>
+                    <select
+                      className="w-full rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-300"
+                      value={songId}
+                      disabled={index > 0 && !manualSectionOrderSelections[index - 1]}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setManualSectionOrderError('')
+                        setManualSectionOrderSelections((current) =>
+                          current.map((item, itemIndex) => (itemIndex === index ? value : item)),
+                        )
+                      }}
+                    >
+                      <option value="">Select song...</option>
+                      {manualSectionOrderSongs.map((song) => {
+                        const alreadyUsedAtOtherPosition = manualSectionOrderSelections.some(
+                          (selectedId, selectedIndex) => selectedId === song.id && selectedIndex !== index,
+                        )
+                        return (
+                          <option
+                            key={`${manualSectionOrderSection}-${song.id}`}
+                            value={song.id}
+                            disabled={alreadyUsedAtOtherPosition}
+                          >
+                            {song.title}
+                            {song.artist ? ` - ${song.artist}` : ''}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              {manualSectionOrderError && (
+                <div className="mt-3 rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                  {manualSectionOrderError}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showSpecialRequestModal && currentSetlist && (
         <div
           className="fixed inset-0 z-[93] flex items-center justify-center bg-slate-950/80 px-4 py-6"
@@ -9168,19 +9142,16 @@ function App() {
 
       {showPlaylistModal && currentSetlist && (
         <div
-          className="fixed inset-0 z-[98] flex items-center justify-center bg-slate-950/85 px-4 py-6 backdrop-blur-sm"
+          className="fixed inset-0 z-[98] bg-slate-950/90 backdrop-blur-sm"
         >
           <div
-            className="w-full max-w-3xl max-h-[88vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
+            className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h3 className="text-lg font-semibold">Gig Playlist</h3>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Ordered: Special Requests, Dinner, Dance, Latin
-                  </p>
                 </div>
                 <button
                   type="button"
@@ -9254,7 +9225,7 @@ function App() {
               </div>
             </div>
 
-            <div className="h-[calc(88vh-140px)] overflow-hidden px-5 pb-6 pt-4">
+            <div className="min-h-0 flex-1 overflow-hidden px-5 pb-6 pt-4">
               <div className="flex h-full min-h-0 flex-col">
               {currentPlaylistEntry ? (
                 <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
@@ -10897,12 +10868,7 @@ function App() {
                 (() => {
                   const section = getSectionFromPanel(activeBuildPanel) ?? ''
                   const completionKey = setlistPanelKey(section)
-                  const sectionSongs = currentSetlist.songIds
-                    .map((songId) => appState.songs.find((song) => song.id === songId))
-                    .filter((song): song is Song => Boolean(song))
-                    .filter((song) => hasSongTag(song, section))
-                  const isManualOrdering = Boolean(manualOrderModeBySection[section])
-                  const sectionOrderDraft = manualOrderDraftBySection[section] ?? {}
+                  const sectionSongs = getSectionSongs(section)
                   return (
                     <div
                       className={`rounded-3xl border p-5 ${
@@ -10979,23 +10945,11 @@ function App() {
                               Add song(s)
                             </button>
                             <button
-                              className={`inline-flex min-w-[130px] items-center justify-center whitespace-nowrap rounded-xl border px-4 py-2 text-center text-sm font-semibold ${
-                                isManualOrdering
-                                  ? 'border-amber-300/70 bg-amber-500/20 text-amber-100'
-                                  : 'border-white/10 text-slate-200'
-                              }`}
-                              onClick={() => toggleManualSectionOrder(section)}
+                              className="inline-flex min-w-[130px] items-center justify-center whitespace-nowrap rounded-xl border border-white/10 px-4 py-2 text-center text-sm font-semibold text-slate-200"
+                              onClick={() => openManualSectionOrderModal(section)}
                             >
-                              {isManualOrdering ? 'Cancel order' : 'Manual order'}
+                              Manual order
                             </button>
-                            {isManualOrdering && (
-                              <button
-                                className="inline-flex min-w-[120px] items-center justify-center whitespace-nowrap rounded-xl bg-teal-400/90 px-4 py-2 text-center text-sm font-semibold text-slate-950"
-                                onClick={() => applyManualSectionOrder(section)}
-                              >
-                                Apply order
-                              </button>
-                            )}
                           </div>
                           {starterPasteOpen[section] && (
                             <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-3 text-[10px] text-slate-200">
@@ -11049,7 +11003,7 @@ function App() {
                         </div>
                       )}
                       <div className="mt-4 space-y-2">
-                        {sectionSongs.map((song, sectionIndex) => (
+                        {sectionSongs.map((song) => (
                             <div key={song.id} className="space-y-2">
                               {draggedSectionSongId &&
                                 draggedSectionSongId !== song.id &&
@@ -11141,26 +11095,6 @@ function App() {
                             >
                               <div className="flex items-start justify-between gap-2">
                                 <div className="flex items-start gap-2">
-                                  {isManualOrdering && (
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      className="w-14 rounded-lg border border-white/20 bg-slate-900/80 px-2 py-1 text-center text-xs text-slate-100 outline-none focus:border-teal-300"
-                                      value={sectionOrderDraft[song.id] ?? String(sectionIndex + 1)}
-                                      onClick={(event) => event.stopPropagation()}
-                                      onKeyDown={(event) => event.stopPropagation()}
-                                      onChange={(event) => {
-                                        const value = event.target.value
-                                        setManualOrderDraftBySection((prev) => ({
-                                          ...prev,
-                                          [section]: {
-                                            ...(prev[section] ?? {}),
-                                            [song.id]: value,
-                                          },
-                                        }))
-                                      }}
-                                    />
-                                  )}
                                   <div>
                                   <div className="text-base font-semibold md:text-lg">
                                     {song.title}

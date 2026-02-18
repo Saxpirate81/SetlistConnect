@@ -345,6 +345,7 @@ function App() {
   const [sharedPlaylistView, setSharedPlaylistView] = useState<SharedPlaylistView | null>(null)
   const [sharedPlaylistLoading, setSharedPlaylistLoading] = useState(false)
   const [sharedPlaylistError, setSharedPlaylistError] = useState<string | null>(null)
+  const [playlistSingerFilter, setPlaylistSingerFilter] = useState('__all__')
   const [playlistShareStatus, setPlaylistShareStatus] = useState('')
   const playlistShareTimerRef = useRef<number | null>(null)
   const [showAddMusicianModal, setShowAddMusicianModal] = useState(false)
@@ -705,6 +706,45 @@ function App() {
     if (normalized.includes('musician')) return 'print-tone-musicians'
     return 'print-tone-default'
   }
+  const normalizePlaylistSection = useCallback((value: string) => {
+    const normalized = normalizeSetlistSectionLabel(value)
+    if (!normalized) return ''
+    const lower = normalized.toLowerCase()
+    if (lower === 'special request' || lower === 'special requests') return 'Special Requests'
+    return normalized
+  }, [])
+  const getPlaylistPrimarySection = useCallback((entry: PlaylistEntry) => {
+    const seen = new Set<string>()
+    const normalizedTags = (entry.tags ?? [])
+      .map(normalizePlaylistSection)
+      .filter((tag) => {
+        if (!tag) return false
+        const lower = tag.toLowerCase()
+        if (seen.has(lower)) return false
+        seen.add(lower)
+        return true
+      })
+    const nonSpecial = normalizedTags.find((tag) => tag.toLowerCase() !== 'special requests')
+    if (nonSpecial) return nonSpecial
+    if (normalizedTags.some((tag) => tag.toLowerCase() === 'special requests')) return 'Special Requests'
+    return 'Setlist'
+  }, [normalizePlaylistSection])
+  const getPlaylistToneClasses = (section: string) => {
+    const tone = getPrintToneClass(section)
+    if (tone === 'print-tone-special') {
+      return 'border-fuchsia-300/40 bg-fuchsia-500/10 text-fuchsia-100'
+    }
+    if (tone === 'print-tone-dinner') {
+      return 'border-amber-300/40 bg-amber-500/10 text-amber-100'
+    }
+    if (tone === 'print-tone-dance') {
+      return 'border-cyan-300/40 bg-cyan-500/10 text-cyan-100'
+    }
+    if (tone === 'print-tone-latin') {
+      return 'border-rose-300/40 bg-rose-500/10 text-rose-100'
+    }
+    return 'border-slate-300/25 bg-slate-700/30 text-slate-100'
+  }
   const getOrderedSpecialRequests = useCallback((gigId: string) => {
     const base = appState.specialRequests.filter((request) => request.gigId === gigId)
     const order = specialRequestOrderByGig[gigId] ?? []
@@ -1042,27 +1082,117 @@ function App() {
         })
       })
 
-    ;(['Dinner', 'Dance', 'Latin'] as const).forEach((section) => {
-      currentSetlist.songIds
-        .map((songId) => appState.songs.find((song) => song.id === songId))
-        .filter((song): song is Song => Boolean(song))
-        .filter((song) => hasSongTag(song, section))
-        .forEach((song) => {
-          addOrMerge({
-            key: `song:${song.id}`,
-            title: song.title,
-            artist: song.artist,
-            audioUrl: (song.youtubeUrl || '').trim(),
-            tags: [section],
-            songId: song.id,
-          })
+    currentSetlist.songIds
+      .map((songId) => appState.songs.find((song) => song.id === songId))
+      .filter((song): song is Song => Boolean(song))
+      .forEach((song) => {
+        const sectionTags = normalizeTagList(song.tags)
+          .map(normalizePlaylistSection)
+          .filter((tag) => tag && tag.toLowerCase() !== 'special requests')
+        const assignments = song.keys
+          .map((key) => ({
+            singer: key.singer,
+            key: key.gigOverrides[currentSetlist.id] ?? '',
+          }))
+          .filter((entry) => entry.key)
+        addOrMerge({
+          key: `song:${song.id}`,
+          title: song.title,
+          artist: song.artist,
+          audioUrl: (song.youtubeUrl || '').trim(),
+          tags: sectionTags.length ? sectionTags : ['Setlist'],
+          songId: song.id,
+          assignmentSingers: assignments.map((entry) => entry.singer),
+          assignmentKeys: assignments.map((entry) => entry.key),
         })
-    })
+      })
     return ordered
-  }, [appState.songs, currentSetlist, getOrderedSpecialRequests])
+  }, [appState.songs, currentSetlist, getOrderedSpecialRequests, normalizePlaylistSection])
 
   const activePlaylistEntries = sharedPlaylistView?.entries ?? playlistEntries
-  const currentPlaylistEntry = activePlaylistEntries[playlistIndex] ?? null
+  const getPlaylistEntryAssignments = useCallback((entry: PlaylistEntry) => {
+    const singers = normalizeTagList(entry.assignmentSingers ?? [])
+    const keys = normalizeTagList(entry.assignmentKeys ?? [])
+    if (entry.songId && currentSetlist) {
+      const song = appState.songs.find((item) => item.id === entry.songId)
+      song?.keys
+        .map((key) => ({
+          singer: key.singer,
+          key: key.gigOverrides[currentSetlist.id] ?? '',
+        }))
+        .filter((assignment) => assignment.key)
+        .forEach((assignment) => {
+          if (
+            assignment.singer &&
+            !singers.some((item) => item.toLowerCase() === assignment.singer.toLowerCase())
+          ) {
+            singers.push(assignment.singer)
+          }
+          if (assignment.key && !keys.some((item) => item.toLowerCase() === assignment.key.toLowerCase())) {
+            keys.push(assignment.key)
+          }
+        })
+    }
+    return { singers, keys }
+  }, [appState.songs, currentSetlist])
+  const playlistSingerOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const options: string[] = []
+    activePlaylistEntries.forEach((entry) => {
+      getPlaylistEntryAssignments(entry).singers.forEach((singer) => {
+        const normalized = singer.trim()
+        if (!normalized) return
+        const key = normalized.toLowerCase()
+        if (seen.has(key)) return
+        seen.add(key)
+        options.push(normalized)
+      })
+    })
+    return options.sort((a, b) => a.localeCompare(b))
+  }, [activePlaylistEntries, getPlaylistEntryAssignments])
+  const visiblePlaylistEntries = useMemo(() => {
+    if (playlistSingerFilter === '__all__') return activePlaylistEntries
+    return activePlaylistEntries.filter((entry) =>
+      getPlaylistEntryAssignments(entry).singers.some(
+        (singer) => singer.toLowerCase() === playlistSingerFilter.toLowerCase(),
+      ),
+    )
+  }, [activePlaylistEntries, getPlaylistEntryAssignments, playlistSingerFilter])
+  const groupedPlaylistSections = useMemo(() => {
+    const buckets = new Map<string, Array<{ entry: PlaylistEntry; index: number }>>()
+    visiblePlaylistEntries.forEach((entry, index) => {
+      const section = getPlaylistPrimarySection(entry)
+      const list = buckets.get(section) ?? []
+      list.push({ entry, index })
+      buckets.set(section, list)
+    })
+    const preferredOrder = [
+      'Special Requests',
+      ...orderedSetSections.map(normalizePlaylistSection).filter(Boolean),
+      'Setlist',
+    ]
+    const seen = new Set<string>()
+    const orderedSections: string[] = []
+    preferredOrder.forEach((section) => {
+      const lower = section.toLowerCase()
+      if (seen.has(lower)) return
+      seen.add(lower)
+      orderedSections.push(section)
+    })
+    buckets.forEach((_value, key) => {
+      const lower = key.toLowerCase()
+      if (seen.has(lower)) return
+      seen.add(lower)
+      orderedSections.push(key)
+    })
+    return orderedSections
+      .map((section) => ({
+        section,
+        items: buckets.get(section) ?? [],
+      }))
+      .filter((group) => group.items.length > 0)
+  }, [getPlaylistPrimarySection, normalizePlaylistSection, orderedSetSections, visiblePlaylistEntries])
+  const currentPlaylistEntry = visiblePlaylistEntries[playlistIndex] ?? null
   const docModalPages = useMemo(() => {
     if (!docModalContent?.url) return []
     const pages = docModalContent.url
@@ -1076,11 +1206,11 @@ function App() {
     Boolean(entry?.audioUrl && entry.audioUrl.trim())
 
   const findNextPlayableIndex = (startIndex: number, delta: number) => {
-    if (!activePlaylistEntries.length) return -1
-    for (let step = 0; step < activePlaylistEntries.length; step += 1) {
+    if (!visiblePlaylistEntries.length) return -1
+    for (let step = 0; step < visiblePlaylistEntries.length; step += 1) {
       const candidate =
-        (startIndex + delta * step + activePlaylistEntries.length) % activePlaylistEntries.length
-      if (isPlaylistEntryPlayable(activePlaylistEntries[candidate])) {
+        (startIndex + delta * step + visiblePlaylistEntries.length) % visiblePlaylistEntries.length
+      if (isPlaylistEntryPlayable(visiblePlaylistEntries[candidate])) {
         return candidate
       }
     }
@@ -1088,8 +1218,8 @@ function App() {
   }
 
   const jumpToPlaylistIndex = (index: number) => {
-    if (!activePlaylistEntries.length) return
-    const playable = isPlaylistEntryPlayable(activePlaylistEntries[index])
+    if (!visiblePlaylistEntries.length) return
+    const playable = isPlaylistEntryPlayable(visiblePlaylistEntries[index])
       ? index
       : findNextPlayableIndex(index, 1)
     if (playable < 0) return
@@ -1097,9 +1227,9 @@ function App() {
     setPlaylistPlayNonce((current) => current + 1)
   }
   const movePlaylistBy = (delta: number) => {
-    if (!activePlaylistEntries.length) return
+    if (!visiblePlaylistEntries.length) return
     const next = findNextPlayableIndex(
-      (playlistIndex + delta + activePlaylistEntries.length) % activePlaylistEntries.length,
+      (playlistIndex + delta + visiblePlaylistEntries.length) % visiblePlaylistEntries.length,
       delta >= 0 ? 1 : -1,
     )
     if (next < 0) return
@@ -1108,6 +1238,13 @@ function App() {
   }
   const copyPlaylistShareLink = async () => {
     if (!currentSetlist) return
+    const currentShareEntry = visiblePlaylistEntries[playlistIndex]
+    const shareStartIndex = currentShareEntry
+      ? Math.max(
+          0,
+          activePlaylistEntries.findIndex((entry) => entry.key === currentShareEntry.key),
+        )
+      : 0
     const payload = {
       setlistId: currentSetlist.id,
       gigName: currentSetlist.gigName,
@@ -1127,7 +1264,7 @@ function App() {
     const params = new URLSearchParams()
     params.set('playlist', '1')
     params.set('setlist', currentSetlist.id)
-    params.set('item', String(Math.max(0, playlistIndex)))
+    params.set('item', String(shareStartIndex))
     params.set('data', encodeSharePayloadBase64Url(payload))
     const shareUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`
     const setStatus = (value: string) => {
@@ -1248,21 +1385,7 @@ function App() {
   }
 
   const getPlaylistAssignmentText = (entry: PlaylistEntry) => {
-    const singers = normalizeTagList(entry.assignmentSingers ?? [])
-    const keys = normalizeTagList(entry.assignmentKeys ?? [])
-    if (entry.songId && currentSetlist) {
-      getGigSingerAssignments(entry.songId, currentSetlist.id).forEach((assignment) => {
-        if (
-          assignment.singer &&
-          !singers.some((item) => item.toLowerCase() === assignment.singer.toLowerCase())
-        ) {
-          singers.push(assignment.singer)
-        }
-        if (assignment.key && !keys.some((item) => item.toLowerCase() === assignment.key.toLowerCase())) {
-          keys.push(assignment.key)
-        }
-      })
-    }
+    const { singers, keys } = getPlaylistEntryAssignments(entry)
     const singerLabel = singers.length ? `Assigned: ${singers.join(', ')}` : 'Assigned: none'
     const keyLabel = keys.length ? `Key: ${keys.join(', ')}` : 'Key: —'
     return `${singerLabel} · ${keyLabel}`
@@ -3989,11 +4112,12 @@ function App() {
   }
 
   const getPrintableSetlistElement = () => {
-    // Prefer the preview canvas content when open; fallback to hidden print node.
-    return (
-      document.getElementById('printable-setlist-preview') ??
-      document.getElementById('printable-setlist-hidden')
-    )
+    // Prefer the visible preview canvas when open.
+    const preview = document.getElementById('printable-setlist-preview')
+    if (preview) return preview
+    // Fallback must target the inner print container, not the hidden wrapper.
+    const hiddenInner = document.querySelector('#printable-setlist-hidden .print-container')
+    return hiddenInner instanceof HTMLElement ? hiddenInner : null
   }
 
   const handleDownloadPDF = async () => {
@@ -4003,6 +4127,8 @@ function App() {
     // Clone the element to render it in a clean context
     const clone = element.cloneNode(true) as HTMLElement
     clone.id = 'printable-setlist-clone'
+    clone.style.display = 'grid'
+    clone.style.visibility = 'visible'
     
     // Create a container that mimics the page view width
     const container = document.createElement('div')
@@ -4053,6 +4179,8 @@ function App() {
 
     const clone = element.cloneNode(true) as HTMLElement
     clone.id = 'printable-setlist-clone-print'
+    clone.style.display = 'grid'
+    clone.style.visibility = 'visible'
 
     const container = document.createElement('div')
     container.style.position = 'absolute'
@@ -4464,6 +4592,21 @@ function App() {
         list.push(row.tag)
         tagsBySong.set(row.song_id, list)
       })
+      const gigSingerKeyAssignments = new Map<string, Array<{ singer: string; key: string }>>()
+      const singerKeysRes = await supabase
+        .from('SetlistGigSingerKeys')
+        .select('song_id, singer_name, gig_key')
+        .eq('gig_id', setlistId)
+      if (cancelled) return
+      if (!singerKeysRes.error) {
+        ;(singerKeysRes.data ?? []).forEach((row) => {
+          const cleanKey = (row.gig_key ?? '').trim()
+          if (!cleanKey) return
+          const list = gigSingerKeyAssignments.get(row.song_id) ?? []
+          list.push({ singer: row.singer_name, key: cleanKey })
+          gigSingerKeyAssignments.set(row.song_id, list)
+        })
+      }
       const orderedSongs = orderedSongIds
         .map((songId) => songsById.get(songId))
         .filter((song): song is NonNullable<(typeof songsRes.data)[number]> => Boolean(song))
@@ -4536,35 +4679,24 @@ function App() {
             assignmentKeys: request.song_key ? [request.song_key] : [],
           })
         })
-      ;(['Dinner', 'Dance', 'Latin'] as const).forEach((section) => {
-        orderedSongs.forEach((song) => {
-          const songTags = tagsBySong.get(song.id) ?? []
-          const inSection = songTags.some(
-            (tag) => tag.trim().toLowerCase() === section.toLowerCase(),
-          )
-          if (!inSection) return
-          addOrMerge({
-            key: `song:${song.id}`,
-            title: song.title,
-            artist: song.artist ?? '',
-            audioUrl: (song.audio_url || '').trim(),
-            tags: [section],
-            songId: song.id,
-          })
+      orderedSongs.forEach((song) => {
+        const sectionTags = uniqueList(
+          (tagsBySong.get(song.id) ?? [])
+            .map(normalizePlaylistSection)
+            .filter((tag) => tag && tag.toLowerCase() !== 'special requests'),
+        )
+        const assignments = gigSingerKeyAssignments.get(song.id) ?? []
+        addOrMerge({
+          key: `song:${song.id}`,
+          title: song.title,
+          artist: song.artist ?? '',
+          audioUrl: (song.audio_url || '').trim(),
+          tags: sectionTags.length ? sectionTags : ['Setlist'],
+          songId: song.id,
+          assignmentSingers: uniqueList(assignments.map((entry) => entry.singer)),
+          assignmentKeys: uniqueList(assignments.map((entry) => entry.key)),
         })
       })
-      if (entries.length === 0) {
-        orderedSongs.forEach((song) => {
-          addOrMerge({
-            key: `song:${song.id}`,
-            title: song.title,
-            artist: song.artist ?? '',
-            audioUrl: (song.audio_url || '').trim(),
-            tags: ['Setlist'],
-            songId: song.id,
-          })
-        })
-      }
       setSharedPlaylistView({
         setlistId: gig.id,
         gigName: gig.gig_name,
@@ -4579,7 +4711,27 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [appState.setlists])
+  }, [appState.setlists, normalizePlaylistSection])
+
+  useEffect(() => {
+    if (playlistSingerFilter === '__all__') return
+    const hasSelected = playlistSingerOptions.some(
+      (option) => option.toLowerCase() === playlistSingerFilter.toLowerCase(),
+    )
+    if (!hasSelected) {
+      setPlaylistSingerFilter('__all__')
+    }
+  }, [playlistSingerFilter, playlistSingerOptions])
+
+  useEffect(() => {
+    setPlaylistIndex(0)
+    setPlaylistPlayNonce((current) => current + 1)
+  }, [playlistSingerFilter])
+
+  useEffect(() => {
+    if (playlistIndex < visiblePlaylistEntries.length) return
+    setPlaylistIndex(Math.max(0, visiblePlaylistEntries.length - 1))
+  }, [playlistIndex, visiblePlaylistEntries.length])
 
   useEffect(() => {
     if (!isSupabaseEnabled || !supabase) return
@@ -4867,11 +5019,12 @@ function App() {
             )}
             {sharedPlaylistView && (
               <>
-                <div className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+                <div className="mt-4 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
-                    disabled={activePlaylistEntries.length === 0}
+                    disabled={visiblePlaylistEntries.length === 0}
                     onClick={() => movePlaylistBy(-1)}
                   >
                     ⏮ Prev
@@ -4879,14 +5032,16 @@ function App() {
                   <button
                     type="button"
                     className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
-                    disabled={activePlaylistEntries.length === 0}
+                    disabled={visiblePlaylistEntries.length === 0}
                     onClick={() => movePlaylistBy(1)}
                   >
                     ⏭ Next
                   </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    className={`col-span-2 min-h-[44px] rounded-xl border px-3 py-2 text-sm sm:col-span-1 ${
+                    className={`min-h-[44px] rounded-xl border px-3 py-2 text-sm ${
                       playlistAutoAdvance
                         ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
                         : 'border-white/10 text-slate-300'
@@ -4895,9 +5050,22 @@ function App() {
                   >
                     Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
                   </button>
-                  <span className="col-span-2 text-xs text-slate-400 sm:col-span-1">
-                    {activePlaylistEntries.length
-                      ? `${playlistIndex + 1} / ${activePlaylistEntries.length}`
+                  <select
+                    className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-300"
+                    value={playlistSingerFilter}
+                    onChange={(event) => setPlaylistSingerFilter(event.target.value)}
+                  >
+                    <option value="__all__">All singers</option>
+                    {playlistSingerOptions.map((singer) => (
+                      <option key={`shared-playlist-singer-${singer}`} value={singer}>
+                        {singer}
+                      </option>
+                    ))}
+                  </select>
+                  </div>
+                  <span className="text-xs text-slate-400">
+                    {visiblePlaylistEntries.length
+                      ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
                       : 'No playable songs'}
                   </span>
                 </div>
@@ -4940,7 +5108,7 @@ function App() {
                             autoPlay
                             src={currentPlaylistEntry.audioUrl}
                             onEnded={() => {
-                              if (!playlistAutoAdvance || activePlaylistEntries.length <= 1) return
+                              if (!playlistAutoAdvance || visiblePlaylistEntries.length <= 1) return
                               movePlaylistBy(1)
                             }}
                           />
@@ -4975,6 +5143,62 @@ function App() {
                       No playlist songs found for this gig yet.
                     </div>
                   )}
+                </div>
+                <div className="mt-4 space-y-3">
+                  {groupedPlaylistSections.map((group) => (
+                    <div
+                      key={`shared-playlist-group-${group.section}`}
+                      className={`rounded-2xl border p-2 ${getPlaylistToneClasses(group.section)}`}
+                    >
+                      <div className="mb-2 rounded-lg bg-black/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]">
+                        {group.section}
+                      </div>
+                      <div className="space-y-2">
+                        {group.items.map(({ entry: item, index }) => (
+                          <button
+                            type="button"
+                            key={`${item.key}-shared-list`}
+                            className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
+                              index === playlistIndex
+                                ? 'border-teal-300/70 bg-teal-400/10'
+                                : 'border-white/10 bg-slate-950/40'
+                            }`}
+                            onClick={() => jumpToPlaylistIndex(index)}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold text-slate-100">{item.title}</div>
+                                <div className="text-[11px] text-slate-400">{item.artist || ' '}</div>
+                                <div className="mt-0.5 text-[11px] text-teal-200">
+                                  {getPlaylistAssignmentText(item)}
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap justify-end gap-1">
+                                {item.tags.map((tag) => (
+                                  <span
+                                    key={`${item.key}-shared-tag-${tag}`}
+                                    className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
+                                      tag === 'Special Request' || tag === 'Special Requests'
+                                        ? 'bg-fuchsia-500/20 text-fuchsia-100'
+                                        : tag.toLowerCase().includes('dinner')
+                                          ? 'bg-amber-500/20 text-amber-100'
+                                          : tag.toLowerCase().includes('dance')
+                                            ? 'bg-cyan-500/20 text-cyan-100'
+                                            : tag.toLowerCase().includes('latin')
+                                              ? 'bg-pink-500/20 text-pink-100'
+                                              : 'bg-slate-500/20 text-slate-200'
+                                    }`}
+                                  >
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </>
             )}
@@ -5698,19 +5922,6 @@ function App() {
 
             {isAdmin && (
               <div className="grid gap-3 sm:grid-cols-2">
-                <button
-                  className="flex min-h-[96px] flex-col items-start justify-between rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-500/30 via-slate-900/40 to-slate-900/60 px-4 py-4 text-left text-white shadow-[0_0_18px_rgba(15,23,42,0.35)]"
-                  onClick={() => {
-                    setPlaylistIndex(0)
-                    setPlaylistAutoAdvance(true)
-                    setShowPlaylistModal(true)
-                  }}
-                >
-                  <div className="flex w-full items-start justify-between">
-                    <span className="text-2xl">🎵</span>
-                  </div>
-                  <span className="text-sm font-semibold">Playlist</span>
-                </button>
                 {[
                   {
                     key: 'musicians',
@@ -5847,19 +6058,6 @@ function App() {
             )}
             {!isAdmin && (
               <div className="grid gap-3 sm:grid-cols-2">
-                <button
-                  className="flex min-h-[96px] flex-col items-start justify-between rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-500/30 via-slate-900/40 to-slate-900/60 px-4 py-4 text-left text-white shadow-[0_0_18px_rgba(15,23,42,0.35)]"
-                  onClick={() => {
-                    setPlaylistIndex(0)
-                    setPlaylistAutoAdvance(true)
-                    setShowPlaylistModal(true)
-                  }}
-                >
-                  <div className="flex w-full items-start justify-between">
-                    <span className="text-2xl">🎵</span>
-                  </div>
-                  <span className="text-sm font-semibold">Playlist</span>
-                </button>
                 <button
                   className="flex min-h-[96px] flex-col items-start justify-between rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-500/30 via-slate-900/40 to-slate-900/60 px-4 py-4 text-left text-white shadow-[0_0_18px_rgba(15,23,42,0.35)]"
                   onClick={() => setShowGigMusiciansModal(true)}
@@ -8796,11 +8994,12 @@ function App() {
                   Close
                 </button>
               </div>
-              <div className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+              <div className="mt-4 space-y-2">
+                <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
-                  disabled={activePlaylistEntries.length === 0}
+                  disabled={visiblePlaylistEntries.length === 0}
                   onClick={() => movePlaylistBy(-1)}
                 >
                   ⏮ Prev
@@ -8808,14 +9007,16 @@ function App() {
                 <button
                   type="button"
                   className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
-                  disabled={activePlaylistEntries.length === 0}
+                  disabled={visiblePlaylistEntries.length === 0}
                   onClick={() => movePlaylistBy(1)}
                 >
                   ⏭ Next
                 </button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  className={`col-span-2 min-h-[44px] rounded-xl border px-3 py-2 text-sm sm:col-span-1 ${
+                  className={`min-h-[44px] rounded-xl border px-3 py-2 text-sm ${
                     playlistAutoAdvance
                       ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
                       : 'border-white/10 text-slate-300'
@@ -8826,23 +9027,39 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  className="col-span-2 min-h-[44px] rounded-xl border border-indigo-300/60 bg-indigo-500/20 px-3 py-2 text-sm text-indigo-100 sm:col-span-1"
+                  className="min-h-[44px] rounded-xl border border-indigo-300/60 bg-indigo-500/20 px-3 py-2 text-sm text-indigo-100"
                   onClick={() => void copyPlaylistShareLink()}
                 >
                   Share Link
                 </button>
-                <span className="col-span-2 text-xs text-slate-400 sm:col-span-1">
-                  {activePlaylistEntries.length
-                    ? `${playlistIndex + 1} / ${activePlaylistEntries.length}`
-                    : 'No playable songs'}
-                </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-300"
+                    value={playlistSingerFilter}
+                    onChange={(event) => setPlaylistSingerFilter(event.target.value)}
+                  >
+                    <option value="__all__">All singers</option>
+                    {playlistSingerOptions.map((singer) => (
+                      <option key={`playlist-singer-${singer}`} value={singer}>
+                        {singer}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="flex items-center text-xs text-slate-400">
+                    {visiblePlaylistEntries.length
+                      ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
+                      : 'No playable songs'}
+                  </span>
+                </div>
                 {playlistShareStatus && (
-                  <span className="col-span-2 text-xs text-teal-200">{playlistShareStatus}</span>
+                  <span className="text-xs text-teal-200">{playlistShareStatus}</span>
                 )}
               </div>
             </div>
 
-            <div className="max-h-[calc(88vh-140px)] overflow-auto px-5 pb-6 pt-4">
+            <div className="max-h-[calc(88vh-140px)] overflow-hidden px-5 pb-6 pt-4">
+              <div className="flex h-full flex-col">
               {currentPlaylistEntry ? (
                 <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
                   <div className="flex items-start justify-between gap-3">
@@ -8900,7 +9117,7 @@ function App() {
                         autoPlay
                         src={currentPlaylistEntry.audioUrl}
                         onEnded={() => {
-                          if (!playlistAutoAdvance || activePlaylistEntries.length <= 1) return
+                          if (!playlistAutoAdvance || visiblePlaylistEntries.length <= 1) return
                           movePlaylistBy(1)
                         }}
                       />
@@ -8936,48 +9153,65 @@ function App() {
                 </div>
               )}
 
-              <div className="mt-4 space-y-2">
-                {activePlaylistEntries.map((item, index) => (
-                  <button
-                    type="button"
-                    key={item.key}
-                    className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
-                      index === playlistIndex
-                        ? 'border-teal-300/70 bg-teal-400/10'
-                        : 'border-white/10 bg-slate-950/40'
-                    }`}
-                    onClick={() => jumpToPlaylistIndex(index)}
+              <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+              <div className="space-y-3">
+                {groupedPlaylistSections.map((group) => (
+                  <div
+                    key={`playlist-group-${group.section}`}
+                    className={`rounded-2xl border p-2 ${getPlaylistToneClasses(group.section)}`}
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold text-slate-100">{item.title}</div>
-                        <div className="text-[11px] text-slate-400">{item.artist || ' '}</div>
-                        <div className="mt-0.5 text-[11px] text-teal-200">
-                          {getPlaylistAssignmentText(item)}
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap justify-end gap-1">
-                        {item.tags.map((tag) => (
-                          <span
-                            key={`${item.key}-list-${tag}`}
-                            className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
-                              tag === 'Special Request'
-                                ? 'bg-fuchsia-500/20 text-fuchsia-100'
-                                : tag === 'Dinner'
-                                  ? 'bg-amber-500/20 text-amber-100'
-                                  : tag === 'Dance'
-                                    ? 'bg-cyan-500/20 text-cyan-100'
-                                    : 'bg-pink-500/20 text-pink-100'
-                            }`}
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
+                    <div className="mb-2 rounded-lg bg-black/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]">
+                      {group.section}
                     </div>
-                  </button>
+                    <div className="space-y-2">
+                      {group.items.map(({ entry: item, index }) => (
+                        <button
+                          type="button"
+                          key={item.key}
+                          className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
+                            index === playlistIndex
+                              ? 'border-teal-300/70 bg-teal-400/10'
+                              : 'border-white/10 bg-slate-950/40'
+                          }`}
+                          onClick={() => jumpToPlaylistIndex(index)}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-slate-100">{item.title}</div>
+                              <div className="text-[11px] text-slate-400">{item.artist || ' '}</div>
+                              <div className="mt-0.5 text-[11px] text-teal-200">
+                                {getPlaylistAssignmentText(item)}
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap justify-end gap-1">
+                              {item.tags.map((tag) => (
+                                <span
+                                  key={`${item.key}-list-${tag}`}
+                                  className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
+                                    tag === 'Special Request' || tag === 'Special Requests'
+                                      ? 'bg-fuchsia-500/20 text-fuchsia-100'
+                                      : tag.toLowerCase().includes('dinner')
+                                        ? 'bg-amber-500/20 text-amber-100'
+                                        : tag.toLowerCase().includes('dance')
+                                          ? 'bg-cyan-500/20 text-cyan-100'
+                                          : tag.toLowerCase().includes('latin')
+                                            ? 'bg-pink-500/20 text-pink-100'
+                                            : 'bg-slate-500/20 text-slate-200'
+                                  }`}
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
+            </div>
+            </div>
             </div>
           </div>
         </div>

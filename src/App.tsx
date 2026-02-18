@@ -399,10 +399,11 @@ function App() {
   const [sharedPlaylistView, setSharedPlaylistView] = useState<SharedPlaylistView | null>(null)
   const [sharedPlaylistLoading, setSharedPlaylistLoading] = useState(false)
   const [sharedPlaylistError, setSharedPlaylistError] = useState<string | null>(null)
-  const [sharedPublicTab, setSharedPublicTab] = useState<'setlist' | 'playlist'>('setlist')
+  const [sharedPublicTab, setSharedPublicTab] = useState<'home' | 'setlist' | 'playlist'>('home')
   const [sharedDocuments, setSharedDocuments] = useState<Document[]>([])
   const [sharedDocsLoading, setSharedDocsLoading] = useState(false)
   const [sharedDocsError, setSharedDocsError] = useState<string | null>(null)
+  const [sharedGigFlashPulse, setSharedGigFlashPulse] = useState(false)
   const [playlistSingerFilter, setPlaylistSingerFilter] = useState('__all__')
   const [playlistShareStatus, setPlaylistShareStatus] = useState('')
   const playlistShareTimerRef = useRef<number | null>(null)
@@ -416,6 +417,8 @@ function App() {
   const sharedPlaylistDrawerTouchStartYRef = useRef<number | null>(null)
   const playlistDrawerAutoCloseTimerRef = useRef<number | null>(null)
   const sharedPlaylistDrawerAutoCloseTimerRef = useRef<number | null>(null)
+  const sharedNowPlayingSongIdRef = useRef<string | null>(null)
+  const sharedFlashTimerRef = useRef<number | null>(null)
   const [showAddMusicianModal, setShowAddMusicianModal] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
   const [draggedSectionSongId, setDraggedSectionSongId] = useState<string | null>(null)
@@ -960,20 +963,6 @@ function App() {
     `rounded-2xl border p-2 ${getPlaylistToneClasses(section)}`
   const playlistSectionHeaderClasses =
     'mb-2 rounded-lg bg-black/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]'
-  const getSharedSongDocuments = useCallback(
-    (songId?: string) => {
-      if (!songId) return []
-      return sharedDocuments.filter((doc) => doc.songId === songId)
-    },
-    [sharedDocuments],
-  )
-  const getSharedVisibleSongDocuments = useCallback(
-    (songId?: string) =>
-      getSharedSongDocuments(songId).filter(
-        (doc) => doc.type === 'Lyrics' || documentMatchesActiveInstruments(doc),
-      ),
-    [documentMatchesActiveInstruments, getSharedSongDocuments],
-  )
   const getOrderedSpecialRequests = useCallback((gigId: string) => {
     const base = appState.specialRequests.filter((request) => request.gigId === gigId)
     const order = specialRequestOrderByGig[gigId] ?? []
@@ -1575,6 +1564,16 @@ function App() {
     setPlaylistIndex(next)
     setPlaylistPlayNonce((current) => current + 1)
   }
+  const triggerSharedGigFlash = useCallback(() => {
+    setSharedGigFlashPulse(true)
+    if (sharedFlashTimerRef.current) {
+      window.clearTimeout(sharedFlashTimerRef.current)
+    }
+    sharedFlashTimerRef.current = window.setTimeout(() => {
+      setSharedGigFlashPulse(false)
+      sharedFlashTimerRef.current = null
+    }, 1500)
+  }, [])
   const copyPlaylistShareLink = async () => {
     if (!currentSetlist) return
     const currentShareEntry = visiblePlaylistEntries[playlistIndex]
@@ -5592,7 +5591,7 @@ function App() {
       setSharedDocsLoading(false)
       return
     }
-    setSharedPublicTab('setlist')
+    setSharedPublicTab('home')
     if (!supabase) {
       setSharedDocsError('Documents are unavailable right now.')
       setSharedDocsLoading(false)
@@ -5613,7 +5612,7 @@ function App() {
     void (async () => {
       const { data, error } = await supabase
         .from('SetlistDocuments')
-        .select('id, song_id, title, type, instrument, url, content')
+        .select('id, song_id, title, doc_type, instrument, file_url, content')
         .in('song_id', songIds)
       if (cancelled) return
       if (error) {
@@ -5627,9 +5626,9 @@ function App() {
           id: row.id,
           songId: row.song_id,
           title: row.title,
-          type: row.type,
+          type: row.doc_type,
           instrument: parseDocumentInstruments(row.instrument ?? 'All').join('||'),
-          url: row.url ?? undefined,
+          url: row.file_url ?? undefined,
           content: row.content ?? undefined,
         }))
         .filter((doc) => doc.type === 'Chart' || doc.type === 'Lead Sheet' || doc.type === 'Lyrics')
@@ -5640,6 +5639,74 @@ function App() {
       cancelled = true
     }
   }, [parseDocumentInstruments, sharedPlaylistView, supabase])
+
+  useEffect(() => {
+    if (!sharedPlaylistView || !supabase) return
+    const client = supabase
+    const gigId = sharedPlaylistView.setlistId
+    const applySharedNowPlaying = (songId: string | null) => {
+      if (!songId) {
+        sharedNowPlayingSongIdRef.current = null
+        return
+      }
+      if (sharedNowPlayingSongIdRef.current === songId) return
+      sharedNowPlayingSongIdRef.current = songId
+      const visibleIndex = visiblePlaylistEntries.findIndex((entry) => entry.songId === songId)
+      if (visibleIndex >= 0) {
+        setPlaylistIndex(visibleIndex)
+      } else {
+        const activeIndex = activePlaylistEntries.findIndex((entry) => entry.songId === songId)
+        if (activeIndex >= 0) {
+          if (playlistSingerFilter !== '__all__') {
+            setPlaylistSingerFilter('__all__')
+          }
+          setPlaylistIndex(activeIndex)
+        }
+      }
+      setPlaylistPlayNonce((current) => current + 1)
+      triggerSharedGigFlash()
+    }
+
+    let cancelled = false
+    void (async () => {
+      const { data, error } = await client
+        .from('SetlistGigNowPlaying')
+        .select('song_id, updated_at')
+        .eq('gig_id', gigId)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+      if (cancelled || error) return
+      const row = (data?.[0] ?? null) as { song_id?: string | null } | null
+      applySharedNowPlaying(row?.song_id ?? null)
+    })()
+
+    const channel = client
+      .channel(`shared-now-playing-${gigId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'SetlistGigNowPlaying', filter: `gig_id=eq.${gigId}` },
+        (payload) => {
+          const nextSongId =
+            payload.eventType === 'DELETE'
+              ? null
+              : ((payload.new as { song_id?: string | null } | null)?.song_id ?? null)
+          applySharedNowPlaying(nextSongId)
+        },
+      )
+      .subscribe()
+
+    return () => {
+      cancelled = true
+      void client.removeChannel(channel)
+    }
+  }, [
+    activePlaylistEntries,
+    playlistSingerFilter,
+    sharedPlaylistView,
+    supabase,
+    triggerSharedGigFlash,
+    visiblePlaylistEntries,
+  ])
 
   useEffect(() => {
     if (playlistSingerFilter === '__all__') return
@@ -5731,6 +5798,16 @@ function App() {
       }
     }
   }, [sharedPlaylistDrawerOverlay])
+
+  useEffect(
+    () => () => {
+      if (sharedFlashTimerRef.current) {
+        window.clearTimeout(sharedFlashTimerRef.current)
+        sharedFlashTimerRef.current = null
+      }
+    },
+    [],
+  )
 
   useEffect(() => {
     if (playlistIndex < visiblePlaylistEntries.length) return
@@ -6006,7 +6083,7 @@ function App() {
 
   if ((sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && !authUserId) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-4 pb-24 pt-6 text-white">
+      <div className="h-screen overflow-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-4 pb-24 pt-6 text-white">
         {appState.instrument === null && (
           <div
             className="fixed inset-0 z-[110] flex items-center bg-slate-950/80 py-6"
@@ -6059,8 +6136,8 @@ function App() {
             </div>
           </div>
         )}
-        <div className="mx-auto w-full max-w-3xl">
-          <div className="rounded-3xl border border-white/10 bg-slate-900/90 p-4">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col">
+          <div className="flex h-full min-h-0 flex-col rounded-3xl border border-white/10 bg-slate-900/90 p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">Shared Gig Playlist</h2>
@@ -6094,6 +6171,7 @@ function App() {
                     <span className="font-semibold text-teal-200">
                       {(appState.instrument ?? ['All']).join(', ')}
                     </span>
+                    <span className="ml-2 text-slate-400">Docs: {sharedDocuments.length}</span>
                   </span>
                   <button
                     type="button"
@@ -6107,8 +6185,40 @@ function App() {
                   </button>
                 </div>
 
-                {sharedPublicTab === 'setlist' ? (
-                  <div className="mt-4 h-[calc(100vh-260px)] min-h-[360px] overflow-y-auto pr-1">
+                {sharedPublicTab === 'home' ? (
+                  <div className="mt-4 min-h-0 flex-1 overflow-auto rounded-2xl bg-slate-950/50 p-3 sm:p-4">
+                    <div className="mx-auto w-full max-w-xl rounded-2xl border border-white/10 bg-gradient-to-br from-white/10 via-white/5 to-white/0 p-4">
+                      <div className="text-xs uppercase tracking-[0.2em] text-teal-300/80">Gig Info</div>
+                      <h3 className="mt-2 text-xl font-semibold text-white">{sharedPlaylistView.gigName}</h3>
+                      <div className="mt-2 text-sm text-slate-200">
+                        {formatGigDate(sharedPlaylistView.date)}
+                      </div>
+                      <div className="mt-1 text-sm text-slate-300">
+                        {sharedPlaylistView.venueAddress?.trim() || 'Venue location not provided'}
+                      </div>
+                      <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
+                        {visiblePlaylistEntries.length} playable songs shared
+                      </div>
+                      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <button
+                          type="button"
+                          className="rounded-xl border border-teal-300/60 bg-teal-400/10 px-3 py-2 text-sm font-semibold text-teal-100"
+                          onClick={() => setSharedPublicTab('setlist')}
+                        >
+                          Open Setlist
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
+                          onClick={() => setSharedPublicTab('playlist')}
+                        >
+                          Open Audio Playlist
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : sharedPublicTab === 'setlist' ? (
+                  <div className="mt-4 min-h-0 flex-1 overflow-auto rounded-2xl bg-slate-950/50 p-2 sm:p-4">
                     {sharedDocsLoading && (
                       <div className="mb-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
                         Loading charts and lyrics...
@@ -6119,80 +6229,70 @@ function App() {
                         {sharedDocsError}
                       </div>
                     )}
-                    <div className="space-y-3 pb-2">
-                      {groupedPlaylistSections.map((group) => (
-                        <div
-                          key={`shared-setlist-group-${group.section}`}
-                          className={getPlaylistSectionCardClasses(group.section)}
-                        >
-                          <div className={playlistSectionHeaderClasses}>{group.section}</div>
-                          <div className="space-y-2">
-                            {group.items.map(({ entry: item, index }) => {
-                              const docs = getSharedVisibleSongDocuments(item.songId)
-                              return (
-                                <div key={`${item.key}-shared-setlist-row`} className="rounded-2xl border border-white/10 bg-slate-950/40 p-2">
-                                  <button
-                                    type="button"
-                                    className={getPlaylistQueueItemButtonClasses(index === playlistIndex)}
-                                    onClick={() => jumpToPlaylistIndex(index)}
-                                  >
-                                    <div className="flex items-center justify-between gap-3">
-                                      <div>
-                                        <div className="text-sm font-semibold text-slate-100">{item.title}</div>
-                                        <div className="text-[11px] text-slate-400">{item.artist || ' '}</div>
-                                      </div>
-                                      <div className="flex flex-wrap justify-end gap-1">
-                                        {item.tags.map((tag) => (
-                                          <span
-                                            key={`${item.key}-shared-setlist-tag-${tag}`}
-                                            className={`rounded-full px-2 py-1 text-[10px] font-semibold ${getPlaylistTagClasses(tag)}`}
-                                          >
-                                            {tag}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  </button>
-                                  {docs.length > 0 && (
-                                    <div className="mt-2 space-y-1">
-                                      {docs.map((doc) => (
-                                        <div
-                                          key={`${item.key}-shared-doc-${doc.id}`}
-                                          className="rounded-lg border border-white/10 bg-slate-900/60 px-2 py-1.5 text-xs"
-                                        >
-                                          <div className="font-semibold text-slate-100">
-                                            {doc.title} · {doc.type}
-                                          </div>
-                                          {doc.url ? (
-                                            <a
-                                              className="mt-0.5 inline-block text-teal-200 underline"
-                                              href={getDocumentViewerUrl(doc.url)}
-                                              target="_blank"
-                                              rel="noreferrer"
-                                            >
-                                              Open document
-                                            </a>
-                                          ) : null}
-                                          {doc.type === 'Lyrics' && doc.content ? (
-                                            <details className="mt-1 text-slate-300">
-                                              <summary className="cursor-pointer text-[11px] text-slate-400">
-                                                View lyrics
-                                              </summary>
-                                              <pre className="mt-1 whitespace-pre-wrap font-sans text-[11px]">
-                                                {doc.content}
-                                              </pre>
-                                            </details>
-                                          ) : null}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              )
-                            })}
+                    <div className="w-full bg-white p-4 sm:p-6">
+                      <div className="print-container">
+                        <div className="print-header">
+                          <div className="print-band-name">Shared Setlist</div>
+                          <div className="print-header-details">
+                            <div className="print-title">{sharedPlaylistView.gigName}</div>
+                            <div className="print-subtitle">{formatGigDate(sharedPlaylistView.date)}</div>
+                            {sharedPlaylistView.venueAddress ? (
+                              <div className="print-subtitle">{sharedPlaylistView.venueAddress}</div>
+                            ) : null}
                           </div>
+                          <div className="print-badge">Setlist</div>
                         </div>
-                      ))}
+                        <div className="print-layout">
+                          {groupedPlaylistSections.map((group) => (
+                            <div
+                              key={`shared-pdf-section-${group.section}`}
+                              className={`print-section-box ${getPrintToneClass(group.section)} ${getPrintLayoutClass(group.section)}`}
+                            >
+                              <div className="print-section-title">{group.section}</div>
+                              <div className="print-list">
+                                {group.items.map(({ entry: item }) => {
+                                  const singerNames = Array.from(new Set(item.assignmentSingers ?? []))
+                                  const assignmentKeys = item.assignmentKeys ?? []
+                                  const keyLabel =
+                                    assignmentKeys.length === 0
+                                      ? 'No key'
+                                      : assignmentKeys.length === 1
+                                        ? assignmentKeys[0]
+                                        : 'Multi'
+                                  return (
+                                    <div
+                                      key={`shared-pdf-row-${item.key}`}
+                                      className={`print-row song-row ${
+                                        currentPlaylistEntry?.songId === item.songId
+                                          ? 'ring-2 ring-emerald-300/80'
+                                          : ''
+                                      } ${
+                                        currentPlaylistEntry?.songId === item.songId && sharedGigFlashPulse
+                                          ? 'upnext-flash'
+                                          : ''
+                                      }`}
+                                    >
+                                      <div className="print-row-title">
+                                        <div className="song-title-stack">
+                                          <span className="song-name">{item.title}</span>
+                                          <span className="artist-name">{item.artist || 'Unknown'}</span>
+                                        </div>
+                                      </div>
+                                      <div className="print-row-subtitle print-song-meta">
+                                        <span className="musical-key">{keyLabel}</span>
+                                        <span className="print-assignee-names">
+                                          {singerNames.length ? formatSingerAssignmentNames(singerNames) : 'No singers'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                                {group.items.length === 0 && <div className="print-empty">No songs.</div>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ) : (
@@ -6242,7 +6342,7 @@ function App() {
                         </select>
                       </div>
                     </div>
-                    <div className="mt-4 h-[calc(100vh-300px)] min-h-[330px] overflow-hidden">
+                    <div className="mt-4 min-h-0 flex-1 overflow-hidden">
                       <div className="relative h-full min-h-0">
                         <div
                           ref={sharedPlaylistPlayerBlockRef}
@@ -6251,7 +6351,13 @@ function App() {
                           }`}
                         >
                           {currentPlaylistEntry ? (
-                            <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 transition-all duration-300">
+                            <div
+                              className={`rounded-2xl border border-white/10 bg-slate-950/40 p-4 transition-all duration-300 ${
+                                sharedGigFlashPulse
+                                  ? 'upnext-flash ring-2 ring-emerald-300/70 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
+                                  : ''
+                              }`}
+                            >
                               <div className="flex items-start justify-between gap-3">
                                 <div>
                                   <p className="text-lg font-semibold">{currentPlaylistEntry.title}</p>
@@ -6396,6 +6502,18 @@ function App() {
         {sharedPlaylistView && (
           <nav className="fixed bottom-0 left-0 right-0 z-[90] border-t border-white/10 bg-slate-950/95 backdrop-blur">
             <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-2 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
+              <button
+                type="button"
+                className={`flex min-w-[110px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                  sharedPublicTab === 'home'
+                    ? 'border-teal-300/70 bg-teal-400/10 text-teal-100'
+                    : 'border-white/10 text-slate-300'
+                }`}
+                onClick={() => setSharedPublicTab('home')}
+              >
+                <span className="text-base">🏠</span>
+                Gig Info
+              </button>
               <button
                 type="button"
                 className={`flex min-w-[140px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } from 'react'
 import { isSupabaseEnabled, supabase, supabaseEnvStatus } from './lib/supabaseClient'
 import downloadPdfIcon from './assets/download-pdf-icon.png'
 import openPlaylistIcon from './assets/open-playlist-icon.png'
@@ -398,8 +398,16 @@ function App() {
   const [playlistSingerFilter, setPlaylistSingerFilter] = useState('__all__')
   const [playlistShareStatus, setPlaylistShareStatus] = useState('')
   const playlistShareTimerRef = useRef<number | null>(null)
-  const [playlistIsScrolling, setPlaylistIsScrolling] = useState(false)
-  const playlistScrollTimerRef = useRef<number | null>(null)
+  const [playlistDrawerOverlay, setPlaylistDrawerOverlay] = useState(false)
+  const [sharedPlaylistDrawerOverlay, setSharedPlaylistDrawerOverlay] = useState(false)
+  const [playlistDrawerDockTop, setPlaylistDrawerDockTop] = useState(240)
+  const [sharedPlaylistDrawerDockTop, setSharedPlaylistDrawerDockTop] = useState(240)
+  const playlistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
+  const sharedPlaylistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
+  const playlistDrawerTouchStartYRef = useRef<number | null>(null)
+  const sharedPlaylistDrawerTouchStartYRef = useRef<number | null>(null)
+  const playlistDrawerAutoCloseTimerRef = useRef<number | null>(null)
+  const sharedPlaylistDrawerAutoCloseTimerRef = useRef<number | null>(null)
   const [showAddMusicianModal, setShowAddMusicianModal] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
   const [draggedSectionSongId, setDraggedSectionSongId] = useState<string | null>(null)
@@ -1344,15 +1352,97 @@ function App() {
     setPlaylistIndex(playable)
     setPlaylistPlayNonce((current) => current + 1)
   }
-  const handlePlaylistListScroll = () => {
-    setPlaylistIsScrolling(true)
-    if (playlistScrollTimerRef.current) {
-      window.clearTimeout(playlistScrollTimerRef.current)
+  const handlePlaylistDrawerTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    if (playlistDrawerOverlay) {
+      if (playlistDrawerAutoCloseTimerRef.current) {
+        window.clearTimeout(playlistDrawerAutoCloseTimerRef.current)
+      }
+      playlistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
+        setPlaylistDrawerOverlay(false)
+        playlistDrawerAutoCloseTimerRef.current = null
+      }, 6000)
     }
-    playlistScrollTimerRef.current = window.setTimeout(() => {
-      setPlaylistIsScrolling(false)
-      playlistScrollTimerRef.current = null
-    }, 220)
+    playlistDrawerTouchStartYRef.current = event.touches[0]?.clientY ?? null
+  }
+  const handlePlaylistDrawerTouchMove = () => {
+    if (!playlistDrawerOverlay) return
+    if (playlistDrawerAutoCloseTimerRef.current) {
+      window.clearTimeout(playlistDrawerAutoCloseTimerRef.current)
+    }
+    playlistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
+      setPlaylistDrawerOverlay(false)
+      playlistDrawerAutoCloseTimerRef.current = null
+    }, 6000)
+  }
+  const handlePlaylistDrawerScroll = () => {
+    if (!playlistDrawerOverlay) return
+    if (playlistDrawerAutoCloseTimerRef.current) {
+      window.clearTimeout(playlistDrawerAutoCloseTimerRef.current)
+    }
+    playlistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
+      setPlaylistDrawerOverlay(false)
+      playlistDrawerAutoCloseTimerRef.current = null
+    }, 6000)
+  }
+  const handlePlaylistDrawerTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    const startY = playlistDrawerTouchStartYRef.current
+    playlistDrawerTouchStartYRef.current = null
+    if (startY === null) return
+    const endY = event.changedTouches[0]?.clientY ?? startY
+    const deltaY = endY - startY
+    if (deltaY <= -70) {
+      setPlaylistDrawerOverlay(true)
+      return
+    }
+    if (deltaY >= 90) {
+      setPlaylistDrawerOverlay(false)
+    }
+  }
+  const handleSharedPlaylistDrawerTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    if (sharedPlaylistDrawerOverlay) {
+      if (sharedPlaylistDrawerAutoCloseTimerRef.current) {
+        window.clearTimeout(sharedPlaylistDrawerAutoCloseTimerRef.current)
+      }
+      sharedPlaylistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
+        setSharedPlaylistDrawerOverlay(false)
+        sharedPlaylistDrawerAutoCloseTimerRef.current = null
+      }, 6000)
+    }
+    sharedPlaylistDrawerTouchStartYRef.current = event.touches[0]?.clientY ?? null
+  }
+  const handleSharedPlaylistDrawerTouchMove = () => {
+    if (!sharedPlaylistDrawerOverlay) return
+    if (sharedPlaylistDrawerAutoCloseTimerRef.current) {
+      window.clearTimeout(sharedPlaylistDrawerAutoCloseTimerRef.current)
+    }
+    sharedPlaylistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
+      setSharedPlaylistDrawerOverlay(false)
+      sharedPlaylistDrawerAutoCloseTimerRef.current = null
+    }, 6000)
+  }
+  const handleSharedPlaylistDrawerScroll = () => {
+    if (!sharedPlaylistDrawerOverlay) return
+    if (sharedPlaylistDrawerAutoCloseTimerRef.current) {
+      window.clearTimeout(sharedPlaylistDrawerAutoCloseTimerRef.current)
+    }
+    sharedPlaylistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
+      setSharedPlaylistDrawerOverlay(false)
+      sharedPlaylistDrawerAutoCloseTimerRef.current = null
+    }, 6000)
+  }
+  const handleSharedPlaylistDrawerTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    const startY = sharedPlaylistDrawerTouchStartYRef.current
+    sharedPlaylistDrawerTouchStartYRef.current = null
+    if (startY === null) return
+    const endY = event.changedTouches[0]?.clientY ?? startY
+    const deltaY = endY - startY
+    if (deltaY <= -70) {
+      setSharedPlaylistDrawerOverlay(true)
+      return
+    }
+    if (deltaY >= 90) {
+      setSharedPlaylistDrawerOverlay(false)
+    }
   }
   const movePlaylistBy = (delta: number) => {
     if (!visiblePlaylistEntries.length) return
@@ -5069,12 +5159,74 @@ function App() {
   }, [playlistSingerFilter])
 
   useEffect(() => {
+    const updateDockTop = () => {
+      const playerHeight = playlistPlayerBlockRef.current?.getBoundingClientRect().height ?? 220
+      setPlaylistDrawerDockTop(Math.max(120, Math.round(playerHeight + 12)))
+    }
+    updateDockTop()
+    window.addEventListener('resize', updateDockTop)
+    return () => window.removeEventListener('resize', updateDockTop)
+  }, [currentPlaylistEntry, playlistIndex, showPlaylistModal, visiblePlaylistEntries.length])
+
+  useEffect(() => {
+    const updateDockTop = () => {
+      const playerHeight = sharedPlaylistPlayerBlockRef.current?.getBoundingClientRect().height ?? 220
+      setSharedPlaylistDrawerDockTop(Math.max(120, Math.round(playerHeight + 12)))
+    }
+    updateDockTop()
+    window.addEventListener('resize', updateDockTop)
+    return () => window.removeEventListener('resize', updateDockTop)
+  }, [currentPlaylistEntry, playlistIndex, sharedPlaylistView, visiblePlaylistEntries.length])
+
+  useEffect(() => {
+    if (showPlaylistModal) return
+    setPlaylistDrawerOverlay(false)
+  }, [showPlaylistModal])
+
+  useEffect(() => {
+    if (sharedPlaylistView) return
+    setSharedPlaylistDrawerOverlay(false)
+  }, [sharedPlaylistView])
+
+  useEffect(() => {
+    if (!playlistDrawerOverlay) {
+      if (playlistDrawerAutoCloseTimerRef.current) {
+        window.clearTimeout(playlistDrawerAutoCloseTimerRef.current)
+        playlistDrawerAutoCloseTimerRef.current = null
+      }
+      return
+    }
+    playlistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
+      setPlaylistDrawerOverlay(false)
+      playlistDrawerAutoCloseTimerRef.current = null
+    }, 6000)
     return () => {
-      if (playlistScrollTimerRef.current) {
-        window.clearTimeout(playlistScrollTimerRef.current)
+      if (playlistDrawerAutoCloseTimerRef.current) {
+        window.clearTimeout(playlistDrawerAutoCloseTimerRef.current)
+        playlistDrawerAutoCloseTimerRef.current = null
       }
     }
-  }, [])
+  }, [playlistDrawerOverlay])
+
+  useEffect(() => {
+    if (!sharedPlaylistDrawerOverlay) {
+      if (sharedPlaylistDrawerAutoCloseTimerRef.current) {
+        window.clearTimeout(sharedPlaylistDrawerAutoCloseTimerRef.current)
+        sharedPlaylistDrawerAutoCloseTimerRef.current = null
+      }
+      return
+    }
+    sharedPlaylistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
+      setSharedPlaylistDrawerOverlay(false)
+      sharedPlaylistDrawerAutoCloseTimerRef.current = null
+    }, 6000)
+    return () => {
+      if (sharedPlaylistDrawerAutoCloseTimerRef.current) {
+        window.clearTimeout(sharedPlaylistDrawerAutoCloseTimerRef.current)
+        sharedPlaylistDrawerAutoCloseTimerRef.current = null
+      }
+    }
+  }, [sharedPlaylistDrawerOverlay])
 
   useEffect(() => {
     if (playlistIndex < visiblePlaylistEntries.length) return
@@ -5426,8 +5578,8 @@ function App() {
                   </div>
                 </div>
                 <div className="mt-4 h-[calc(100vh-250px)] min-h-[360px] overflow-hidden">
-                  <div className="flex h-full min-h-0 flex-col">
-                    <div>
+                  <div className="relative h-full min-h-0">
+                    <div ref={sharedPlaylistPlayerBlockRef} className="relative z-10">
                       {currentPlaylistEntry ? (
                         <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 transition-all duration-300">
                           <div className="flex items-start justify-between gap-3">
@@ -5473,11 +5625,7 @@ function App() {
                             ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
                               <iframe
                                 key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared`}
-                                className={`w-full rounded-xl border border-white/10 transition-all duration-300 ${
-                                  playlistIsScrolling
-                                    ? 'h-[120px] sm:h-[145px]'
-                                    : 'h-[145px] sm:h-[170px]'
-                                }`}
+                                className="h-[145px] w-full rounded-xl border border-white/10 sm:h-[170px]"
                                 src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
                                 title="YouTube playlist item"
                                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -5506,66 +5654,80 @@ function App() {
                         </div>
                       )}
                     </div>
+
                     <div
-                      className={`min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 transition-all duration-300 ${
-                        playlistIsScrolling ? '-mt-2' : 'mt-4'
-                      }`}
-                      onScroll={handlePlaylistListScroll}
+                      className="absolute inset-x-0 bottom-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900/95 shadow-2xl transition-all duration-300"
+                      style={{
+                        top: sharedPlaylistDrawerOverlay ? 0 : sharedPlaylistDrawerDockTop,
+                      }}
+                      onTouchStart={handleSharedPlaylistDrawerTouchStart}
+                      onTouchMove={handleSharedPlaylistDrawerTouchMove}
+                      onTouchEnd={handleSharedPlaylistDrawerTouchEnd}
                     >
-                      {groupedPlaylistSections.map((group) => (
-                    <div
-                      key={`shared-playlist-group-${group.section}`}
-                      className={`rounded-2xl border p-2 ${getPlaylistToneClasses(group.section)}`}
-                    >
-                      <div className="mb-2 rounded-lg bg-black/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]">
-                        {group.section}
+                      <div className="flex items-center justify-center py-2">
+                        <div className="h-1 w-12 rounded-full bg-white/25" />
                       </div>
-                      <div className="space-y-2">
-                        {group.items.map(({ entry: item, index }) => (
-                          <button
-                            type="button"
-                            key={`${item.key}-shared-list`}
-                            className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
-                              index === playlistIndex
-                                ? 'border-teal-300/70 bg-teal-400/10'
-                                : 'border-white/10 bg-slate-950/40'
-                            }`}
-                            onClick={() => jumpToPlaylistIndex(index)}
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold text-slate-100">{item.title}</div>
-                                <div className="text-[11px] text-slate-400">{item.artist || ' '}</div>
-                                <div className="mt-0.5 text-[11px] text-teal-200">
-                                  {getPlaylistAssignmentText(item)}
-                                </div>
+                      <div
+                        className="max-h-full overflow-y-auto px-2 pb-2"
+                        onScroll={handleSharedPlaylistDrawerScroll}
+                      >
+                        <div className="space-y-3 pb-2">
+                          {groupedPlaylistSections.map((group) => (
+                            <div
+                              key={`shared-playlist-group-${group.section}`}
+                              className={`rounded-2xl border p-2 ${getPlaylistToneClasses(group.section)}`}
+                            >
+                              <div className="mb-2 rounded-lg bg-black/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]">
+                                {group.section}
                               </div>
-                              <div className="flex flex-wrap justify-end gap-1">
-                                {item.tags.map((tag) => (
-                                  <span
-                                    key={`${item.key}-shared-tag-${tag}`}
-                                    className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
-                                      tag === 'Special Request' || tag === 'Special Requests'
-                                        ? 'bg-fuchsia-500/20 text-fuchsia-100'
-                                        : tag.toLowerCase().includes('dinner')
-                                          ? 'bg-amber-500/20 text-amber-100'
-                                          : tag.toLowerCase().includes('dance')
-                                            ? 'bg-cyan-500/20 text-cyan-100'
-                                            : tag.toLowerCase().includes('latin')
-                                              ? 'bg-pink-500/20 text-pink-100'
-                                              : 'bg-slate-500/20 text-slate-200'
+                              <div className="space-y-2">
+                                {group.items.map(({ entry: item, index }) => (
+                                  <button
+                                    type="button"
+                                    key={`${item.key}-shared-list`}
+                                    className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
+                                      index === playlistIndex
+                                        ? 'border-teal-300/70 bg-teal-400/10'
+                                        : 'border-white/10 bg-slate-950/40'
                                     }`}
+                                    onClick={() => jumpToPlaylistIndex(index)}
                                   >
-                                    {tag}
-                                  </span>
+                                    <div className="flex items-center justify-between gap-3">
+                                      <div>
+                                        <div className="text-sm font-semibold text-slate-100">{item.title}</div>
+                                        <div className="text-[11px] text-slate-400">{item.artist || ' '}</div>
+                                        <div className="mt-0.5 text-[11px] text-teal-200">
+                                          {getPlaylistAssignmentText(item)}
+                                        </div>
+                                      </div>
+                                      <div className="flex flex-wrap justify-end gap-1">
+                                        {item.tags.map((tag) => (
+                                          <span
+                                            key={`${item.key}-shared-tag-${tag}`}
+                                            className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
+                                              tag === 'Special Request' || tag === 'Special Requests'
+                                                ? 'bg-fuchsia-500/20 text-fuchsia-100'
+                                                : tag.toLowerCase().includes('dinner')
+                                                  ? 'bg-amber-500/20 text-amber-100'
+                                                  : tag.toLowerCase().includes('dance')
+                                                    ? 'bg-cyan-500/20 text-cyan-100'
+                                                    : tag.toLowerCase().includes('latin')
+                                                      ? 'bg-pink-500/20 text-pink-100'
+                                                      : 'bg-slate-500/20 text-slate-200'
+                                            }`}
+                                          >
+                                            {tag}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  </button>
                                 ))}
                               </div>
                             </div>
-                          </button>
-                        ))}
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                      ))}
                     </div>
                   </div>
                 </div>
@@ -9609,7 +9771,8 @@ function App() {
             </div>
 
             <div className="min-h-0 flex-1 overflow-hidden px-5 pb-6 pt-4">
-              <div className="flex h-full min-h-0 flex-col">
+              <div className="relative h-full min-h-0">
+              <div ref={playlistPlayerBlockRef} className="relative z-10">
               {currentPlaylistEntry ? (
                 <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 transition-all duration-300">
                   <div className="flex items-start justify-between gap-3">
@@ -9674,11 +9837,7 @@ function App() {
                     ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
                       <iframe
                         key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
-                        className={`w-full rounded-xl border border-white/10 transition-all duration-300 ${
-                          playlistIsScrolling
-                            ? 'h-[120px] sm:h-[145px]'
-                            : 'h-[145px] sm:h-[170px]'
-                        }`}
+                        className="h-[145px] w-full rounded-xl border border-white/10 sm:h-[170px]"
                         src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
                         title="YouTube playlist item"
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -9706,70 +9865,82 @@ function App() {
                   No playlist songs found for this gig yet.
                 </div>
               )}
+              </div>
 
               <div
-                className={`min-h-0 flex-1 overflow-y-auto pr-1 transition-all duration-300 ${
-                  playlistIsScrolling ? '-mt-2' : 'mt-4'
-                }`}
-                onScroll={handlePlaylistListScroll}
+                className="absolute inset-x-0 bottom-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900/95 shadow-2xl transition-all duration-300"
+                style={{
+                  top: playlistDrawerOverlay ? 0 : playlistDrawerDockTop,
+                }}
+                onTouchStart={handlePlaylistDrawerTouchStart}
+                onTouchMove={handlePlaylistDrawerTouchMove}
+                onTouchEnd={handlePlaylistDrawerTouchEnd}
               >
-              <div className="space-y-3 pb-2">
-                {groupedPlaylistSections.map((group) => (
-                  <div
-                    key={`playlist-group-${group.section}`}
-                    className={`rounded-2xl border p-2 ${getPlaylistToneClasses(group.section)}`}
-                  >
-                    <div className="mb-2 rounded-lg bg-black/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]">
-                      {group.section}
-                    </div>
-                    <div className="space-y-2">
-                      {group.items.map(({ entry: item, index }) => (
-                        <button
-                          type="button"
-                          key={item.key}
-                          className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
-                            index === playlistIndex
-                              ? 'border-teal-300/70 bg-teal-400/10'
-                              : 'border-white/10 bg-slate-950/40'
-                          }`}
-                          onClick={() => jumpToPlaylistIndex(index)}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <div className="text-sm font-semibold text-slate-100">{item.title}</div>
-                              <div className="text-[11px] text-slate-400">{item.artist || ' '}</div>
-                              <div className="mt-0.5 text-[11px] text-teal-200">
-                                {getPlaylistAssignmentText(item)}
+                <div className="flex items-center justify-center py-2">
+                  <div className="h-1 w-12 rounded-full bg-white/25" />
+                </div>
+                <div
+                  className="max-h-full overflow-y-auto px-2 pb-2"
+                  onScroll={handlePlaylistDrawerScroll}
+                >
+                  <div className="space-y-3 pb-2">
+                    {groupedPlaylistSections.map((group) => (
+                      <div
+                        key={`playlist-group-${group.section}`}
+                        className={`rounded-2xl border p-2 ${getPlaylistToneClasses(group.section)}`}
+                      >
+                        <div className="mb-2 rounded-lg bg-black/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]">
+                          {group.section}
+                        </div>
+                        <div className="space-y-2">
+                          {group.items.map(({ entry: item, index }) => (
+                            <button
+                              type="button"
+                              key={item.key}
+                              className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
+                                index === playlistIndex
+                                  ? 'border-teal-300/70 bg-teal-400/10'
+                                  : 'border-white/10 bg-slate-950/40'
+                              }`}
+                              onClick={() => jumpToPlaylistIndex(index)}
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-semibold text-slate-100">{item.title}</div>
+                                  <div className="text-[11px] text-slate-400">{item.artist || ' '}</div>
+                                  <div className="mt-0.5 text-[11px] text-teal-200">
+                                    {getPlaylistAssignmentText(item)}
+                                  </div>
+                                </div>
+                                <div className="flex flex-wrap justify-end gap-1">
+                                  {item.tags.map((tag) => (
+                                    <span
+                                      key={`${item.key}-list-${tag}`}
+                                      className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
+                                        tag === 'Special Request' || tag === 'Special Requests'
+                                          ? 'bg-fuchsia-500/20 text-fuchsia-100'
+                                          : tag.toLowerCase().includes('dinner')
+                                            ? 'bg-amber-500/20 text-amber-100'
+                                            : tag.toLowerCase().includes('dance')
+                                              ? 'bg-cyan-500/20 text-cyan-100'
+                                              : tag.toLowerCase().includes('latin')
+                                                ? 'bg-pink-500/20 text-pink-100'
+                                                : 'bg-slate-500/20 text-slate-200'
+                                      }`}
+                                    >
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
                               </div>
-                            </div>
-                            <div className="flex flex-wrap justify-end gap-1">
-                              {item.tags.map((tag) => (
-                                <span
-                                  key={`${item.key}-list-${tag}`}
-                                  className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
-                                    tag === 'Special Request' || tag === 'Special Requests'
-                                      ? 'bg-fuchsia-500/20 text-fuchsia-100'
-                                      : tag.toLowerCase().includes('dinner')
-                                        ? 'bg-amber-500/20 text-amber-100'
-                                        : tag.toLowerCase().includes('dance')
-                                          ? 'bg-cyan-500/20 text-cyan-100'
-                                          : tag.toLowerCase().includes('latin')
-                                            ? 'bg-pink-500/20 text-pink-100'
-                                            : 'bg-slate-500/20 text-slate-200'
-                                  }`}
-                                >
-                                  {tag}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </div>
               </div>
-            </div>
             </div>
             </div>
           </div>

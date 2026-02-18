@@ -1679,10 +1679,12 @@ function App() {
       .split(/\s+/)
       .filter(Boolean)
     if (parts.length === 0) return ''
-    if (parts.length === 1) return parts[0]
-    const first = parts[0]
-    const lastInitial = parts[parts.length - 1]?.[0]?.toUpperCase() ?? ''
-    return lastInitial ? `${first} ${lastInitial}` : first
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+    const initials = parts
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? '')
+      .join('')
+    return initials || parts[0].slice(0, 2).toUpperCase()
   }
   const formatSingerAssignmentNames = (values: string[]) =>
     values.map((name) => formatSingerShortName(name)).filter(Boolean).join(', ')
@@ -4610,9 +4612,7 @@ function App() {
 
   const getPrintableSetlistElement = () => {
     const preview = document.getElementById('printable-setlist-preview')
-    if (preview) return preview
-    const hiddenInner = document.querySelector('#printable-setlist-hidden .print-container')
-    return hiddenInner instanceof HTMLElement ? hiddenInner : null
+    return preview instanceof HTMLElement ? preview : null
   }
 
   const handleDownloadPDF = async () => {
@@ -4632,12 +4632,21 @@ function App() {
         margin: 0.2,
         filename: exportName,
         enableLinks: true,
-        image: { type: 'jpeg', quality: 0.98 },
-        pagebreak: { mode: ['css', 'legacy'] },
+        image: { type: 'png', quality: 1 },
+        pagebreak: {
+          mode: ['css', 'legacy'],
+          avoid: ['.print-row', '.print-card', '.print-section-title', '.print-row-note'],
+        },
         html2canvas: {
-          scale: 2,
+          scale: 3,
           useCORS: true,
           backgroundColor: '#ffffff',
+          onclone: (clonedDocument: unknown) => {
+            const clonedPreview = (
+              clonedDocument as { getElementById?: (id: string) => Element | null }
+            ).getElementById?.('printable-setlist-preview')
+            clonedPreview?.classList.add('pdf-export-mode')
+          },
         },
         jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
       } as const
@@ -7395,7 +7404,7 @@ function App() {
           <div className="print-container">
             <div className="print-header">
               {activeBandName && <div className="print-band-name">{activeBandName}</div>}
-              <div>
+              <div className="print-header-details">
                 <div className="print-title">{currentSetlist.gigName}</div>
                 <div className="print-subtitle">{formatGigDate(currentSetlist.date)}</div>
                 {currentSetlist.venueAddress && (
@@ -7419,7 +7428,7 @@ function App() {
                             {request.djOnly ? <span className="print-pill">DJ Only</span> : null}
                             {request.externalAudioUrl || song?.youtubeUrl ? (
                               <a
-                                className="print-link"
+                                className="print-link song-name"
                                 href={request.externalAudioUrl ?? song?.youtubeUrl ?? ''}
                                 target="_blank"
                                 rel="noreferrer"
@@ -7427,7 +7436,7 @@ function App() {
                                 {request.songTitle}
                               </a>
                             ) : (
-                              request.songTitle
+                              <span className="song-name">{request.songTitle}</span>
                             )}
                           </span>
                         </div>
@@ -7513,27 +7522,29 @@ function App() {
                       const keyLabel =
                         keys.length === 0 ? 'No key' : keys.length === 1 ? keys[0] : 'Multi'
                       return (
-                        <div key={song.id} className="print-row">
+                        <div key={song.id} className="print-row song-row">
                           <div className="print-row-title">
-                            {song.youtubeUrl ? (
-                              <a
-                                className="print-link"
-                                href={song.youtubeUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                {song.title}
-                              </a>
-                            ) : (
-                              song.title
-                            )}
+                            <div className="song-title-stack">
+                              {song.youtubeUrl ? (
+                                <a
+                                  className="print-link song-name"
+                                  href={song.youtubeUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {song.title}
+                                </a>
+                              ) : (
+                                <span className="song-name">{song.title}</span>
+                              )}
+                              <span className="artist-name">{song.artist || 'Unknown'}</span>
+                            </div>
                           </div>
-                          <div className="print-row-subtitle">
-                            {song.artist || 'Unknown'} ·{' '}
+                          <div className="print-row-subtitle print-song-meta">
+                            <span className="musical-key">{keyLabel}</span>
                             <span className="print-assignee-names">
                               {singers.length ? formatSingerAssignmentNames(singers) : 'No singers'}
-                            </span>{' '}
-                            · {keyLabel}
+                            </span>
                           </div>
                         </div>
                       )
@@ -7561,27 +7572,29 @@ function App() {
                       const keyLabel =
                         keys.length === 0 ? 'No key' : keys.length === 1 ? keys[0] : 'Multi'
                       return (
-                        <div key={song.id} className="print-row">
+                        <div key={song.id} className="print-row song-row">
                           <div className="print-row-title">
-                            {song.youtubeUrl ? (
-                              <a
-                                className="print-link"
-                                href={song.youtubeUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                {song.title}
-                              </a>
-                            ) : (
-                              song.title
-                            )}
+                            <div className="song-title-stack">
+                              {song.youtubeUrl ? (
+                                <a
+                                  className="print-link song-name"
+                                  href={song.youtubeUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {song.title}
+                                </a>
+                              ) : (
+                                <span className="song-name">{song.title}</span>
+                              )}
+                              <span className="artist-name">{song.artist || 'Unknown'}</span>
+                            </div>
                           </div>
-                          <div className="print-row-subtitle">
-                            {song.artist || 'Unknown'} ·{' '}
+                          <div className="print-row-subtitle print-song-meta">
+                            <span className="musical-key">{keyLabel}</span>
                             <span className="print-assignee-names">
                               {singers.length ? formatSingerAssignmentNames(singers) : 'No singers'}
-                            </span>{' '}
-                            · {keyLabel}
+                            </span>
                           </div>
                         </div>
                       )
@@ -7609,27 +7622,29 @@ function App() {
                       const keyLabel =
                         keys.length === 0 ? 'No key' : keys.length === 1 ? keys[0] : 'Multi'
                       return (
-                        <div key={song.id} className="print-row">
+                        <div key={song.id} className="print-row song-row">
                           <div className="print-row-title">
-                            {song.youtubeUrl ? (
-                              <a
-                                className="print-link"
-                                href={song.youtubeUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                {song.title}
-                              </a>
-                            ) : (
-                              song.title
-                            )}
+                            <div className="song-title-stack">
+                              {song.youtubeUrl ? (
+                                <a
+                                  className="print-link song-name"
+                                  href={song.youtubeUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {song.title}
+                                </a>
+                              ) : (
+                                <span className="song-name">{song.title}</span>
+                              )}
+                              <span className="artist-name">{song.artist || 'Unknown'}</span>
+                            </div>
                           </div>
-                          <div className="print-row-subtitle">
-                            {song.artist || 'Unknown'} ·{' '}
+                          <div className="print-row-subtitle print-song-meta">
+                            <span className="musical-key">{keyLabel}</span>
                             <span className="print-assignee-names">
                               {singers.length ? formatSingerAssignmentNames(singers) : 'No singers'}
-                            </span>{' '}
-                            · {keyLabel}
+                            </span>
                           </div>
                         </div>
                       )
@@ -10004,7 +10019,7 @@ function App() {
                   <div id="printable-setlist-preview" className="print-container">
                     <div className="print-header">
                       {activeBandName && <div className="print-band-name">{activeBandName}</div>}
-                      <div>
+                      <div className="print-header-details">
                         <div className="print-title">{currentSetlist.gigName}</div>
                         <div className="print-subtitle">{formatGigDate(currentSetlist.date)}</div>
                         {currentSetlist.venueAddress && (
@@ -10080,7 +10095,7 @@ function App() {
                                       {request.djOnly ? <span className="print-pill">DJ Only</span> : null}
                                       {request.externalAudioUrl || song?.youtubeUrl ? (
                                         <a
-                                          className="print-link"
+                                          className="print-link song-name"
                                           href={request.externalAudioUrl ?? song?.youtubeUrl ?? ''}
                                           target="_blank"
                                           rel="noreferrer"
@@ -10088,7 +10103,7 @@ function App() {
                                           {request.songTitle}
                                         </a>
                                       ) : (
-                                        request.songTitle
+                                        <span className="song-name">{request.songTitle}</span>
                                       )}
                                     </span>
                                   </div>
@@ -10139,27 +10154,29 @@ function App() {
                                 const keyLabel =
                                   keys.length === 0 ? 'No key' : keys.length === 1 ? keys[0] : 'Multi'
                                 return (
-                                  <div key={song.id} className="print-row">
+                                  <div key={song.id} className="print-row song-row">
                                     <div className="print-row-title">
-                                      {song.youtubeUrl ? (
-                                        <a
-                                          className="print-link"
-                                          href={song.youtubeUrl}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                        >
-                                          {song.title}
-                                        </a>
-                                      ) : (
-                                        song.title
-                                      )}
+                                      <div className="song-title-stack">
+                                        {song.youtubeUrl ? (
+                                          <a
+                                            className="print-link song-name"
+                                            href={song.youtubeUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                          >
+                                            {song.title}
+                                          </a>
+                                        ) : (
+                                          <span className="song-name">{song.title}</span>
+                                        )}
+                                        <span className="artist-name">{song.artist || 'Unknown'}</span>
+                                      </div>
                                     </div>
-                                    <div className="print-row-subtitle">
-                                      {song.artist || 'Unknown'} ·{' '}
+                                    <div className="print-row-subtitle print-song-meta">
+                                      <span className="musical-key">{keyLabel}</span>
                                       <span className="print-assignee-names">
                                         {singers.length ? formatSingerAssignmentNames(singers) : 'No singers'}
-                                      </span>{' '}
-                                      · {keyLabel}
+                                      </span>
                                     </div>
                                   </div>
                                 )

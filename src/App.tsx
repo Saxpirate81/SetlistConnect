@@ -910,7 +910,7 @@ function App() {
     if (lower === 'special request' || lower === 'special requests') return 'Special Requests'
     return normalized
   }, [])
-  const getPlaylistPrimarySection = useCallback((entry: PlaylistEntry) => {
+  const getPlaylistSections = useCallback((entry: PlaylistEntry) => {
     const seen = new Set<string>()
     const normalizedTags = (entry.tags ?? [])
       .map(normalizePlaylistSection)
@@ -921,11 +921,12 @@ function App() {
         seen.add(lower)
         return true
       })
-    const nonSpecial = normalizedTags.find((tag) => tag.toLowerCase() !== 'special requests')
-    if (nonSpecial) return nonSpecial
-    if (normalizedTags.some((tag) => tag.toLowerCase() === 'special requests')) return 'Special Requests'
-    return 'Setlist'
-  }, [normalizePlaylistSection])
+    const sections = normalizedTags.filter((tag) => {
+      const lower = tag.toLowerCase()
+      return lower === 'special requests' || isSetlistTypeTag(tag)
+    })
+    return sections.length ? sections : ['Setlist']
+  }, [isSetlistTypeTag, normalizePlaylistSection])
   const getPlaylistToneClasses = (section: string) => {
     const tone = getPrintToneClass(section)
     if (tone === 'print-tone-special') {
@@ -1400,10 +1401,12 @@ function App() {
   const groupedPlaylistSections = useMemo(() => {
     const buckets = new Map<string, Array<{ entry: PlaylistEntry; index: number }>>()
     visiblePlaylistEntries.forEach((entry, index) => {
-      const section = getPlaylistPrimarySection(entry)
-      const list = buckets.get(section) ?? []
-      list.push({ entry, index })
-      buckets.set(section, list)
+      const sections = getPlaylistSections(entry)
+      sections.forEach((section) => {
+        const list = buckets.get(section) ?? []
+        list.push({ entry, index })
+        buckets.set(section, list)
+      })
     })
     const preferredOrder = [
       'Special Requests',
@@ -1430,7 +1433,7 @@ function App() {
         items: buckets.get(section) ?? [],
       }))
       .filter((group) => group.items.length > 0)
-  }, [getPlaylistPrimarySection, normalizePlaylistSection, orderedSetSections, visiblePlaylistEntries])
+  }, [getPlaylistSections, normalizePlaylistSection, orderedSetSections, visiblePlaylistEntries])
   const currentPlaylistEntry = visiblePlaylistEntries[playlistIndex] ?? null
   const docModalPages = useMemo(() => {
     if (!docModalContent?.url) return []
@@ -1590,29 +1593,14 @@ function App() {
       .filter((row) => row.gigId === currentSetlist.id && row.status !== 'out')
       .map((row) => appState.musicians.find((musician) => musician.id === row.musicianId))
       .filter((musician): musician is Musician => Boolean(musician))
-    const payload = {
-      setlistId: currentSetlist.id,
-      bandName: activeBandName || 'Band',
-      gigName: currentSetlist.gigName,
-      date: currentSetlist.date,
-      venueAddress: currentSetlist.venueAddress ?? '',
-      musicians: sharedMusicians,
-      entries: activePlaylistEntries.map((entry) => ({
-        key: entry.key,
-        title: entry.title,
-        artist: entry.artist ?? '',
-        audioUrl: entry.audioUrl ?? '',
-        tags: entry.tags ?? [],
-        songId: entry.songId,
-        assignmentSingers: entry.assignmentSingers ?? [],
-        assignmentKeys: entry.assignmentKeys ?? [],
-      })),
-    }
     const params = new URLSearchParams()
     params.set('playlist', '1')
     params.set('setlist', currentSetlist.id)
     params.set('item', String(shareStartIndex))
-    params.set('data', encodeSharePayloadBase64Url(payload))
+    params.set('band', activeBandName || 'Band')
+    if (sharedMusicians.length > 0) {
+      params.set('musicians', encodeSharePayloadBase64Url(sharedMusicians))
+    }
     const shareUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`
     const setStatus = (value: string) => {
       setPlaylistShareStatus(value)
@@ -5348,17 +5336,19 @@ function App() {
     const requestedIndexRaw = Number.parseInt(params.get('item') ?? '0', 10)
     const requestedIndex =
       Number.isFinite(requestedIndexRaw) && requestedIndexRaw >= 0 ? requestedIndexRaw : 0
+    const sharedBandNameParam = safeDecodeURIComponent(params.get('band') ?? '').trim()
+    const sharedMusiciansParam = parseSharedMusiciansPayload(params.get('musicians'))
     const payloadEncoded = params.get('data')
     if (payloadEncoded) {
       const parsed = parseSharedPlaylistPayload(payloadEncoded)
       if (parsed) {
         setSharedPlaylistView({
           setlistId: parsed.setlistId || setlistId,
-          bandName: parsed.bandName ?? activeBandName ?? 'Band',
+          bandName: parsed.bandName ?? sharedBandNameParam ?? activeBandName ?? 'Band',
           gigName: parsed.gigName || 'Shared Gig',
           date: parsed.date || '',
           venueAddress: parsed.venueAddress ?? '',
-          musicians: parsed.musicians ?? [],
+          musicians: parsed.musicians ?? sharedMusiciansParam,
           entries: parsed.entries,
         })
         setSharedPlaylistError(null)
@@ -5441,6 +5431,9 @@ function App() {
         if (bandRow?.name?.trim()) {
           sharedBandName = bandRow.name.trim()
         }
+      }
+      if (sharedBandNameParam) {
+        sharedBandName = sharedBandNameParam
       }
       const songsById = new Map((songsRes.data ?? []).map((song) => [song.id, song]))
       const orderedSongIds = (gigSongsRes.data ?? []).map((row) => row.song_id)
@@ -5596,6 +5589,7 @@ function App() {
         gigName: gig.gig_name,
         date: typeof gig.gig_date === 'string' ? gig.gig_date.slice(0, 10) : '',
         venueAddress: gig.venue_address ?? '',
+        musicians: sharedMusiciansParam,
         entries: playableEntries,
       })
       setPlaylistIndex(Math.min(requestedIndex, Math.max(0, playableEntries.length - 1)))
@@ -13295,6 +13289,27 @@ function parseSharedPlaylistPayload(raw: string) {
     }
   }
   return null
+}
+
+function parseSharedMusiciansPayload(raw: string | null) {
+  if (!raw) return []
+  const candidates = [raw, safeDecodeURIComponent(raw)]
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as Musician[]
+      if (Array.isArray(parsed)) return parsed
+    } catch {
+      // Continue to base64 decode attempts.
+    }
+    try {
+      const decoded = decodeSharePayloadBase64Url(candidate)
+      const parsed = JSON.parse(decoded) as Musician[]
+      if (Array.isArray(parsed)) return parsed
+    } catch {
+      // Continue to next candidate.
+    }
+  }
+  return []
 }
 
 function getYouTubeEmbedUrl(url: string | null) {

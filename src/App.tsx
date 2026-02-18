@@ -363,6 +363,10 @@ function App() {
   const [showMissingSingerWarning, setShowMissingSingerWarning] = useState(false)
   const [starterPasteBySection, setStarterPasteBySection] = useState<Record<string, string>>({})
   const [starterPasteOpen, setStarterPasteOpen] = useState<Record<string, boolean>>({})
+  const [manualOrderModeBySection, setManualOrderModeBySection] = useState<Record<string, boolean>>({})
+  const [manualOrderDraftBySection, setManualOrderDraftBySection] = useState<
+    Record<string, Record<string, string>>
+  >({})
   const [buildCompleteOverrides, setBuildCompleteOverrides] = useState<
     Record<string, Record<string, boolean>>
   >(() => {
@@ -609,6 +613,28 @@ function App() {
       : null
   const normalizeSetlistSectionLabel = (value: string) =>
     value.replace(/\s+/g, ' ').trim()
+  const normalizeTagIdentity = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '')
+      .trim()
+  const specialTypeIdentitySet = useMemo(
+    () => new Set(appState.specialTypes.map((type) => normalizeTagIdentity(type))),
+    [appState.specialTypes],
+  )
+  const isSetlistTypeTag = useCallback((value: string) => {
+    const normalized = normalizeSetlistSectionLabel(value)
+    if (!normalized) return false
+    const lower = normalized.toLowerCase()
+    if (lower === 'special request' || lower === 'special requests') return false
+    const identity = normalizeTagIdentity(normalized)
+    if (!identity) return false
+    return !specialTypeIdentitySet.has(identity)
+  }, [specialTypeIdentitySet])
+  const setlistTypeTags = useMemo(
+    () => normalizeTagList(appState.tagsCatalog.filter((tag) => isSetlistTypeTag(tag))),
+    [appState.tagsCatalog, isSetlistTypeTag],
+  )
   const isReservedBuildPanel = (value: string) =>
     ['musicians', 'addsongs', 'special'].includes(value.trim().toLowerCase())
 
@@ -637,10 +663,7 @@ function App() {
       .map((songId) => appState.songs.find((song) => song.id === songId))
       .filter((song): song is Song => Boolean(song))
       .flatMap((song) => song.tags)
-      .filter((tag) => {
-        const normalized = tag.trim().toLowerCase()
-        return normalized !== 'special request' && normalized !== 'special requests'
-      })
+      .filter((tag) => isSetlistTypeTag(tag))
     const seen = new Set<string>()
     const merged = [...saved, ...fromSongs]
       .map(normalizeSetlistSectionLabel)
@@ -654,7 +677,7 @@ function App() {
         return true
       })
     return merged
-  }, [appState.songs, currentSetlist, gigSetlistSections, gigHiddenSetlistSections])
+  }, [appState.songs, currentSetlist, gigSetlistSections, gigHiddenSetlistSections, isSetlistTypeTag])
   const printableSetSections = useMemo(() => {
     if (!currentSetlist) return []
     const seen = new Set<string>()
@@ -663,7 +686,7 @@ function App() {
       const normalized = normalizeSetlistSectionLabel(value)
       if (!normalized) return
       const lower = normalized.toLowerCase()
-      if (lower === 'special request' || lower === 'special requests') return
+      if (!isSetlistTypeTag(normalized)) return
       if (seen.has(lower)) return
       seen.add(lower)
       sections.push(normalized)
@@ -675,7 +698,7 @@ function App() {
       .flatMap((song) => song.tags)
       .forEach(addSection)
     return sections
-  }, [appState.songs, currentSetlist, orderedSetSections])
+  }, [appState.songs, currentSetlist, isSetlistTypeTag, orderedSetSections])
   const printableGigMusicians = useMemo(() => {
     if (!currentSetlist) return []
     const seen = new Set<string>()
@@ -1087,8 +1110,9 @@ function App() {
       .filter((song): song is Song => Boolean(song))
       .forEach((song) => {
         const sectionTags = normalizeTagList(song.tags)
+          .filter((tag) => isSetlistTypeTag(tag))
           .map(normalizePlaylistSection)
-          .filter((tag) => tag && tag.toLowerCase() !== 'special requests')
+          .filter(Boolean)
         const assignments = song.keys
           .map((key) => ({
             singer: key.singer,
@@ -1107,7 +1131,13 @@ function App() {
         })
       })
     return ordered
-  }, [appState.songs, currentSetlist, getOrderedSpecialRequests, normalizePlaylistSection])
+  }, [
+    appState.songs,
+    currentSetlist,
+    getOrderedSpecialRequests,
+    isSetlistTypeTag,
+    normalizePlaylistSection,
+  ])
 
   const activePlaylistEntries = sharedPlaylistView?.entries ?? playlistEntries
   const getPlaylistEntryAssignments = useCallback((entry: PlaylistEntry) => {
@@ -2532,21 +2562,15 @@ function App() {
     setStarterPasteOpen((prev) => ({ ...prev, [section]: false }))
   }
 
-  const reorderSectionSongs = (section: string, fromId: string, toId: string) => {
-    if (!currentSetlist || fromId === toId) return
-    const sectionSongIds = currentSetlist.songIds.filter((songId) => {
+  const getSectionSongIds = useCallback((section: string) => {
+    if (!currentSetlist) return []
+    return currentSetlist.songIds.filter((songId) => {
       const song = appState.songs.find((item) => item.id === songId)
       return song ? hasSongTag(song, section) : false
     })
-    const fromIndex = sectionSongIds.indexOf(fromId)
-    const toIndex = sectionSongIds.indexOf(toId)
-    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return
-
-    const reorderedSectionSongIds = [...sectionSongIds]
-    const [moved] = reorderedSectionSongIds.splice(fromIndex, 1)
-    const insertIndex = fromIndex < toIndex ? toIndex - 1 : toIndex
-    reorderedSectionSongIds.splice(insertIndex, 0, moved)
-
+  }, [appState.songs, currentSetlist])
+  const applySectionSongOrder = (section: string, reorderedSectionSongIds: string[]) => {
+    if (!currentSetlist || reorderedSectionSongIds.length === 0) return
     let cursor = 0
     const nextSongIds = currentSetlist.songIds.map((songId) => {
       const song = appState.songs.find((item) => item.id === songId)
@@ -2578,6 +2602,18 @@ function App() {
       })
     }
   }
+  const reorderSectionSongs = (section: string, fromId: string, toId: string) => {
+    if (!currentSetlist || fromId === toId) return
+    const sectionSongIds = getSectionSongIds(section)
+    const fromIndex = sectionSongIds.indexOf(fromId)
+    const toIndex = sectionSongIds.indexOf(toId)
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return
+    const reorderedSectionSongIds = [...sectionSongIds]
+    const [moved] = reorderedSectionSongIds.splice(fromIndex, 1)
+    const insertIndex = fromIndex < toIndex ? toIndex - 1 : toIndex
+    reorderedSectionSongIds.splice(insertIndex, 0, moved)
+    applySectionSongOrder(section, reorderedSectionSongIds)
+  }
 
   const reorderSpecialRequests = (fromId: string, toId: string) => {
     if (!currentSetlist || fromId === toId) return
@@ -2607,6 +2643,71 @@ function App() {
         ...prev,
         specialRequests: [...others, ...orderedForGig],
       }
+    })
+  }
+  const autoScrollDragContainer = (event: React.DragEvent<HTMLElement>) => {
+    const container = event.currentTarget.closest('[data-drag-scroll-container="build-panel"]')
+    if (!(container instanceof HTMLElement)) return
+    const rect = container.getBoundingClientRect()
+    const edgeThreshold = 90
+    const maxStep = 24
+    let delta = 0
+    if (event.clientY < rect.top + edgeThreshold) {
+      const ratio = Math.min(1, (rect.top + edgeThreshold - event.clientY) / edgeThreshold)
+      delta = -Math.ceil(maxStep * ratio)
+    } else if (event.clientY > rect.bottom - edgeThreshold) {
+      const ratio = Math.min(1, (event.clientY - (rect.bottom - edgeThreshold)) / edgeThreshold)
+      delta = Math.ceil(maxStep * ratio)
+    }
+    if (delta !== 0) {
+      container.scrollTop += delta
+    }
+  }
+  const toggleManualSectionOrder = (section: string) => {
+    const enabling = !manualOrderModeBySection[section]
+    setManualOrderModeBySection((prev) => ({ ...prev, [section]: enabling }))
+    if (enabling) {
+      const sectionSongIds = getSectionSongIds(section)
+      const nextDraft = sectionSongIds.reduce<Record<string, string>>((acc, songId, index) => {
+        acc[songId] = String(index + 1)
+        return acc
+      }, {})
+      setManualOrderDraftBySection((prev) => ({ ...prev, [section]: nextDraft }))
+      return
+    }
+    setManualOrderDraftBySection((prev) => {
+      const next = { ...prev }
+      delete next[section]
+      return next
+    })
+  }
+  const applyManualSectionOrder = (section: string) => {
+    const sectionSongIds = getSectionSongIds(section)
+    if (!sectionSongIds.length) return
+    const draft = manualOrderDraftBySection[section] ?? {}
+    const songTitleById = new Map(
+      appState.songs.map((song) => [song.id, (song.title ?? '').trim().toLowerCase()]),
+    )
+    const ranked = sectionSongIds.map((songId, index) => {
+      const parsed = Number.parseInt(draft[songId] ?? '', 10)
+      const rank =
+        Number.isFinite(parsed) && parsed > 0 ? parsed : sectionSongIds.length + index + 1
+      return { songId, rank, index }
+    })
+    ranked.sort((a, b) => {
+      if (a.rank !== b.rank) return a.rank - b.rank
+      const aTitle = songTitleById.get(a.songId) ?? ''
+      const bTitle = songTitleById.get(b.songId) ?? ''
+      if (aTitle !== bTitle) return aTitle.localeCompare(bTitle)
+      return a.index - b.index
+    })
+    const nextOrder = ranked.map((item) => item.songId)
+    applySectionSongOrder(section, nextOrder)
+    setManualOrderModeBySection((prev) => ({ ...prev, [section]: false }))
+    setManualOrderDraftBySection((prev) => {
+      const next = { ...prev }
+      delete next[section]
+      return next
     })
   }
 
@@ -3610,7 +3711,7 @@ function App() {
     }
     const requestId = createId()
     const createdSongId = existingSong?.id ?? createId()
-    const requestTags = normalizeTagList(['Special Request', type])
+    const requestTags = normalizeTagList(['Special Request'])
     const existingSongTagsLower = new Set(
       (existingSong?.tags ?? []).map((tag) => tag.trim().toLowerCase()),
     )
@@ -3618,9 +3719,6 @@ function App() {
       (tag) => !existingSongTagsLower.has(tag.toLowerCase()),
     )
     commitChange('Add special request', (prev) => {
-      const requestTypeTag = prev.tagsCatalog.includes(type)
-        ? prev.tagsCatalog
-        : [...prev.tagsCatalog, type]
       const nextSongs =
         existingSong || !customSong
           ? prev.songs.map((song) =>
@@ -3668,7 +3766,6 @@ function App() {
         specialTypes: prev.specialTypes.includes(type)
           ? prev.specialTypes
           : [...prev.specialTypes, type],
-        tagsCatalog: requestTypeTag,
       }
     })
     setSpecialRequestOrderByGig((prev) => ({
@@ -3861,6 +3958,47 @@ function App() {
       return
     }
 
+    const toTagIdentity = (value: string) =>
+      value
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '')
+        .trim()
+    const dedupeTags = (values: string[]) => {
+      const seen = new Set<string>()
+      const next: string[] = []
+      values.forEach((value) => {
+        const trimmed = value.trim()
+        if (!trimmed) return
+        const key = trimmed.toLowerCase()
+        if (seen.has(key)) return
+        seen.add(key)
+        next.push(trimmed)
+      })
+      return next
+    }
+    const specialTypes = Array.from(
+      new Set([
+        ...DEFAULT_SPECIAL_TYPES,
+        ...(specialReqRes.data ?? []).map((r) => r.request_type),
+      ]),
+    )
+    const reservedSetlistTagIdentities = new Set(
+      DEFAULT_TAGS.map((tag) => toTagIdentity(tag)).filter(Boolean),
+    )
+    const specialTypeIdentities = new Set(
+      specialTypes.map((type) => toTagIdentity(type)).filter(Boolean),
+    )
+    const isPollutedSpecialTypeTag = (tag: string) => {
+      const trimmed = tag.trim()
+      if (!trimmed) return false
+      const lower = trimmed.toLowerCase()
+      if (lower === 'special request' || lower === 'special requests') return false
+      const identity = toTagIdentity(trimmed)
+      if (!identity) return false
+      if (reservedSetlistTagIdentities.has(identity)) return false
+      return specialTypeIdentities.has(identity)
+    }
+
     const tagsBySong = new Map<string, string[]>()
     tagsRes.data?.forEach((row) => {
       const list = tagsBySong.get(row.song_id) ?? []
@@ -3907,7 +4045,7 @@ function App() {
           originalKey: row.original_key ?? '',
           youtubeUrl: row.audio_url ?? '',
           bpm: undefined,
-          tags: tagsBySong.get(row.id) ?? [],
+          tags: (tagsBySong.get(row.id) ?? []).filter((tag) => !isPollutedSpecialTypeTag(tag)),
           keys: enrichedKeys.length ? enrichedKeys : [],
           lyrics: undefined,
           specialPlayedCount: specialCount.get(row.id) ?? 0,
@@ -4003,12 +4141,11 @@ function App() {
 
     const tagsCatalog = Array.from(
       new Set([...DEFAULT_TAGS, ...(tagsRes.data ?? []).map((t) => t.tag)]),
-    )
-    const specialTypes = Array.from(
-      new Set([
-        ...DEFAULT_SPECIAL_TYPES,
-        ...(specialReqRes.data ?? []).map((r) => r.request_type),
-      ]),
+    ).filter((tag) => !isPollutedSpecialTypeTag(tag))
+    const pollutedTagValues = dedupeTags(
+      (tagsRes.data ?? [])
+        .map((row) => row.tag)
+        .filter((tag) => isPollutedSpecialTypeTag(tag)),
     )
     const singersCatalog = Array.from(
       new Set([
@@ -4024,6 +4161,14 @@ function App() {
         return acc
       }, {}) ?? {}
     setNowPlayingByGig(nowPlayingMap)
+
+    if (pollutedTagValues.length > 0 && supabase && activeBandId) {
+      void supabase
+        .from('SetlistSongTags')
+        .delete()
+        .eq('band_id', activeBandId)
+        .in('tag', pollutedTagValues)
+    }
 
     setAppState((prev) => ({
       ...prev,
@@ -4129,17 +4274,23 @@ function App() {
     clone.id = 'printable-setlist-clone'
     clone.style.display = 'grid'
     clone.style.visibility = 'visible'
+    clone.style.opacity = '1'
+    clone.style.maxHeight = 'none'
+    clone.style.overflow = 'visible'
     
     // Create a container that mimics the page view width
     const container = document.createElement('div')
-    container.style.position = 'absolute'
-    container.style.left = '-9999px'
+    container.style.position = 'fixed'
+    container.style.left = '0'
     container.style.top = '0'
+    container.style.transform = 'translateX(-200vw)'
     container.style.width = '816px' // 8.5in at 96dpi
     container.style.padding = '32px' // Match the p-8 padding
     container.style.backgroundColor = '#ffffff'
     container.style.color = '#0b0f14'
-    container.className = 'bg-white' // Ensure tailwind bg is applied if needed
+    container.style.pointerEvents = 'none'
+    container.style.zIndex = '-1'
+    container.style.overflow = 'visible'
     container.appendChild(clone)
     
     document.body.appendChild(container)
@@ -4147,7 +4298,7 @@ function App() {
     const opt = {
       margin: 0.2, 
       filename: `${currentSetlist.gigName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_setlist.pdf`,
-      image: { type: 'jpeg', quality: 0.98 },
+      image: { type: 'jpeg' as const, quality: 0.98 },
       pagebreak: {
         mode: ['css', 'legacy'],
         avoid: ['.print-section-box', '.print-section-title', '.print-row', '.print-card'],
@@ -4156,15 +4307,18 @@ function App() {
         scale: 2, 
         useCORS: true, 
         logging: false,
+        backgroundColor: '#ffffff',
         windowWidth: 816,
         scrollY: 0
       },
-      jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+      jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' as const },
     }
 
     try {
       const html2pdf = (await import('html2pdf.js')).default
-      // @ts-expect-error html2pdf.js has no bundled types for default export chain
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      })
       await html2pdf().set(opt).from(container).save()
     } catch (err) {
       console.error('PDF generation failed:', err)
@@ -4181,15 +4335,22 @@ function App() {
     clone.id = 'printable-setlist-clone-print'
     clone.style.display = 'grid'
     clone.style.visibility = 'visible'
+    clone.style.opacity = '1'
+    clone.style.maxHeight = 'none'
+    clone.style.overflow = 'visible'
 
     const container = document.createElement('div')
-    container.style.position = 'absolute'
-    container.style.left = '-9999px'
+    container.style.position = 'fixed'
+    container.style.left = '0'
     container.style.top = '0'
+    container.style.transform = 'translateX(-200vw)'
     container.style.width = '816px'
     container.style.padding = '32px'
     container.style.backgroundColor = '#ffffff'
     container.style.color = '#0b0f14'
+    container.style.pointerEvents = 'none'
+    container.style.zIndex = '-1'
+    container.style.overflow = 'visible'
     container.appendChild(clone)
     document.body.appendChild(container)
 
@@ -4197,7 +4358,7 @@ function App() {
       const html2pdf = (await import('html2pdf.js')).default
       const opt = {
         margin: 0.2,
-        image: { type: 'jpeg', quality: 0.98 },
+        image: { type: 'jpeg' as const, quality: 0.98 },
         pagebreak: {
           mode: ['css', 'legacy'],
           avoid: ['.print-section-box', '.print-section-title', '.print-row', '.print-card'],
@@ -4206,13 +4367,16 @@ function App() {
           scale: 2,
           useCORS: true,
           logging: false,
+          backgroundColor: '#ffffff',
           windowWidth: 816,
           scrollY: 0,
         },
-        jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+        jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' as const },
       }
 
-      // @ts-expect-error html2pdf.js has no bundled types for default export chain
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      })
       const worker = html2pdf().set(opt).from(container)
       const blob = await worker.outputPdf('blob')
       const url = URL.createObjectURL(blob)
@@ -4682,8 +4846,9 @@ function App() {
       orderedSongs.forEach((song) => {
         const sectionTags = uniqueList(
           (tagsBySong.get(song.id) ?? [])
+            .filter((tag) => isSetlistTypeTag(tag))
             .map(normalizePlaylistSection)
-            .filter((tag) => tag && tag.toLowerCase() !== 'special requests'),
+            .filter(Boolean),
         )
         const assignments = gigSingerKeyAssignments.get(song.id) ?? []
         addOrMerge({
@@ -4711,7 +4876,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [appState.setlists, normalizePlaylistSection])
+  }, [appState.setlists, isSetlistTypeTag, normalizePlaylistSection])
 
   useEffect(() => {
     if (playlistSingerFilter === '__all__') return
@@ -5115,7 +5280,7 @@ function App() {
                         ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
                           <iframe
                             key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared`}
-                            className="aspect-video w-full rounded-xl border border-white/10"
+                            className="h-[180px] w-full rounded-xl border border-white/10 sm:h-[210px]"
                             src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
                             title="YouTube playlist item"
                             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -5717,8 +5882,10 @@ function App() {
                 <button
                   className="mt-4 w-full rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => setScreen('setlists')}
+                  aria-label="Back"
+                  title="Back"
                 >
-                  Back to Home
+                  ←
                 </button>
               )}
             </div>
@@ -6553,8 +6720,10 @@ function App() {
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => setScreen('builder')}
+                  aria-label="Back"
+                  title="Back"
                 >
-                  Back
+                  ←
                 </button>
               </div>
             </div>
@@ -6576,7 +6745,7 @@ function App() {
                 Setlist tags
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
-                {[...appState.tagsCatalog].sort((a, b) => a.localeCompare(b)).map((tag) => {
+                {[...setlistTypeTags].sort((a, b) => a.localeCompare(b)).map((tag) => {
                   const active = songLibraryTags.includes(tag)
                   return (
                     <button
@@ -6699,8 +6868,10 @@ function App() {
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => setScreen('setlists')}
+                  aria-label="Back"
+                  title="Back"
                 >
-                  Back
+                  ←
                 </button>
               </div>
               <div className="mt-4 space-y-4">
@@ -7169,8 +7340,10 @@ function App() {
                     setDocModalContent(null)
                     setDocModalPageIndex(0)
                   }}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
                 {docModalContent && (
                   <button
@@ -7179,8 +7352,10 @@ function App() {
                       setDocModalContent(null)
                       setDocModalPageIndex(0)
                     }}
+                    aria-label="Back"
+                    title="Back"
                   >
-                    Back
+                    ←
                   </button>
                 )}
               </div>
@@ -7341,8 +7516,10 @@ function App() {
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => setAudioModalUrl(null)}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
               </div>
             </div>
@@ -7463,8 +7640,10 @@ function App() {
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={cancelEditMusician}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
               </div>
             </div>
@@ -7590,12 +7769,17 @@ function App() {
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => setShowTeamModal(false)}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
               </div>
             </div>
-            <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4">
+            <div
+              className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4"
+              data-drag-scroll-container="build-panel"
+            >
               <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
                 <div className="text-sm font-semibold">Invite by email</div>
                 <div className="mt-3 grid gap-2 md:grid-cols-3">
@@ -7855,8 +8039,10 @@ function App() {
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => setShowSectionAddSongsModal(false)}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
                 <button
                   className="min-w-[120px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
@@ -8038,8 +8224,10 @@ function App() {
                     setSpecialRequestError('')
                     setShowSpecialRequestModal(false)
                   }}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
                 <button
                   className="min-w-[120px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
@@ -8284,8 +8472,10 @@ function App() {
               <button
                 className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                 onClick={() => setShowAddSetlistModal(false)}
+                aria-label="Close"
+                title="Close"
               >
-                Close
+                ✕
               </button>
               <button
                 className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
@@ -8323,8 +8513,10 @@ function App() {
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => setSingerModalSongId(null)}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
               </div>
             </div>
@@ -8613,8 +8805,10 @@ function App() {
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => setShowGigMusiciansModal(false)}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
               </div>
             </div>
@@ -8721,8 +8915,10 @@ function App() {
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => setShowSetlistModal(false)}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
                 <button
                   className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-teal-300/40 bg-slate-800/95 text-xl text-slate-100 shadow-[0_0_18px_rgba(20,184,166,0.2)]"
@@ -8990,8 +9186,10 @@ function App() {
                   type="button"
                   className="rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
                   onClick={() => setShowPlaylistModal(false)}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
               </div>
               <div className="mt-4 space-y-2">
@@ -9013,10 +9211,10 @@ function App() {
                   ⏭ Next
                 </button>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
-                  className={`min-h-[44px] rounded-xl border px-3 py-2 text-sm ${
+                  className={`min-h-[44px] rounded-xl border px-2 py-2 text-xs ${
                     playlistAutoAdvance
                       ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
                       : 'border-white/10 text-slate-300'
@@ -9027,39 +9225,37 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  className="min-h-[44px] rounded-xl border border-indigo-300/60 bg-indigo-500/20 px-3 py-2 text-sm text-indigo-100"
+                  className="min-h-[44px] rounded-xl border border-indigo-300/60 bg-indigo-500/20 px-2 py-2 text-xs text-indigo-100"
                   onClick={() => void copyPlaylistShareLink()}
                 >
                   Share Link
                 </button>
+                <select
+                  className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-2 py-2 text-xs text-slate-100 outline-none focus:border-teal-300"
+                  value={playlistSingerFilter}
+                  onChange={(event) => setPlaylistSingerFilter(event.target.value)}
+                >
+                  <option value="__all__">All singers</option>
+                  {playlistSingerOptions.map((singer) => (
+                    <option key={`playlist-singer-${singer}`} value={singer}>
+                      {singer}
+                    </option>
+                  ))}
+                </select>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <select
-                    className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-300"
-                    value={playlistSingerFilter}
-                    onChange={(event) => setPlaylistSingerFilter(event.target.value)}
-                  >
-                    <option value="__all__">All singers</option>
-                    {playlistSingerOptions.map((singer) => (
-                      <option key={`playlist-singer-${singer}`} value={singer}>
-                        {singer}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="flex items-center text-xs text-slate-400">
-                    {visiblePlaylistEntries.length
-                      ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
-                      : 'No playable songs'}
-                  </span>
-                </div>
+                <span className="text-xs text-slate-400">
+                  {visiblePlaylistEntries.length
+                    ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
+                    : 'No playable songs'}
+                </span>
                 {playlistShareStatus && (
                   <span className="text-xs text-teal-200">{playlistShareStatus}</span>
                 )}
               </div>
             </div>
 
-            <div className="max-h-[calc(88vh-140px)] overflow-hidden px-5 pb-6 pt-4">
-              <div className="flex h-full flex-col">
+            <div className="h-[calc(88vh-140px)] overflow-hidden px-5 pb-6 pt-4">
+              <div className="flex h-full min-h-0 flex-col">
               {currentPlaylistEntry ? (
                 <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
                   <div className="flex items-start justify-between gap-3">
@@ -9124,7 +9320,7 @@ function App() {
                     ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
                       <iframe
                         key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
-                        className="aspect-video w-full rounded-xl border border-white/10"
+                            className="h-[180px] w-full rounded-xl border border-white/10 sm:h-[210px]"
                         src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
                         title="YouTube playlist item"
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -9154,7 +9350,7 @@ function App() {
               )}
 
               <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
-              <div className="space-y-3">
+              <div className="space-y-3 pb-2">
                 {groupedPlaylistSections.map((group) => (
                   <div
                     key={`playlist-group-${group.section}`}
@@ -9239,8 +9435,10 @@ function App() {
                     <button
                       className="min-w-[100px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-white/5 transition-colors"
                       onClick={() => setShowPrintPreview(false)}
+                      aria-label="Close"
+                      title="Close"
                     >
-                      Close
+                      ✕
                     </button>
                     <button
                       className="min-w-[120px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-white/5 transition-colors"
@@ -9505,8 +9703,10 @@ function App() {
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => setShowAddMusicianModal(false)}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
               </div>
             </div>
@@ -9660,8 +9860,10 @@ function App() {
                     setShowDuplicateSongConfirm(false)
                     setShowAddSongModal(false)
                   }}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
               </div>
             </div>
@@ -9720,7 +9922,7 @@ function App() {
                     Setlist tags
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {appState.tagsCatalog.map((tag) => {
+                    {setlistTypeTags.map((tag) => {
                       const active = newSongTags.includes(tag)
                       return (
                         <button
@@ -9800,8 +10002,10 @@ function App() {
                     setNewInstrumentInput('')
                     setShowSubModal(false)
                   }}
+                  aria-label="Close"
+                  title="Close"
                 >
-                  Close
+                  ✕
                 </button>
               </div>
             </div>
@@ -9926,7 +10130,7 @@ function App() {
                       : cancelEditSong
                   }
                 >
-                  {isEditSongDirty || hasPendingDocDraft ? 'Save' : 'Close'}
+                  {isEditSongDirty || hasPendingDocDraft ? 'Save' : '✕'}
                 </button>
                 <button
                   className="min-w-[92px] rounded-xl border border-red-400/40 px-4 py-2 text-sm text-red-200"
@@ -9969,7 +10173,7 @@ function App() {
                 Setlist tags
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
-                {appState.tagsCatalog.map((tag) => {
+                {setlistTypeTags.map((tag) => {
                   const active = editingSongTags.some(
                     (item) => item.trim().toLowerCase() === tag.trim().toLowerCase(),
                   )
@@ -10212,8 +10416,10 @@ function App() {
                   <button
                     className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                     onClick={() => setActiveBuildPanel(null)}
+                    aria-label={buildPanelDirty ? 'Save' : 'Close'}
+                    title={buildPanelDirty ? 'Save' : 'Close'}
                   >
-                    {buildPanelDirty ? 'Save' : 'Close'}
+                    {buildPanelDirty ? 'Save' : '✕'}
                   </button>
                   {activeBuildPanel && (
                     <button
@@ -10289,7 +10495,7 @@ function App() {
                       onChange={(event) => setSongSearch(event.target.value)}
                     />
                     <div className="flex flex-wrap gap-2">
-                      {appState.tagsCatalog.map((tag) => (
+                      {setlistTypeTags.map((tag) => (
                         <button
                           key={tag}
                           className={`rounded-full border px-3 py-1 text-xs ${
@@ -10422,12 +10628,12 @@ function App() {
                             <div
                               role="button"
                               tabIndex={0}
-                              draggable={!gigMode && !buildCompletion.special}
+                              draggable={!gigMode}
                               className={`grid items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm md:grid-cols-[.9fr_1.4fr_1fr_.6fr_.4fr] ${
                                 gigMode ? 'cursor-pointer' : ''
                               }`}
                               onDragStart={(event) => {
-                                if (gigMode || buildCompletion.special) {
+                                if (gigMode) {
                                   event.preventDefault()
                                   return
                                 }
@@ -10437,13 +10643,14 @@ function App() {
                                 event.dataTransfer.setData('text/plain', request.id)
                               }}
                               onDragOver={(event) => {
-                                if (gigMode || buildCompletion.special) return
+                                if (gigMode) return
                                 event.preventDefault()
                                 event.dataTransfer.dropEffect = 'move'
+                                autoScrollDragContainer(event)
                                 setDragOverSpecialRequestId(request.id)
                               }}
                               onDrop={(event) => {
-                                if (gigMode || buildCompletion.special) return
+                                if (gigMode) return
                                 event.preventDefault()
                                 const fromId =
                                   draggedSpecialRequestId ?? event.dataTransfer.getData('text/plain')
@@ -10690,6 +10897,12 @@ function App() {
                 (() => {
                   const section = getSectionFromPanel(activeBuildPanel) ?? ''
                   const completionKey = setlistPanelKey(section)
+                  const sectionSongs = currentSetlist.songIds
+                    .map((songId) => appState.songs.find((song) => song.id === songId))
+                    .filter((song): song is Song => Boolean(song))
+                    .filter((song) => hasSongTag(song, section))
+                  const isManualOrdering = Boolean(manualOrderModeBySection[section])
+                  const sectionOrderDraft = manualOrderDraftBySection[section] ?? {}
                   return (
                     <div
                       className={`rounded-3xl border p-5 ${
@@ -10753,8 +10966,10 @@ function App() {
                                     [section]: false,
                                   }))
                                 }
+                                aria-label="Close"
+                                title="Close"
                               >
-                                Close
+                                ✕
                               </button>
                             )}
                             <button
@@ -10763,6 +10978,24 @@ function App() {
                             >
                               Add song(s)
                             </button>
+                            <button
+                              className={`inline-flex min-w-[130px] items-center justify-center whitespace-nowrap rounded-xl border px-4 py-2 text-center text-sm font-semibold ${
+                                isManualOrdering
+                                  ? 'border-amber-300/70 bg-amber-500/20 text-amber-100'
+                                  : 'border-white/10 text-slate-200'
+                              }`}
+                              onClick={() => toggleManualSectionOrder(section)}
+                            >
+                              {isManualOrdering ? 'Cancel order' : 'Manual order'}
+                            </button>
+                            {isManualOrdering && (
+                              <button
+                                className="inline-flex min-w-[120px] items-center justify-center whitespace-nowrap rounded-xl bg-teal-400/90 px-4 py-2 text-center text-sm font-semibold text-slate-950"
+                                onClick={() => applyManualSectionOrder(section)}
+                              >
+                                Apply order
+                              </button>
+                            )}
                           </div>
                           {starterPasteOpen[section] && (
                             <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-3 text-[10px] text-slate-200">
@@ -10816,11 +11049,7 @@ function App() {
                         </div>
                       )}
                       <div className="mt-4 space-y-2">
-                        {currentSetlist.songIds
-                          .map((songId) => appState.songs.find((song) => song.id === songId))
-                          .filter((song): song is Song => Boolean(song))
-                          .filter((song) => hasSongTag(song, section))
-                          .map((song) => (
+                        {sectionSongs.map((song, sectionIndex) => (
                             <div key={song.id} className="space-y-2">
                               {draggedSectionSongId &&
                                 draggedSectionSongId !== song.id &&
@@ -10867,6 +11096,7 @@ function App() {
                                   }
                                   event.preventDefault()
                                   event.dataTransfer.dropEffect = 'move'
+                                autoScrollDragContainer(event)
                                   setDragOverSectionSongId(song.id)
                                 }}
                                 onDrop={(event) => {
@@ -10893,24 +11123,45 @@ function App() {
                                   setDraggedSectionSongId(null)
                                   setDragOverSectionSongId(null)
                                 }}
-                              onClick={() => {
-                                if (gigMode) {
-                                  setGigCurrentSong(song.id)
-                                }
-                                openDocsForSong(song.id)
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.preventDefault()
+                                onClick={() => {
                                   if (gigMode) {
                                     setGigCurrentSong(song.id)
                                   }
                                   openDocsForSong(song.id)
-                                }
-                              }}
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault()
+                                    if (gigMode) {
+                                      setGigCurrentSong(song.id)
+                                    }
+                                    openDocsForSong(song.id)
+                                  }
+                                }}
                             >
                               <div className="flex items-start justify-between gap-2">
-                                <div>
+                                <div className="flex items-start gap-2">
+                                  {isManualOrdering && (
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      className="w-14 rounded-lg border border-white/20 bg-slate-900/80 px-2 py-1 text-center text-xs text-slate-100 outline-none focus:border-teal-300"
+                                      value={sectionOrderDraft[song.id] ?? String(sectionIndex + 1)}
+                                      onClick={(event) => event.stopPropagation()}
+                                      onKeyDown={(event) => event.stopPropagation()}
+                                      onChange={(event) => {
+                                        const value = event.target.value
+                                        setManualOrderDraftBySection((prev) => ({
+                                          ...prev,
+                                          [section]: {
+                                            ...(prev[section] ?? {}),
+                                            [song.id]: value,
+                                          },
+                                        }))
+                                      }}
+                                    />
+                                  )}
+                                  <div>
                                   <div className="text-base font-semibold md:text-lg">
                                     {song.title}
                                   </div>
@@ -10955,6 +11206,7 @@ function App() {
                                       </button>
                                     )
                                   })()}
+                                  </div>
                                 </div>
                                 <div className="flex items-center gap-2">
                                   {song.youtubeUrl && (
@@ -11023,9 +11275,9 @@ function App() {
                                     </button>
                                   )
                                 })()}
-                              </div>
                             </div>
-                          ))}
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )

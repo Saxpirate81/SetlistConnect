@@ -5579,7 +5579,12 @@ function App() {
                 </div>
                 <div className="mt-4 h-[calc(100vh-250px)] min-h-[360px] overflow-hidden">
                   <div className="relative h-full min-h-0">
-                    <div ref={sharedPlaylistPlayerBlockRef} className="relative z-10">
+                    <div
+                      ref={sharedPlaylistPlayerBlockRef}
+                      className={`relative z-10 transition-opacity duration-200 ${
+                        sharedPlaylistDrawerOverlay ? 'pointer-events-none opacity-0' : 'opacity-100'
+                      }`}
+                    >
                       {currentPlaylistEntry ? (
                         <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 transition-all duration-300">
                           <div className="flex items-start justify-between gap-3">
@@ -9772,7 +9777,12 @@ function App() {
 
             <div className="min-h-0 flex-1 overflow-hidden px-5 pb-6 pt-4">
               <div className="relative h-full min-h-0">
-              <div ref={playlistPlayerBlockRef} className="relative z-10">
+              <div
+                ref={playlistPlayerBlockRef}
+                className={`relative z-10 transition-opacity duration-200 ${
+                  playlistDrawerOverlay ? 'pointer-events-none opacity-0' : 'opacity-100'
+                }`}
+              >
               {currentPlaylistEntry ? (
                 <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 transition-all duration-300">
                   <div className="flex items-start justify-between gap-3">

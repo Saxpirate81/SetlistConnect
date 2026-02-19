@@ -602,12 +602,30 @@ function App() {
     })
     return normalized
   }
-  const normalizeInstrumentName = (value: string) => {
+  const normalizeInstrumentName = useCallback((value: string) => {
     const trimmed = value.trim()
     if (!trimmed) return ''
     if (trimmed.toLowerCase() === 'saxophone') return 'Sax'
     return trimmed
-  }
+  }, [])
+  const normalizeSharedMusicians = useCallback(
+    (musicians: Musician[]) => {
+      const seen = new Set<string>()
+      const normalized: Musician[] = []
+      musicians.forEach((musician) => {
+        if (!musician?.id) return
+        const key = musician.id.trim().toLowerCase()
+        if (!key || seen.has(key)) return
+        seen.add(key)
+        normalized.push({
+          ...musician,
+          instruments: (musician.instruments ?? []).map((item) => normalizeInstrumentName(item)).filter(Boolean),
+        })
+      })
+      return normalized
+    },
+    [normalizeInstrumentName],
+  )
   const parseDocumentInstruments = useCallback((raw: string) => {
     const seen = new Set<string>()
     const normalized = raw
@@ -1589,10 +1607,12 @@ function App() {
           activePlaylistEntries.findIndex((entry) => entry.key === currentShareEntry.key),
         )
       : 0
-    const sharedMusicians: Musician[] = appState.gigMusicians
-      .filter((row) => row.gigId === currentSetlist.id && row.status !== 'out')
-      .map((row) => appState.musicians.find((musician) => musician.id === row.musicianId))
-      .filter((musician): musician is Musician => Boolean(musician))
+    const sharedMusicians = normalizeSharedMusicians(
+      appState.gigMusicians
+        .filter((row) => row.gigId === currentSetlist.id && row.status !== 'out')
+        .map((row) => appState.musicians.find((musician) => musician.id === row.musicianId))
+        .filter((musician): musician is Musician => Boolean(musician)),
+    )
     const params = new URLSearchParams()
     params.set('playlist', '1')
     params.set('setlist', currentSetlist.id)
@@ -5662,8 +5682,16 @@ function App() {
       setSharedGigMusicians([])
       return
     }
-    const payloadMusicians = sharedPlaylistView.musicians ?? []
-    setSharedGigMusicians(payloadMusicians)
+    const payloadMusicians = normalizeSharedMusicians(sharedPlaylistView.musicians ?? [])
+    const applySharedGigMusicians = (next: Musician[]) => {
+      setSharedGigMusicians((prev) => {
+        if (prev.length === next.length && prev.every((item, index) => item.id === next[index]?.id)) {
+          return prev
+        }
+        return next
+      })
+    }
+    applySharedGigMusicians(payloadMusicians)
     if (!supabase || payloadMusicians.length > 0) {
       return
     }
@@ -5675,7 +5703,7 @@ function App() {
         .select('musician_id, status')
         .eq('gig_id', gigId)
       if (cancelled || gigMusicianError) {
-        setSharedGigMusicians(payloadMusicians)
+        applySharedGigMusicians(payloadMusicians)
         return
       }
       const activeMusicianIds = Array.from(
@@ -5687,7 +5715,7 @@ function App() {
         ),
       )
       if (activeMusicianIds.length === 0) {
-        setSharedGigMusicians(payloadMusicians)
+        applySharedGigMusicians(payloadMusicians)
         return
       }
       const { data: musicianRows, error: musiciansError } = await supabase
@@ -5696,26 +5724,26 @@ function App() {
         .in('id', activeMusicianIds)
         .is('deleted_at', null)
       if (cancelled || musiciansError) {
-        setSharedGigMusicians(payloadMusicians)
+        applySharedGigMusicians(payloadMusicians)
         return
       }
-      const musicians: Musician[] = (musicianRows ?? []).map((row) => ({
+      const musicians: Musician[] = normalizeSharedMusicians((musicianRows ?? []).map((row) => ({
         id: row.id,
         name: row.name,
         roster: row.roster,
         email: row.email ?? undefined,
         phone: row.phone ?? undefined,
-        instruments: (row.instruments ?? []).map((item: string) => normalizeInstrumentName(item)),
+        instruments: row.instruments ?? [],
         singer: row.singer ?? undefined,
-      }))
+      })))
       const rank = new Map(activeMusicianIds.map((id, index) => [id, index]))
       musicians.sort((a, b) => (rank.get(a.id) ?? 9999) - (rank.get(b.id) ?? 9999))
-      setSharedGigMusicians(musicians)
+      applySharedGigMusicians(musicians)
     })()
     return () => {
       cancelled = true
     }
-  }, [normalizeInstrumentName, sharedPlaylistView, supabase])
+  }, [normalizeSharedMusicians, sharedPlaylistView, supabase])
 
   useEffect(() => {
     if (!sharedPlaylistView || !supabase) return

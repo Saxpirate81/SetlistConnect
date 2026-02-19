@@ -923,9 +923,9 @@ button[aria-label="Close"] {
   }
 
   .shared-setlist-container .print-layout {
-    grid-template-columns: 1fr;
-    column-gap: 0;
-    row-gap: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     width: 100%;
     min-width: 0;
     overflow-x: hidden;
@@ -937,6 +937,7 @@ button[aria-label="Close"] {
     width: 100%;
     max-width: 100%;
     min-width: 0;
+    display: block;
     grid-column: 1 / -1 !important;
   }
 
@@ -957,7 +958,8 @@ button[aria-label="Close"] {
   }
 
   .shared-setlist-container .print-grid {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
     gap: 4px;
     width: 100%;
     min-width: 0;
@@ -965,6 +967,8 @@ button[aria-label="Close"] {
   }
 
   .shared-setlist-container .print-list {
+    display: flex;
+    flex-direction: column;
     gap: 4px;
     padding: 4px;
     width: 100%;
@@ -1044,7 +1048,8 @@ button[aria-label="Close"] {
 
   .shared-setlist-container .print-dance .print-list,
   .shared-setlist-container .print-dinner .print-list {
-    display: grid;
+    display: flex;
+    flex-direction: column;
     column-count: unset;
     column-gap: 0;
   }

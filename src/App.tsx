@@ -1430,6 +1430,13 @@ function App() {
   ])
 
   const activePlaylistEntries = sharedPlaylistView?.entries ?? playlistEntries
+  const sharedNowPlayingEntry = useMemo(
+    () =>
+      sharedNowPlayingSongId
+        ? activePlaylistEntries.find((entry) => entry.songId === sharedNowPlayingSongId) ?? null
+        : null,
+    [activePlaylistEntries, sharedNowPlayingSongId],
+  )
   const getPlaylistEntryAssignments = useCallback((entry: PlaylistEntry) => {
     const singers = normalizeTagList(entry.assignmentSingers ?? [])
     const keys = normalizeTagList(entry.assignmentKeys ?? [])
@@ -6402,14 +6409,45 @@ function App() {
             )}
             {sharedPlaylistView && (
               <>
-                <div className="mt-2 flex items-center justify-start gap-2">
-                  <span className="text-xs text-slate-300">
-                    Instrument:{' '}
-                    <span className="font-semibold text-teal-200">
-                      {(appState.instrument ?? ['All']).join(', ')}
-                    </span>
-                    <span className="ml-2 text-slate-400">Docs: {sharedDocuments.length}</span>
-                  </span>
+                <div
+                  className={`mt-2 rounded-xl border px-3 py-2 transition-all duration-300 ${
+                    sharedNowPlayingEntry
+                      ? sharedGigFlashPulse
+                        ? 'upnext-flash border-emerald-300/60 bg-emerald-400/15 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
+                        : 'border-white/15 bg-slate-950/40'
+                      : 'border-white/10 bg-slate-950/20'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-300">
+                        Up Next
+                      </div>
+                      {sharedNowPlayingEntry ? (
+                        <button
+                          type="button"
+                          className="mt-1 max-w-full truncate text-left text-sm font-semibold text-white underline decoration-white/40 underline-offset-2"
+                          onClick={() => openSharedLyricsForSong(sharedNowPlayingEntry.songId)}
+                          title="Open lyrics for up next song"
+                        >
+                          {sharedNowPlayingEntry.title}
+                        </button>
+                      ) : (
+                        <div className="mt-1 text-sm text-slate-400">No song queued</div>
+                      )}
+                    </div>
+                    {sharedNowPlayingEntry && hasSharedLyricsForSong(sharedNowPlayingEntry.songId) && (
+                      <button
+                        type="button"
+                        className="inline-flex h-8 items-center justify-center rounded-lg border border-white/20 px-3 text-xs font-semibold text-slate-100"
+                        onClick={() => openSharedLyricsForSong(sharedNowPlayingEntry.songId)}
+                        title="Open up next lyrics"
+                        aria-label="Open up next lyrics"
+                      >
+                        📜 Lyrics
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {sharedPublicTab === 'setlist' ? (
@@ -6829,7 +6867,7 @@ function App() {
                   </button>
                 </div>
               </div>
-              <div className="h-[calc(100vh-62px)] overflow-auto p-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
+              <div className="h-[calc(100vh-62px)] overflow-auto p-4 pb-[calc(4.5rem+env(safe-area-inset-bottom))]">
                 <div className={`rounded-2xl border p-3 ${sharedLyricsContainerClasses}`}>
                   <div className="mb-2 text-center text-base font-bold">{docModalContent.title}</div>
                   {docModalContent.type === 'Lyrics' && (
@@ -6874,9 +6912,9 @@ function App() {
                   )}
                   {docModalContent.content ? (
                     <pre
-                      className={`max-h-[calc(100vh-220px)] overflow-auto whitespace-pre-wrap text-sm leading-relaxed ${sharedLyricsPreClasses}`}
+                      className={`max-h-[calc(100vh-220px)] overflow-auto whitespace-pre-wrap pb-16 text-sm leading-relaxed ${sharedLyricsPreClasses}`}
                     >
-                      {docModalContent.content}
+                      {`${docModalContent.content}\n\n\n`}
                     </pre>
                   ) : activeDocModalPage ? (
                     <div className="h-[70vh] overflow-hidden rounded-xl border border-white/10 bg-black">

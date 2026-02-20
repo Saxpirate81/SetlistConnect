@@ -317,6 +317,11 @@ button[aria-label="Close"] {
   animation: upnext-flash 4.2s ease-in-out infinite;
 }
 
+/* Public shared view: make Up Next fade pulse much slower. */
+.shared-public-mode .upnext-flash {
+  animation-duration: 10s !important;
+}
+
 .fade-in {
   animation: fadeIn 0.35s ease;
 }

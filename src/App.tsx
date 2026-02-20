@@ -1552,6 +1552,7 @@ function App() {
     : 'border-white/10 bg-slate-950/50 text-slate-200'
   const sharedLyricsPreClasses =
     sharedLyricsFont === 'serif' ? 'font-serif' : sharedLyricsFont === 'mono' ? 'font-mono' : 'font-sans'
+  const sharedLyricsAlignmentClass = isSharedLyricsDoc ? 'text-center' : ''
   const isPlaylistEntryPlayable = (entry?: PlaylistEntry | null) =>
     Boolean(entry?.audioUrl && entry.audioUrl.trim())
 
@@ -6908,7 +6909,7 @@ function App() {
                   )}
                   {docModalContent.content ? (
                     <pre
-                      className={`max-h-[calc(100vh-220px)] overflow-auto whitespace-pre-wrap pb-16 text-sm leading-relaxed ${sharedLyricsPreClasses}`}
+                      className={`max-h-[calc(100vh-220px)] overflow-auto whitespace-pre-wrap pb-16 text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
                     >
                       {`${docModalContent.content}\n\n\n`}
                     </pre>
@@ -9085,7 +9086,7 @@ function App() {
                   )}
                   {docModalContent.content ? (
                     <pre
-                      className={`h-[calc(100%-2rem)] overflow-auto whitespace-pre-wrap text-sm leading-relaxed ${sharedLyricsPreClasses}`}
+                      className={`h-[calc(100%-2rem)] overflow-auto whitespace-pre-wrap text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
                     >
                       {docModalContent.content}
                     </pre>

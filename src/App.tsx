@@ -5895,7 +5895,7 @@ function App() {
     }
 
     let cancelled = false
-    void (async () => {
+    const fetchLatestNowPlaying = async () => {
       const { data, error } = await client
         .from('SetlistGigNowPlaying')
         .select('song_id, updated_at')
@@ -5905,7 +5905,8 @@ function App() {
       if (cancelled || error) return
       const row = (data?.[0] ?? null) as { song_id?: string | null } | null
       applySharedNowPlaying(row?.song_id ?? null)
-    })()
+    }
+    void fetchLatestNowPlaying()
 
     const channel = client
       .channel(`shared-now-playing-${gigId}`)
@@ -5922,8 +5923,21 @@ function App() {
       )
       .subscribe()
 
+    // Fallback for mobile browsers that occasionally miss realtime events.
+    const pollIntervalId = window.setInterval(() => {
+      void fetchLatestNowPlaying()
+    }, 1800)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchLatestNowPlaying()
+      }
+    }
+    window.addEventListener('visibilitychange', handleVisibilityChange)
+
     return () => {
       cancelled = true
+      window.clearInterval(pollIntervalId)
+      window.removeEventListener('visibilitychange', handleVisibilityChange)
       void client.removeChannel(channel)
     }
   }, [

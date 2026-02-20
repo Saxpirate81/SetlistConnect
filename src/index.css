@@ -865,8 +865,8 @@ button[aria-label="Close"] {
 /* Shared link setlist needs a screen-optimized layout on phones. */
 @media (max-width: 900px) {
   .shared-setlist-shell {
-    border-radius: 14px;
-    padding: 12px;
+    border-radius: 0;
+    padding: 0;
     overflow-x: hidden;
     width: 100%;
     max-width: 100%;
@@ -1063,8 +1063,8 @@ button[aria-label="Close"] {
 
 @media (max-width: 390px) {
   .shared-setlist-shell {
-    padding: 8px;
-    border-radius: 12px;
+    padding: 0;
+    border-radius: 0;
   }
 
   .shared-setlist-container {

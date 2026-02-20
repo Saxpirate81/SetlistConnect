@@ -1437,6 +1437,7 @@ function App() {
         : null,
     [activePlaylistEntries, sharedNowPlayingSongId],
   )
+  const sharedNowPlayingTitle = sharedNowPlayingEntry?.title ?? 'Song selected'
   const getPlaylistEntryAssignments = useCallback((entry: PlaylistEntry) => {
     const singers = normalizeTagList(entry.assignmentSingers ?? [])
     const keys = normalizeTagList(entry.assignmentKeys ?? [])
@@ -5923,7 +5924,6 @@ function App() {
 
     return () => {
       cancelled = true
-      setSharedNowPlayingSongId(null)
       void client.removeChannel(channel)
     }
   }, [
@@ -6409,47 +6409,6 @@ function App() {
             )}
             {sharedPlaylistView && (
               <>
-                <div
-                  className={`mt-2 rounded-xl border px-3 py-2 transition-all duration-300 ${
-                    sharedNowPlayingEntry
-                      ? sharedGigFlashPulse
-                        ? 'upnext-flash border-emerald-300/60 bg-emerald-400/15 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
-                        : 'border-white/15 bg-slate-950/40'
-                      : 'border-white/10 bg-slate-950/20'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-300">
-                        Up Next
-                      </div>
-                      {sharedNowPlayingEntry ? (
-                        <button
-                          type="button"
-                          className="mt-1 max-w-full truncate text-left text-sm font-semibold text-white underline decoration-white/40 underline-offset-2"
-                          onClick={() => openSharedLyricsForSong(sharedNowPlayingEntry.songId)}
-                          title="Open lyrics for up next song"
-                        >
-                          {sharedNowPlayingEntry.title}
-                        </button>
-                      ) : (
-                        <div className="mt-1 text-sm text-slate-400">No song queued</div>
-                      )}
-                    </div>
-                    {sharedNowPlayingEntry && hasSharedLyricsForSong(sharedNowPlayingEntry.songId) && (
-                      <button
-                        type="button"
-                        className="inline-flex h-8 items-center justify-center rounded-lg border border-white/20 px-3 text-xs font-semibold text-slate-100"
-                        onClick={() => openSharedLyricsForSong(sharedNowPlayingEntry.songId)}
-                        title="Open up next lyrics"
-                        aria-label="Open up next lyrics"
-                      >
-                        📜 Lyrics
-                      </button>
-                    )}
-                  </div>
-                </div>
-
                 {sharedPublicTab === 'setlist' ? (
                   <div className="mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden rounded-none bg-transparent p-0 sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4">
                     {sharedDocsLoading && (
@@ -6840,6 +6799,42 @@ function App() {
             </div>
           </nav>
         )}
+        {sharedNowPlayingSongId && (
+          <div
+            className={`fixed inset-x-0 top-0 z-[140] border-b px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] transition-all duration-300 ${
+              sharedGigFlashPulse
+                ? 'upnext-flash border-emerald-300/70 bg-emerald-400/20 shadow-[0_0_22px_rgba(74,222,128,0.45)]'
+                : 'border-white/15 bg-slate-950/88 backdrop-blur'
+            }`}
+          >
+            <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-300">
+                  Up Next
+                </div>
+                <button
+                  type="button"
+                  className="mt-0.5 max-w-full truncate text-left text-sm font-semibold text-white underline decoration-white/40 underline-offset-2"
+                  onClick={() => openSharedLyricsForSong(sharedNowPlayingSongId)}
+                  title="Open up next lyrics"
+                >
+                  {sharedNowPlayingTitle}
+                </button>
+              </div>
+              {hasSharedLyricsForSong(sharedNowPlayingSongId) && (
+                <button
+                  type="button"
+                  className="inline-flex h-8 items-center justify-center rounded-lg border border-white/20 px-3 text-xs font-semibold text-slate-100"
+                  onClick={() => openSharedLyricsForSong(sharedNowPlayingSongId)}
+                  title="Open up next lyrics"
+                  aria-label="Open up next lyrics"
+                >
+                  📜 Lyrics
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {docModalSongId && docModalContent && (
           <div
             className="fixed inset-0 z-[150] bg-slate-950/95"
@@ -6878,20 +6873,15 @@ function App() {
                           : 'border-white/15 bg-slate-900/70 text-slate-200'
                       }`}
                     >
-                      <label className="font-semibold" htmlFor="shared-lyrics-theme-public">
-                        Theme
-                      </label>
-                      <select
-                        id="shared-lyrics-theme-public"
-                        className="rounded-md border border-white/20 bg-transparent px-2 py-1"
-                        value={sharedLyricsTheme}
-                        onChange={(event) =>
-                          setSharedLyricsTheme(event.target.value === 'light' ? 'light' : 'dark')
+                      <button
+                        type="button"
+                        className="rounded-md border border-white/20 bg-transparent px-2 py-1 font-semibold"
+                        onClick={() =>
+                          setSharedLyricsTheme((current) => (current === 'dark' ? 'light' : 'dark'))
                         }
                       >
-                        <option value="dark">Dark</option>
-                        <option value="light">Light</option>
-                      </select>
+                        Theme: {sharedLyricsTheme === 'dark' ? 'Dark' : 'Light'}
+                      </button>
                       <label className="ml-1 font-semibold" htmlFor="shared-lyrics-font-public">
                         Font
                       </label>
@@ -9060,20 +9050,15 @@ function App() {
                           : 'border-white/15 bg-slate-900/70 text-slate-200'
                       }`}
                     >
-                      <label className="font-semibold" htmlFor="shared-lyrics-theme">
-                        Theme
-                      </label>
-                      <select
-                        id="shared-lyrics-theme"
-                        className="rounded-md border border-white/20 bg-transparent px-2 py-1"
-                        value={sharedLyricsTheme}
-                        onChange={(event) =>
-                          setSharedLyricsTheme(event.target.value === 'light' ? 'light' : 'dark')
+                      <button
+                        type="button"
+                        className="rounded-md border border-white/20 bg-transparent px-2 py-1 font-semibold"
+                        onClick={() =>
+                          setSharedLyricsTheme((current) => (current === 'dark' ? 'light' : 'dark'))
                         }
                       >
-                        <option value="dark">Dark</option>
-                        <option value="light">Light</option>
-                      </select>
+                        Theme: {sharedLyricsTheme === 'dark' ? 'Dark' : 'Light'}
+                      </button>
                       <label className="ml-1 font-semibold" htmlFor="shared-lyrics-font">
                         Font
                       </label>

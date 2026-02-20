@@ -897,6 +897,7 @@ button[aria-label="Close"] {
     width: 100%;
     min-width: 0;
     overflow-x: hidden;
+    border-radius: 0;
   }
 
   .shared-setlist-container .print-band-name {
@@ -933,7 +934,7 @@ button[aria-label="Close"] {
 
   .shared-setlist-container .print-section-box {
     padding: 6px;
-    border-radius: 12px;
+    border-radius: 0;
     width: 100%;
     max-width: 100%;
     min-width: 0;
@@ -974,6 +975,7 @@ button[aria-label="Close"] {
     width: 100%;
     min-width: 0;
     overflow-x: hidden;
+    border-radius: 0;
   }
 
   .shared-setlist-container .print-row {
@@ -983,6 +985,7 @@ button[aria-label="Close"] {
     padding: 6px 7px;
     width: 100%;
     min-width: 0;
+    border-radius: 0;
   }
 
   .shared-setlist-container .print-musician-row {
@@ -1104,7 +1107,7 @@ button[aria-label="Close"] {
 
   .shared-setlist-container .print-section-box {
     padding: 5px;
-    border-radius: 10px;
+    border-radius: 0;
   }
 
   .shared-setlist-container .print-section-title {

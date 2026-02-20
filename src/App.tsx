@@ -6803,18 +6803,18 @@ function App() {
           <div
             className={`fixed inset-x-0 top-0 z-[140] border-b px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] transition-all duration-300 ${
               sharedGigFlashPulse
-                ? 'upnext-flash border-emerald-300/70 bg-emerald-400/20 shadow-[0_0_22px_rgba(74,222,128,0.45)]'
-                : 'border-white/15 bg-slate-950/88 backdrop-blur'
+                ? 'liquid-button upnext-flash border-emerald-300/70 bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_22px_rgba(74,222,128,0.45)]'
+                : 'border-emerald-300/60 bg-gradient-to-r from-emerald-500/90 via-lime-400/85 to-emerald-400/90 text-slate-950 shadow-[0_0_14px_rgba(74,222,128,0.28)]'
             }`}
           >
             <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-300">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-900/80">
                   Up Next
                 </div>
                 <button
                   type="button"
-                  className="mt-0.5 max-w-full truncate text-left text-sm font-semibold text-white underline decoration-white/40 underline-offset-2"
+                  className="mt-0.5 max-w-full truncate text-left text-sm font-semibold text-slate-950 underline decoration-slate-900/35 underline-offset-2"
                   onClick={() => openSharedLyricsForSong(sharedNowPlayingSongId)}
                   title="Open up next lyrics"
                 >
@@ -6824,7 +6824,7 @@ function App() {
               {hasSharedLyricsForSong(sharedNowPlayingSongId) && (
                 <button
                   type="button"
-                  className="inline-flex h-8 items-center justify-center rounded-lg border border-white/20 px-3 text-xs font-semibold text-slate-100"
+                  className="inline-flex h-8 items-center justify-center rounded-lg border border-slate-900/25 bg-white/35 px-3 text-xs font-semibold text-slate-950"
                   onClick={() => openSharedLyricsForSong(sharedNowPlayingSongId)}
                   title="Open up next lyrics"
                   aria-label="Open up next lyrics"

@@ -185,6 +185,8 @@ const SETLIST_PANEL_PREFIX = 'set:'
 const ACTIVE_BAND_KEY = 'setlist:activeBandId'
 const GIG_LOCKED_SONGS_KEY = 'setlist:gigLockedSongs'
 const GIG_LAST_LOCKED_SONG_KEY = 'setlist:gigLastLockedSong'
+const SHARED_LYRICS_THEME_KEY = 'setlist:sharedLyricsTheme'
+const SHARED_LYRICS_FONT_KEY = 'setlist:sharedLyricsFont'
 const GIG_SECTION_TAG_PREFIX = '__gigsection__'
 
 const initialState: AppState = {
@@ -407,6 +409,16 @@ function App() {
   const [sharedDocsLoading, setSharedDocsLoading] = useState(false)
   const [sharedDocsError, setSharedDocsError] = useState<string | null>(null)
   const [sharedGigFlashPulse, setSharedGigFlashPulse] = useState(false)
+  const [sharedNowPlayingSongId, setSharedNowPlayingSongId] = useState<string | null>(null)
+  const [sharedLyricsTheme, setSharedLyricsTheme] = useState<'dark' | 'light'>(() => {
+    const stored = localStorage.getItem(SHARED_LYRICS_THEME_KEY)
+    return stored === 'light' ? 'light' : 'dark'
+  })
+  const [sharedLyricsFont, setSharedLyricsFont] = useState<'sans' | 'serif' | 'mono'>(() => {
+    const stored = localStorage.getItem(SHARED_LYRICS_FONT_KEY)
+    if (stored === 'serif' || stored === 'mono') return stored
+    return 'sans'
+  })
   const [playlistSingerFilter, setPlaylistSingerFilter] = useState('__all__')
   const [playlistShareStatus, setPlaylistShareStatus] = useState('')
   const playlistShareTimerRef = useRef<number | null>(null)
@@ -699,6 +711,56 @@ function App() {
       return a.title.localeCompare(b.title)
     })
   }
+  const getSharedDocumentSelectionItems = useCallback(
+    (songId: string) => {
+      const docs = sharedDocuments
+        .filter((doc) => doc.songId === songId)
+        .filter((doc) => {
+          if (activeInstruments.includes('All')) return true
+          const docInstruments = parseDocumentInstruments(doc.instrument)
+          return docInstruments.includes('All')
+            ? true
+            : docInstruments.some((item) => activeInstruments.includes(item))
+        })
+      const grouped = new Map<string, DocumentSelectionItem>()
+      docs.forEach((doc) => {
+        const key = [
+          doc.songId,
+          doc.type,
+          doc.title.trim().toLowerCase(),
+          (doc.url ?? '').trim().toLowerCase(),
+          (doc.content ?? '').trim().toLowerCase(),
+        ].join('|')
+        const existing = grouped.get(key)
+        if (existing) {
+          parseDocumentInstruments(doc.instrument).forEach((instrument) => {
+            if (!existing.instruments.includes(instrument)) {
+              existing.instruments.push(instrument)
+            }
+          })
+          existing.sourceDocIds.push(doc.id)
+          return
+        }
+        grouped.set(key, {
+          id: doc.id,
+          songId: doc.songId,
+          type: doc.type,
+          instrument: parseDocumentInstruments(doc.instrument).join('||'),
+          title: doc.title,
+          url: doc.url,
+          content: doc.content,
+          instruments: parseDocumentInstruments(doc.instrument),
+          sourceDocIds: [doc.id],
+        })
+      })
+      return [...grouped.values()].sort((a, b) => {
+        if (a.type === 'Lyrics' && b.type !== 'Lyrics') return -1
+        if (a.type !== 'Lyrics' && b.type === 'Lyrics') return 1
+        return a.title.localeCompare(b.title)
+      })
+    },
+    [activeInstruments, parseDocumentInstruments, sharedDocuments],
+  )
   const getDocumentViewerUrl = (url?: string) => {
     if (!url) return ''
     if (!/\.pdf(\?|#|$)/i.test(url)) return url
@@ -1462,6 +1524,26 @@ function App() {
     return pages.length ? pages : [docModalContent.url]
   }, [docModalContent])
   const activeDocModalPage = docModalPages[docModalPageIndex] ?? docModalPages[0] ?? ''
+  const isSharedPublicDocsMode = Boolean(sharedPlaylistView && !authUserId)
+  const docModalSelectionItems = useMemo(() => {
+    if (!docModalSongId) return []
+    return isSharedPublicDocsMode
+      ? getSharedDocumentSelectionItems(docModalSongId)
+      : getDocumentSelectionItems(docModalSongId)
+  }, [
+    docModalSongId,
+    getSharedDocumentSelectionItems,
+    getDocumentSelectionItems,
+    isSharedPublicDocsMode,
+  ])
+  const isSharedLyricsDoc = Boolean(isSharedPublicDocsMode && docModalContent?.type === 'Lyrics')
+  const sharedLyricsContainerClasses = isSharedLyricsDoc
+    ? sharedLyricsTheme === 'light'
+      ? 'border-slate-300/80 bg-white text-slate-900'
+      : 'border-white/10 bg-slate-950/50 text-slate-200'
+    : 'border-white/10 bg-slate-950/50 text-slate-200'
+  const sharedLyricsPreClasses =
+    sharedLyricsFont === 'serif' ? 'font-serif' : sharedLyricsFont === 'mono' ? 'font-mono' : 'font-sans'
   const isPlaylistEntryPlayable = (entry?: PlaylistEntry | null) =>
     Boolean(entry?.audioUrl && entry.audioUrl.trim())
 
@@ -4649,6 +4731,26 @@ function App() {
     setDocModalPageIndex(0)
     setDocModalContent(lyricsDoc)
   }
+  const hasSharedLyricsForSong = useCallback(
+    (songId?: string) => {
+      if (!songId) return false
+      return getSharedDocumentSelectionItems(songId).some((doc) => doc.type === 'Lyrics')
+    },
+    [getSharedDocumentSelectionItems],
+  )
+  const openSharedLyricsForSong = useCallback(
+    (songId?: string) => {
+      if (!songId) return
+      const lyricsDoc = getSharedDocumentSelectionItems(songId).find((doc) => doc.type === 'Lyrics')
+      if (!lyricsDoc) return
+      setShowInstrumentPrompt(false)
+      setPendingDocSongId(null)
+      setDocModalSongId(songId)
+      setDocModalPageIndex(0)
+      setDocModalContent(lyricsDoc)
+    },
+    [getSharedDocumentSelectionItems],
+  )
 
   const createId = () => crypto.randomUUID()
   const reportSupabaseError = (error: { message?: string } | null) => {
@@ -5746,29 +5848,41 @@ function App() {
   }, [normalizeSharedMusicians, sharedPlaylistView, supabase])
 
   useEffect(() => {
+    localStorage.setItem(SHARED_LYRICS_THEME_KEY, sharedLyricsTheme)
+  }, [sharedLyricsTheme])
+
+  useEffect(() => {
+    localStorage.setItem(SHARED_LYRICS_FONT_KEY, sharedLyricsFont)
+  }, [sharedLyricsFont])
+
+  useEffect(() => {
     if (!sharedPlaylistView || !supabase) return
     const client = supabase
     const gigId = sharedPlaylistView.setlistId
     const applySharedNowPlaying = (songId: string | null) => {
       if (!songId) {
         sharedNowPlayingSongIdRef.current = null
+        setSharedNowPlayingSongId(null)
         return
       }
-      if (sharedNowPlayingSongIdRef.current === songId) return
+      const isSameSong = sharedNowPlayingSongIdRef.current === songId
       sharedNowPlayingSongIdRef.current = songId
-      const visibleIndex = visiblePlaylistEntries.findIndex((entry) => entry.songId === songId)
-      if (visibleIndex >= 0) {
-        setPlaylistIndex(visibleIndex)
-      } else {
-        const activeIndex = activePlaylistEntries.findIndex((entry) => entry.songId === songId)
-        if (activeIndex >= 0) {
-          if (playlistSingerFilter !== '__all__') {
-            setPlaylistSingerFilter('__all__')
+      setSharedNowPlayingSongId(songId)
+      if (!isSameSong) {
+        const visibleIndex = visiblePlaylistEntries.findIndex((entry) => entry.songId === songId)
+        if (visibleIndex >= 0) {
+          setPlaylistIndex(visibleIndex)
+        } else {
+          const activeIndex = activePlaylistEntries.findIndex((entry) => entry.songId === songId)
+          if (activeIndex >= 0) {
+            if (playlistSingerFilter !== '__all__') {
+              setPlaylistSingerFilter('__all__')
+            }
+            setPlaylistIndex(activeIndex)
           }
-          setPlaylistIndex(activeIndex)
         }
+        setPlaylistPlayNonce((current) => current + 1)
       }
-      setPlaylistPlayNonce((current) => current + 1)
       triggerSharedGigFlash()
     }
 
@@ -5802,6 +5916,7 @@ function App() {
 
     return () => {
       cancelled = true
+      setSharedNowPlayingSongId(null)
       void client.removeChannel(channel)
     }
   }, [
@@ -6380,11 +6495,11 @@ function App() {
                                     <div
                                       key={`shared-pdf-row-${item.key}`}
                                       className={`print-row song-row ${
-                                        currentPlaylistEntry?.songId === item.songId
+                                        sharedNowPlayingSongId === item.songId
                                           ? 'ring-2 ring-emerald-300/80'
                                           : ''
                                       } ${
-                                        currentPlaylistEntry?.songId === item.songId && sharedGigFlashPulse
+                                        sharedNowPlayingSongId === item.songId && sharedGigFlashPulse
                                           ? 'upnext-flash'
                                           : ''
                                       }`}
@@ -6405,6 +6520,17 @@ function App() {
                                           )}
                                           <span className="artist-name">{item.artist || 'Unknown'}</span>
                                         </div>
+                                        {hasSharedLyricsForSong(item.songId) && (
+                                          <button
+                                            type="button"
+                                            className="ml-2 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-300/70 bg-white text-[13px] text-slate-700"
+                                            title="Open lyrics"
+                                            aria-label="Open lyrics"
+                                            onClick={() => openSharedLyricsForSong(item.songId)}
+                                          >
+                                            📜
+                                          </button>
+                                        )}
                                       </div>
                                       <div className="print-row-subtitle print-song-meta">
                                         <span className="musical-key text-[0.72em]">{keyLabel}</span>
@@ -6593,14 +6719,28 @@ function App() {
                                         onClick={() => jumpToPlaylistIndex(index)}
                                       >
                                         <div className="flex items-center justify-between gap-3">
-                                          <div>
+                                          <div className="min-w-0 flex-1">
                                             <div className="text-sm font-semibold text-slate-100">{item.title}</div>
                                             <div className="text-[11px] text-slate-400">{item.artist || ' '}</div>
                                             <div className="mt-0.5 text-[11px] text-teal-200">
                                               {getPlaylistAssignmentText(item)}
                                             </div>
                                           </div>
-                                          <div className="flex flex-wrap justify-end gap-1">
+                                          <div className="flex flex-wrap items-center justify-end gap-1">
+                                            {hasSharedLyricsForSong(item.songId) && (
+                                              <button
+                                                type="button"
+                                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/20 text-[12px] text-slate-100"
+                                                title="Open lyrics"
+                                                aria-label="Open lyrics"
+                                                onClick={(event) => {
+                                                  event.stopPropagation()
+                                                  openSharedLyricsForSong(item.songId)
+                                                }}
+                                              >
+                                                📜
+                                              </button>
+                                            )}
                                             {item.tags.map((tag) => (
                                               <span
                                                 key={`${item.key}-shared-tag-${tag}`}
@@ -8692,7 +8832,7 @@ function App() {
             <div className="h-[calc(100vh-88px)] overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
               {!docModalContent && (
                 <div className="mt-4 space-y-2">
-                  {getDocumentSelectionItems(docModalSongId).map((doc) => (
+                  {docModalSelectionItems.map((doc) => (
                       <div
                         key={doc.id}
                         role="button"
@@ -8753,7 +8893,7 @@ function App() {
                         </div>
                       </div>
                     ))}
-                  {getDocumentSelectionItems(docModalSongId).length === 0 && (
+                  {docModalSelectionItems.length === 0 && (
                     <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-3 text-sm text-slate-300">
                       No charts or lyrics found for selected instruments.
                     </div>
@@ -8762,7 +8902,7 @@ function App() {
               )}
               {docModalContent && (
                 <div
-                  className="relative mt-4 h-[calc(100%-1rem)] rounded-2xl border border-white/10 bg-slate-950/50 p-4 text-slate-200"
+                  className={`relative mt-4 h-[calc(100%-1rem)] rounded-2xl border p-4 ${sharedLyricsContainerClasses}`}
                   onTouchStart={(event) => setDocSwipeStartX(event.touches[0]?.clientX ?? null)}
                   onTouchEnd={(event) => {
                     if (docSwipeStartX === null) return
@@ -8773,8 +8913,50 @@ function App() {
                   }}
                 >
                   <div className="mb-3 text-center text-xl font-bold">{docModalContent.title}</div>
+                  {isSharedLyricsDoc && (
+                    <div
+                      className={`mb-3 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs ${
+                        sharedLyricsTheme === 'light'
+                          ? 'border-slate-300 bg-slate-100 text-slate-800'
+                          : 'border-white/15 bg-slate-900/70 text-slate-200'
+                      }`}
+                    >
+                      <label className="font-semibold" htmlFor="shared-lyrics-theme">
+                        Theme
+                      </label>
+                      <select
+                        id="shared-lyrics-theme"
+                        className="rounded-md border border-white/20 bg-transparent px-2 py-1"
+                        value={sharedLyricsTheme}
+                        onChange={(event) =>
+                          setSharedLyricsTheme(event.target.value === 'light' ? 'light' : 'dark')
+                        }
+                      >
+                        <option value="dark">Dark</option>
+                        <option value="light">Light</option>
+                      </select>
+                      <label className="ml-1 font-semibold" htmlFor="shared-lyrics-font">
+                        Font
+                      </label>
+                      <select
+                        id="shared-lyrics-font"
+                        className="rounded-md border border-white/20 bg-transparent px-2 py-1"
+                        value={sharedLyricsFont}
+                        onChange={(event) => {
+                          const next = event.target.value
+                          setSharedLyricsFont(next === 'serif' || next === 'mono' ? next : 'sans')
+                        }}
+                      >
+                        <option value="sans">Sans</option>
+                        <option value="serif">Serif</option>
+                        <option value="mono">Mono</option>
+                      </select>
+                    </div>
+                  )}
                   {docModalContent.content ? (
-                    <pre className="h-[calc(100%-2rem)] overflow-auto whitespace-pre-wrap text-sm font-semibold leading-relaxed">
+                    <pre
+                      className={`h-[calc(100%-2rem)] overflow-auto whitespace-pre-wrap text-sm leading-relaxed ${sharedLyricsPreClasses}`}
+                    >
                       {docModalContent.content}
                     </pre>
                   ) : activeDocModalPage ? (

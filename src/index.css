@@ -314,12 +314,12 @@ button[aria-label="Close"] {
 }
 
 .upnext-flash {
-  animation: upnext-flash 4.2s ease-in-out infinite;
+  animation: upnext-flash 14s ease-in-out infinite;
 }
 
 /* Public shared view: make Up Next fade pulse much slower. */
 .shared-public-mode .upnext-flash {
-  animation-duration: 10s !important;
+  animation-duration: 20s !important;
 }
 
 .fade-in {
@@ -329,7 +329,7 @@ button[aria-label="Close"] {
 @media (max-width: 768px) {
   .liquid-button,
   .upnext-flash {
-    animation-duration: 7s;
+    animation-duration: 16s;
   }
 
   button:hover,
@@ -380,10 +380,16 @@ button[aria-label="Close"] {
 @keyframes upnext-flash {
   0%,
   100% {
-    opacity: 0.25;
+    filter: brightness(1);
+    box-shadow:
+      0 0 0 rgba(74, 222, 128, 0),
+      0 0 12px rgba(74, 222, 128, 0.25);
   }
   50% {
-    opacity: 1;
+    filter: brightness(1.24);
+    box-shadow:
+      0 0 18px rgba(74, 222, 128, 0.55),
+      0 0 32px rgba(74, 222, 128, 0.38);
   }
 }
 

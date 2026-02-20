@@ -5287,7 +5287,7 @@ function App() {
           ref={adminUpNextBannerRef}
           role="button"
           tabIndex={0}
-          className="liquid-button upnext-flash w-full cursor-pointer bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_18px_rgba(74,222,128,0.45)]"
+          className="liquid-button upnext-flash w-full cursor-pointer border-y border-emerald-300/45 bg-black text-emerald-100 shadow-[0_0_18px_rgba(74,222,128,0.45)]"
           onClick={() => openDocsForSong(appState.currentSongId ?? undefined)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') {
@@ -5299,7 +5299,7 @@ function App() {
           onTouchEnd={(event) => {
             if (bannerTouchStartX === null) return
             const endX = event.changedTouches[0]?.clientX ?? bannerTouchStartX
-            if (endX - bannerTouchStartX > 60) {
+            if (Math.abs(endX - bannerTouchStartX) > 60) {
               if (appState.currentSongId) setDismissedUpNextId(appState.currentSongId)
             }
             setBannerTouchStartX(null)
@@ -5319,12 +5319,12 @@ function App() {
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="pointer-events-none inline-flex items-center gap-1 rounded-full bg-slate-950/30 px-3 py-2 text-xs text-slate-950/90">
+              <div className="pointer-events-none inline-flex items-center gap-1 rounded-full border border-emerald-300/35 bg-emerald-400/15 px-3 py-2 text-xs text-emerald-100">
                 <span className="text-base">↔</span>
                 <span>Swipe</span>
               </div>
               <button
-                className="relative z-10 inline-flex min-h-[44px] items-center rounded-full bg-slate-950/30 px-4 py-2 text-sm"
+                className="relative z-10 inline-flex min-h-[44px] items-center rounded-full border border-emerald-300/35 bg-emerald-400/15 px-4 py-2 text-sm text-emerald-100"
                 onClick={(event) => {
                   event.stopPropagation()
                   if (isAdmin) {
@@ -5338,7 +5338,7 @@ function App() {
               </button>
               {gigMode && currentSetlist && gigLastLockedSongByGig[currentSetlist.id] && (
                 <button
-                  className="relative z-10 inline-flex min-h-[44px] items-center rounded-full bg-slate-950/30 px-4 py-2 text-sm"
+                  className="relative z-10 inline-flex min-h-[44px] items-center rounded-full border border-emerald-300/35 bg-emerald-400/15 px-4 py-2 text-sm text-emerald-100"
                   onClick={(event) => {
                     event.stopPropagation()
                     undoLastGigSongSelection()
@@ -6832,18 +6832,18 @@ function App() {
           <div
             className={`fixed inset-x-0 top-0 z-[260] border-b px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] transition-all duration-300 ${
               sharedGigFlashPulse
-                ? 'upnext-flash border-emerald-300/70 bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_22px_rgba(74,222,128,0.45)]'
-                : 'border-emerald-300/60 bg-gradient-to-r from-emerald-500/90 via-lime-400/85 to-emerald-400/90 text-slate-950 shadow-[0_0_14px_rgba(74,222,128,0.28)]'
+                ? 'upnext-flash border-emerald-300/70 bg-black text-emerald-100 shadow-[0_0_22px_rgba(74,222,128,0.45)]'
+                : 'border-emerald-300/60 bg-black text-emerald-100 shadow-[0_0_14px_rgba(74,222,128,0.28)]'
             }`}
           >
             <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-900/80">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-200/90">
                   Up Next
                 </div>
                 <button
                   type="button"
-                  className="mt-0.5 max-w-full truncate text-left text-sm font-semibold text-slate-950 underline decoration-slate-900/35 underline-offset-2"
+                  className="mt-0.5 max-w-full truncate text-left text-sm font-semibold text-emerald-100 underline decoration-emerald-300/45 underline-offset-2"
                   onClick={() => openSharedLyricsForSong(sharedNowPlayingSongId)}
                   title="Open up next lyrics"
                 >
@@ -6853,7 +6853,7 @@ function App() {
               {hasSharedLyricsForSong(sharedNowPlayingSongId) && (
                 <button
                   type="button"
-                  className="inline-flex h-8 items-center justify-center rounded-lg border border-slate-900/25 bg-white/35 px-3 text-xs font-semibold text-slate-950"
+                  className="inline-flex h-8 items-center justify-center rounded-lg border border-emerald-300/40 bg-emerald-400/15 px-3 text-xs font-semibold text-emerald-100"
                   onClick={() => openSharedLyricsForSong(sharedNowPlayingSongId)}
                   title="Open up next lyrics"
                   aria-label="Open up next lyrics"
@@ -6876,7 +6876,10 @@ function App() {
               setDocModalPageIndex(0)
             }}
           >
-            <div className="h-full w-full overflow-hidden bg-slate-900" onClick={(event) => event.stopPropagation()}>
+            <div
+              className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-slate-900"
+              onClick={(event) => event.stopPropagation()}
+            >
               <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-4 py-3 backdrop-blur">
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-base font-semibold">
@@ -6894,8 +6897,8 @@ function App() {
                   </button>
                 </div>
               </div>
-              <div className="h-[calc(100vh-62px)] overflow-auto p-4 pb-[calc(4.5rem+env(safe-area-inset-bottom))]">
-                <div className={`rounded-2xl border p-3 ${sharedLyricsContainerClasses}`}>
+              <div className="flex-1 min-h-0 overflow-auto p-4 pb-[calc(4.5rem+env(safe-area-inset-bottom))]">
+                <div className={`flex min-h-0 flex-col rounded-2xl border p-3 ${sharedLyricsContainerClasses}`}>
                   <div className="mb-2 text-center text-base font-bold">{docModalContent.title}</div>
                   {docModalContent.type === 'Lyrics' && (
                     <div
@@ -6934,12 +6937,12 @@ function App() {
                   )}
                   {docModalContent.content ? (
                     <pre
-                      className={`max-h-[calc(100vh-220px)] overflow-auto whitespace-pre-wrap pb-16 text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
+                      className={`min-h-0 flex-1 overflow-auto whitespace-pre-wrap pb-16 text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
                     >
                       {`${docModalContent.content}\n\n\n`}
                     </pre>
                   ) : activeDocModalPage ? (
-                    <div className="h-[70vh] overflow-hidden rounded-xl border border-white/10 bg-black">
+                    <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-white/10 bg-black">
                       {isImageFileUrl(activeDocModalPage) ? (
                         <img src={activeDocModalPage} alt={docModalContent.title} className="h-full w-full object-contain" />
                       ) : (
@@ -8959,7 +8962,7 @@ function App() {
           }}
         >
           <div
-            className="h-full w-full overflow-hidden bg-slate-900"
+            className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
@@ -8998,7 +9001,7 @@ function App() {
                 )}
               </div>
             </div>
-            <div className="h-[calc(100vh-88px)] overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
+            <div className="flex-1 min-h-0 overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
               {!docModalContent && (
                 <div className="mt-4 space-y-2">
                   {docModalSelectionItems.map((doc) => (
@@ -9071,7 +9074,7 @@ function App() {
               )}
               {docModalContent && (
                 <div
-                  className={`relative mt-4 h-[calc(100%-1rem)] rounded-2xl border p-4 ${sharedLyricsContainerClasses}`}
+                  className={`relative mt-4 flex h-[calc(100%-1rem)] min-h-0 flex-col rounded-2xl border p-4 ${sharedLyricsContainerClasses}`}
                   onTouchStart={(event) => setDocSwipeStartX(event.touches[0]?.clientX ?? null)}
                   onTouchEnd={(event) => {
                     if (docSwipeStartX === null) return
@@ -9119,12 +9122,12 @@ function App() {
                   )}
                   {docModalContent.content ? (
                     <pre
-                      className={`h-[calc(100%-2rem)] overflow-auto whitespace-pre-wrap text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
+                      className={`min-h-0 flex-1 overflow-auto whitespace-pre-wrap text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
                     >
                       {docModalContent.content}
                     </pre>
                   ) : activeDocModalPage ? (
-                    <div className="relative h-[calc(100%-2rem)] w-full overflow-hidden rounded-2xl border border-white/10 bg-black">
+                    <div className="relative min-h-0 flex-1 w-full overflow-hidden rounded-2xl border border-white/10 bg-black">
                       {isImageFileUrl(activeDocModalPage) ? (
                         <img
                           src={activeDocModalPage}
@@ -11070,21 +11073,21 @@ function App() {
                 <div
                   className={`gig-sheet-upnext rounded-2xl border px-2.5 py-1.5 ${
                     gigSheetQueuedSong
-                      ? 'liquid-button upnext-flash border-emerald-300/60 bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
-                      : 'border-teal-300/35 bg-teal-400/10'
+                      ? 'liquid-button upnext-flash border-emerald-300/60 bg-black text-emerald-100 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
+                      : 'border-emerald-300/35 bg-black'
                   }`}
                 >
                   <div className="flex min-h-[34px] items-center justify-between gap-2">
                     <span
                       className={`text-[10px] font-semibold uppercase tracking-[0.2em] ${
-                        gigSheetQueuedSong ? 'text-slate-950/80' : 'text-teal-200/90'
+                        gigSheetQueuedSong ? 'text-emerald-200/90' : 'text-emerald-200/70'
                       }`}
                     >
                       Up Next
                     </span>
                     <div className="grid w-[250px] shrink-0 grid-cols-2 items-center gap-2 md:w-[280px]">
                         <button
-                          className={`gig-sheet-clear-upnext relative z-10 flex h-8 w-full items-center justify-center whitespace-nowrap rounded-xl border border-slate-900/30 bg-slate-950/25 px-2 py-1 text-[11px] font-semibold text-slate-950 transition-opacity ${
+                          className={`gig-sheet-clear-upnext relative z-10 flex h-8 w-full items-center justify-center whitespace-nowrap rounded-xl border border-emerald-300/35 bg-emerald-400/15 px-2 py-1 text-[11px] font-semibold text-emerald-100 transition-opacity ${
                             gigSheetQueuedSong ? 'opacity-100' : 'pointer-events-none opacity-0'
                           }`}
                           onClick={finishGigQueuedSong}
@@ -11103,7 +11106,7 @@ function App() {
                   </div>
                   <div
                     className={`mt-0.5 truncate text-sm font-semibold leading-tight md:text-base ${
-                      gigSheetQueuedSong ? 'text-slate-950' : 'text-teal-50'
+                      gigSheetQueuedSong ? 'text-emerald-100' : 'text-slate-300'
                     }`}
                   >
                     {gigSheetQueuedSong?.title ?? 'No song queued'}

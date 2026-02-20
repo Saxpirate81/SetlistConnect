@@ -6324,7 +6324,7 @@ function App() {
 
   if ((sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && !authUserId) {
     return (
-      <div className="h-screen overflow-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-4 pb-24 pt-6 text-white">
+      <div className="shared-public-mode h-screen overflow-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-4 pb-24 pt-6 text-white">
         {appState.instrument === null && (
           <div
             className="fixed inset-0 z-[110] flex items-center bg-slate-950/80 py-6"

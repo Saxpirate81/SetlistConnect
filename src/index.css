@@ -321,6 +321,11 @@ button[aria-label="Close"] {
   animation: shared-upnext-pulse 2s ease-in-out infinite;
 }
 
+/* In shared/public view, only the top Up Next banner should pulse. */
+.shared-public-mode .upnext-flash {
+  animation: none !important;
+}
+
 .fade-in {
   animation: fadeIn 0.35s ease;
 }

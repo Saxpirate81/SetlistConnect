@@ -412,6 +412,8 @@ function App() {
   const [sharedDocsError, setSharedDocsError] = useState<string | null>(null)
   const [sharedGigFlashPulse, setSharedGigFlashPulse] = useState(false)
   const [sharedNowPlayingSongId, setSharedNowPlayingSongId] = useState<string | null>(null)
+  const [sharedDismissedUpNextId, setSharedDismissedUpNextId] = useState<string | null>(null)
+  const [sharedBannerTouchStartX, setSharedBannerTouchStartX] = useState<number | null>(null)
   const [sharedLyricsTheme, setSharedLyricsTheme] = useState<'dark' | 'light'>(() => {
     const stored = localStorage.getItem(SHARED_LYRICS_THEME_KEY)
     return stored === 'light' ? 'light' : 'dark'
@@ -6157,6 +6159,16 @@ function App() {
   }, [appState.currentSongId, dismissedUpNextId])
 
   useEffect(() => {
+    if (!sharedNowPlayingSongId) {
+      setSharedDismissedUpNextId(null)
+      return
+    }
+    if (sharedNowPlayingSongId !== sharedDismissedUpNextId) {
+      setSharedDismissedUpNextId(null)
+    }
+  }, [sharedNowPlayingSongId, sharedDismissedUpNextId])
+
+  useEffect(() => {
     const isAdminUpNextVisible = Boolean(
       appState.currentSongId && appState.currentSongId !== dismissedUpNextId,
     )
@@ -6828,13 +6840,22 @@ function App() {
             </div>
           </nav>
         )}
-        {sharedNowPlayingSongId && (
+        {sharedNowPlayingSongId && sharedNowPlayingSongId !== sharedDismissedUpNextId && (
           <div
             className={`fixed inset-x-0 top-0 z-[260] border-b px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] transition-all duration-300 ${
               sharedGigFlashPulse
                 ? 'upnext-flash border-emerald-300/70 bg-black text-emerald-100 shadow-[0_0_22px_rgba(74,222,128,0.45)]'
                 : 'border-emerald-300/60 bg-black text-emerald-100 shadow-[0_0_14px_rgba(74,222,128,0.28)]'
             }`}
+            onTouchStart={(event) => setSharedBannerTouchStartX(event.touches[0]?.clientX ?? null)}
+            onTouchEnd={(event) => {
+              if (sharedBannerTouchStartX === null) return
+              const endX = event.changedTouches[0]?.clientX ?? sharedBannerTouchStartX
+              if (Math.abs(endX - sharedBannerTouchStartX) > 60 && sharedNowPlayingSongId) {
+                setSharedDismissedUpNextId(sharedNowPlayingSongId)
+              }
+              setSharedBannerTouchStartX(null)
+            }}
           >
             <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3">
               <div className="min-w-0">
@@ -6868,7 +6889,10 @@ function App() {
           <div
             className="fixed inset-x-0 bottom-0 z-[240] bg-slate-950/95"
             style={{
-              top: sharedNowPlayingSongId ? 'calc(3.6rem + env(safe-area-inset-top))' : '0',
+              top:
+                sharedNowPlayingSongId && sharedNowPlayingSongId !== sharedDismissedUpNextId
+                  ? 'calc(3.6rem + env(safe-area-inset-top))'
+                  : '0',
             }}
             onClick={() => {
               setDocModalSongId(null)

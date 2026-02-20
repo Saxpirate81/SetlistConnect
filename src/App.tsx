@@ -6809,7 +6809,7 @@ function App() {
           <div
             className={`fixed inset-x-0 top-0 z-[140] border-b px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] transition-all duration-300 ${
               sharedGigFlashPulse
-                ? 'liquid-button shared-upnext-pulse border-emerald-300/70 bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_22px_rgba(74,222,128,0.45)]'
+                ? 'shared-upnext-pulse border-emerald-300/70 bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_22px_rgba(74,222,128,0.45)]'
                 : 'border-emerald-300/60 bg-gradient-to-r from-emerald-500/90 via-lime-400/85 to-emerald-400/90 text-slate-950 shadow-[0_0_14px_rgba(74,222,128,0.28)]'
             }`}
           >

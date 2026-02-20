@@ -317,6 +317,10 @@ button[aria-label="Close"] {
   animation: upnext-flash 4.2s ease-in-out infinite;
 }
 
+.shared-upnext-pulse {
+  animation: shared-upnext-pulse 2s ease-in-out infinite;
+}
+
 .fade-in {
   animation: fadeIn 0.35s ease;
 }
@@ -367,6 +371,7 @@ button[aria-label="Close"] {
   .liquid-button,
   .liquid-button::after,
   .upnext-flash,
+  .shared-upnext-pulse,
   .fade-in {
     animation: none !important;
   }
@@ -379,6 +384,21 @@ button[aria-label="Close"] {
   }
   50% {
     opacity: 1;
+  }
+}
+
+@keyframes shared-upnext-pulse {
+  0% {
+    opacity: 0.74;
+  }
+  20% {
+    opacity: 1;
+  }
+  58% {
+    opacity: 0.86;
+  }
+  100% {
+    opacity: 0.78;
   }
 }
 

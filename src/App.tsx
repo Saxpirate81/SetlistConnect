@@ -6511,10 +6511,6 @@ function App() {
                                         sharedNowPlayingSongId === item.songId
                                           ? 'ring-2 ring-emerald-300/80'
                                           : ''
-                                      } ${
-                                        sharedNowPlayingSongId === item.songId && sharedGigFlashPulse
-                                          ? 'upnext-flash'
-                                          : ''
                                       }`}
                                     >
                                       <div className="print-row-title">
@@ -6622,11 +6618,7 @@ function App() {
                         >
                           {currentPlaylistEntry ? (
                             <div
-                              className={`rounded-none border-0 bg-transparent p-0 transition-all duration-300 sm:rounded-2xl sm:border sm:border-white/10 sm:bg-slate-950/40 sm:p-4 ${
-                                sharedGigFlashPulse
-                                  ? 'upnext-flash ring-2 ring-emerald-300/70 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
-                                  : ''
-                              }`}
+                              className="rounded-none border-0 bg-transparent p-0 transition-all duration-300 sm:rounded-2xl sm:border sm:border-white/10 sm:bg-slate-950/40 sm:p-4"
                             >
                               <div className="flex items-start justify-between gap-3">
                                 <div>
@@ -6817,7 +6809,7 @@ function App() {
           <div
             className={`fixed inset-x-0 top-0 z-[140] border-b px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] transition-all duration-300 ${
               sharedGigFlashPulse
-                ? 'liquid-button upnext-flash border-emerald-300/70 bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_22px_rgba(74,222,128,0.45)]'
+                ? 'liquid-button shared-upnext-pulse border-emerald-300/70 bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_22px_rgba(74,222,128,0.45)]'
                 : 'border-emerald-300/60 bg-gradient-to-r from-emerald-500/90 via-lime-400/85 to-emerald-400/90 text-slate-950 shadow-[0_0_14px_rgba(74,222,128,0.28)]'
             }`}
           >

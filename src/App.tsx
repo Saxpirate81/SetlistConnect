@@ -367,6 +367,8 @@ function App() {
   const [subSearchInput, setSubSearchInput] = useState('')
   const [showSubModal, setShowSubModal] = useState(false)
   const [bannerTouchStartX, setBannerTouchStartX] = useState<number | null>(null)
+  const [adminUpNextBannerBottom, setAdminUpNextBannerBottom] = useState(0)
+  const adminUpNextBannerRef = useRef<HTMLDivElement | null>(null)
   const [newDocSongId, setNewDocSongId] = useState('')
   const [newDocSongTitle, setNewDocSongTitle] = useState('')
   const [newDocType, setNewDocType] = useState<'Chart' | 'Lyrics' | 'Lead Sheet' | ''>('')
@@ -5282,6 +5284,7 @@ function App() {
       </header>
       {appState.currentSongId && appState.currentSongId !== dismissedUpNextId && (
         <div
+          ref={adminUpNextBannerRef}
           role="button"
           tabIndex={0}
           className="liquid-button upnext-flash w-full cursor-pointer bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_18px_rgba(74,222,128,0.45)]"
@@ -6152,6 +6155,25 @@ function App() {
       setDismissedUpNextId(null)
     }
   }, [appState.currentSongId, dismissedUpNextId])
+
+  useEffect(() => {
+    const isAdminUpNextVisible = Boolean(
+      appState.currentSongId && appState.currentSongId !== dismissedUpNextId,
+    )
+    if (!isAdminUpNextVisible) {
+      setAdminUpNextBannerBottom(0)
+      return
+    }
+    const syncBannerBottom = () => {
+      const rect = adminUpNextBannerRef.current?.getBoundingClientRect()
+      setAdminUpNextBannerBottom(rect ? Math.max(0, Math.ceil(rect.bottom)) : 0)
+    }
+    syncBannerBottom()
+    window.addEventListener('resize', syncBannerBottom)
+    return () => {
+      window.removeEventListener('resize', syncBannerBottom)
+    }
+  }, [appState.currentSongId, dismissedUpNextId, screen])
 
   useEffect(() => {
     const client = supabase
@@ -8921,7 +8943,15 @@ function App() {
 
       {docModalSongId && (
         <div
-          className="fixed inset-0 z-[130] bg-slate-950/95"
+          className="fixed inset-x-0 bottom-0 z-[130] bg-slate-950/95"
+          style={{
+            top:
+              appState.currentSongId &&
+              appState.currentSongId !== dismissedUpNextId &&
+              adminUpNextBannerBottom > 0
+                ? `${adminUpNextBannerBottom}px`
+                : '0',
+          }}
           onClick={() => {
             setDocModalSongId(null)
             setDocModalContent(null)

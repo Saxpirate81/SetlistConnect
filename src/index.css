@@ -625,9 +625,23 @@ button[aria-label="Print chart or lyrics"] {
   pointer-events: stroke;
 }
 
-/* Public shared view: make Up Next fade pulse much slower. */
+/* Public shared view: keep pulse only on the top banner. */
 .shared-public-mode .upnext-flash {
-  animation-duration: 24s !important;
+  animation: none !important;
+}
+
+.shared-public-mode .upnext-flash::before {
+  animation: none !important;
+  opacity: 0 !important;
+}
+
+.shared-public-mode .shared-top-upnext-flash {
+  animation: upnext-flash 28s ease-in-out infinite !important;
+}
+
+.shared-public-mode .shared-top-upnext-flash::before {
+  opacity: 0.82 !important;
+  animation: upnext-highlight 34s ease-in-out infinite !important;
 }
 
 .fade-in {
@@ -688,16 +702,16 @@ button[aria-label="Print chart or lyrics"] {
 @keyframes upnext-flash {
   0%,
   100% {
-    filter: brightness(1);
+    filter: brightness(1.03);
     box-shadow:
-      0 0 0 rgba(74, 222, 128, 0),
-      0 0 12px rgba(74, 222, 128, 0.3);
+      0 0 0 rgba(190, 242, 100, 0),
+      0 0 18px rgba(132, 204, 22, 0.34);
   }
   50% {
-    filter: brightness(1.3);
+    filter: brightness(1.28);
     box-shadow:
-      0 0 20px rgba(74, 222, 128, 0.58),
-      0 0 36px rgba(250, 204, 21, 0.35);
+      0 0 28px rgba(163, 230, 53, 0.72),
+      0 0 46px rgba(250, 204, 21, 0.52);
   }
 }
 

@@ -505,6 +505,12 @@ function App() {
   const [sharedPlaylistView, setSharedPlaylistView] = useState<SharedPlaylistView | null>(null)
   const [sharedPlaylistLoading, setSharedPlaylistLoading] = useState(false)
   const [sharedPlaylistError, setSharedPlaylistError] = useState<string | null>(null)
+  const [sharedWelcomeStep, setSharedWelcomeStep] = useState<'hidden' | 'welcome' | 'cta' | 'learn'>(
+    'hidden',
+  )
+  const [sharedWelcomeCompletedSetlistId, setSharedWelcomeCompletedSetlistId] = useState<string | null>(
+    null,
+  )
   const [sharedPublicTab, setSharedPublicTab] = useState<'setlist' | 'playlist'>('setlist')
   const [sharedGigMusicians, setSharedGigMusicians] = useState<Musician[]>([])
   const [sharedDocuments, setSharedDocuments] = useState<Document[]>([])
@@ -691,7 +697,7 @@ function App() {
   const [recentlyMovedSongId, setRecentlyMovedSongId] = useState<string | null>(null)
   const movedSongTimerRef = useRef<number | null>(null)
   const [activeBuildPanel, setActiveBuildPanel] = useState<string | null>(null)
-  const [buildPanelDirty, setBuildPanelDirty] = useState(false)
+  const [, setBuildPanelDirty] = useState(false)
   const [pendingSingerAssignments, setPendingSingerAssignments] = useState<
     Record<string, { singer: string; key: string }[]>
   >({})
@@ -6736,6 +6742,19 @@ function App() {
     setAccountSaveStatus('Band name updated.')
   }
 
+  const clearSharedPlaylistQueryParams = () => {
+    const params = new URLSearchParams(window.location.search)
+    params.delete('playlist')
+    params.delete('setlist')
+    params.delete('item')
+    params.delete('band')
+    params.delete('musicians')
+    params.delete('data')
+    const next = params.toString()
+    const newUrl = `${window.location.pathname}${next ? `?${next}` : ''}${window.location.hash}`
+    window.history.replaceState({}, '', newUrl)
+  }
+
   useEffect(() => {
     if (!supabase || !authUserId) return
     const params = new URLSearchParams(window.location.search)
@@ -7027,6 +7046,22 @@ function App() {
       cancelled = true
     }
   }, [activeBandName, appState.setlists, isSetlistTypeTag, normalizePlaylistSection, supabase])
+
+  useEffect(() => {
+    if (!sharedPlaylistView || authUserId) {
+      setSharedWelcomeStep('hidden')
+      return
+    }
+    if (sharedWelcomeCompletedSetlistId === sharedPlaylistView.setlistId) {
+      setSharedWelcomeStep('hidden')
+      return
+    }
+    setSharedWelcomeStep('welcome')
+    const timer = window.setTimeout(() => {
+      setSharedWelcomeStep('cta')
+    }, 1400)
+    return () => window.clearTimeout(timer)
+  }, [authUserId, sharedPlaylistView, sharedWelcomeCompletedSetlistId])
 
   useEffect(() => {
     if (!sharedPlaylistView) {
@@ -8185,8 +8220,8 @@ function App() {
           <div
             className={`fixed inset-x-0 top-0 z-[260] border-b px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] transition-all duration-300 ${
               sharedGigFlashPulse
-                ? 'upnext-flash border-emerald-300/70 bg-black text-emerald-100 shadow-[0_0_22px_rgba(74,222,128,0.45)]'
-                : 'border-emerald-300/60 bg-black text-emerald-100 shadow-[0_0_14px_rgba(74,222,128,0.28)]'
+                ? 'upnext-flash shared-top-upnext-flash border-lime-300/80 bg-black text-lime-100 shadow-[0_0_28px_rgba(190,242,100,0.55)]'
+                : 'border-lime-300/70 bg-black text-lime-100 shadow-[0_0_16px_rgba(190,242,100,0.34)]'
             }`}
             onTouchStart={(event) => setSharedBannerTouchStartX(event.touches[0]?.clientX ?? null)}
             onTouchEnd={(event) => {
@@ -8215,7 +8250,7 @@ function App() {
               {hasSharedLyricsForSong(sharedNowPlayingSongId) && (
                 <button
                   type="button"
-                  className="inline-flex h-8 items-center justify-center rounded-lg border border-emerald-300/40 bg-emerald-400/15 px-3 text-xs font-semibold text-emerald-100"
+                  className="inline-flex h-8 items-center justify-center rounded-lg border border-lime-300/50 bg-lime-300/20 px-3 text-xs font-semibold text-lime-100"
                   onClick={() => openSharedLyricsForSong(sharedNowPlayingSongId)}
                   title="Open up next lyrics"
                   aria-label="Open up next lyrics"
@@ -8226,7 +8261,7 @@ function App() {
             </div>
           </div>
         )}
-        {docModalSongId && docModalContent && (
+        {docModalSongId && (
           <div
             className="fixed inset-x-0 bottom-0 z-[240] bg-slate-950/95"
             style={{
@@ -8245,96 +8280,287 @@ function App() {
               className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-slate-900"
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-4 py-3 backdrop-blur">
+              <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
                 <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-base font-semibold">
-                    {docModalContent.type === 'Lyrics' ? 'Song Lyrics' : 'Song Document'}
+                  <h3 className="min-w-0 flex-1 truncate text-lg font-semibold">
+                    {docModalContent
+                      ? docModalContent.type === 'Lyrics'
+                        ? 'Song Lyrics'
+                        : 'Song Chart'
+                      : 'Song documents'}
                   </h3>
-                  <button
-                    className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200"
-                    onClick={() => {
-                      setDocModalSongId(null)
-                      setDocModalContent(null)
-                      setDocModalPageIndex(0)
-                    }}
-                  >
-                    ✕
-                  </button>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {docModalContent && (
+                      <button
+                        className="icon-header-btn rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
+                        onClick={() => {
+                          setDocModalContent(null)
+                          setDocModalPageIndex(0)
+                        }}
+                        aria-label="Back"
+                        title="Back"
+                      >
+                        ←
+                      </button>
+                    )}
+                    <button
+                      className="icon-header-btn rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
+                      onClick={() => {
+                        setDocModalSongId(null)
+                        setDocModalContent(null)
+                        setDocModalPageIndex(0)
+                      }}
+                      aria-label="Close"
+                      title="Close"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div className="flex-1 min-h-0 overflow-auto p-4 pb-[calc(4.5rem+env(safe-area-inset-bottom))]">
-                <div className={`flex min-h-0 flex-col rounded-2xl border p-3 ${sharedLyricsContainerClasses}`}>
-                  <div className="mb-2 text-center text-base font-bold">{docModalContent.title}</div>
-                  {docModalContent.type === 'Lyrics' && (
-                    <div
-                      className={`mb-3 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs ${
-                        sharedLyricsTheme === 'light'
-                          ? 'border-slate-300 bg-slate-100 text-slate-800'
-                          : 'border-white/15 bg-slate-900/70 text-slate-200'
-                      }`}
-                    >
-                      <label className="ml-1 font-semibold" htmlFor="shared-lyrics-font-public">
-                        Font
-                      </label>
-                      <select
-                        id="shared-lyrics-font-public"
-                        className="rounded-md border border-white/20 bg-transparent px-2 py-1"
-                        value={sharedLyricsFont}
-                        onChange={(event) => {
-                          queueLyricsPrefsUndo()
-                          const next = event.target.value
-                          setSharedLyricsFont(next === 'serif' || next === 'mono' ? next : 'sans')
+              <div className="flex-1 min-h-0 overflow-auto px-6 pb-[calc(4.5rem+env(safe-area-inset-bottom))]">
+                {!docModalContent && (
+                  <div className="mt-4 space-y-2">
+                    {docModalSelectionItems.map((doc) => (
+                      <div
+                        key={doc.id}
+                        role="button"
+                        tabIndex={0}
+                        className={`rounded-2xl border p-3 text-sm ${
+                          doc.type === 'Lyrics'
+                            ? activeInstruments.includes('Vocals')
+                              ? 'border-fuchsia-300/50 bg-fuchsia-400/10'
+                              : 'border-fuchsia-300/30 bg-fuchsia-400/5'
+                            : 'border-white/10 bg-slate-950/40'
+                        }`}
+                        onClick={() => {
+                          setDocModalPageIndex(0)
+                          setDocModalContent(doc)
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            setDocModalPageIndex(0)
+                            setDocModalContent(doc)
+                          }
                         }}
                       >
-                        <option value="sans">Sans</option>
-                        <option value="serif">Serif</option>
-                        <option value="mono">Mono</option>
-                      </select>
-                    </div>
-                  )}
-                  {renderLyricsTools()}
-                  {docModalContent.content ? (
-                    <div
-                      className={`relative min-h-0 flex-1 overflow-hidden rounded-xl border ${lyricsBodySurfaceClasses}`}
-                    >
-                      {lyricsEditMode && isTextLyricsDoc ? (
-                        <textarea
-                          className={`h-full w-full resize-none overflow-auto bg-transparent p-3 pb-16 text-sm leading-relaxed outline-none ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
-                          style={{ fontSize: `${lyricsFontSizeRem}rem` }}
-                          value={lyricsEditDraft}
-                          onChange={(event) => setLyricsEditDraft(event.target.value)}
-                        />
-                      ) : (
-                        <div
-                          ref={lyricsTextContainerRef}
-                          className={`h-full overflow-auto whitespace-pre-wrap p-3 pb-16 text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
-                          style={{ fontSize: `${lyricsFontSizeRem}rem` }}
-                          onMouseUp={handleLyricsSelectionCapture}
-                          onTouchEnd={handleLyricsSelectionCapture}
-                        >
-                          {renderHighlightedLyrics(`${resolvedLyricsText}\n\n\n`, activeLyricsDocState.highlights)}
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="font-semibold">{doc.title}</div>
+                            <div className="text-xs text-slate-400">
+                              {doc.type} · {doc.instruments.join(', ')}
+                            </div>
+                          </div>
                         </div>
-                      )}
-                      {renderLyricsStrokeOverlay()}
-                    </div>
-                  ) : activeDocModalPage ? (
-                    <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-white/10 bg-black">
-                      {isImageFileUrl(activeDocModalPage) ? (
-                        <img src={activeDocModalPage} alt={docModalContent.title} className="h-full w-full object-contain" />
-                      ) : (
-                        <iframe
-                          src={getDocumentViewerUrl(activeDocModalPage)}
-                          className="h-full w-full"
-                          title={docModalContent.title}
-                        />
-                      )}
-                      {renderLyricsStrokeOverlay()}
-                    </div>
-                  ) : (
-                    <div className="text-sm text-slate-300">No document available.</div>
-                  )}
-                </div>
+                      </div>
+                    ))}
+                    {docModalSelectionItems.length === 0 && (
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-3 text-sm text-slate-300">
+                        No charts or lyrics found for selected instruments.
+                      </div>
+                    )}
+                  </div>
+                )}
+                {docModalContent && (
+                  <div
+                    className={`relative mt-4 flex h-[calc(100%-1rem)] min-h-0 flex-col rounded-2xl border p-4 ${sharedLyricsContainerClasses}`}
+                    onTouchStart={(event) => setDocSwipeStartX(event.touches[0]?.clientX ?? null)}
+                    onTouchEnd={(event) => {
+                      if (docSwipeStartX === null) return
+                      const endX = event.changedTouches[0]?.clientX ?? docSwipeStartX
+                      if (endX - docSwipeStartX > 50) moveDocPageBy(-1)
+                      if (docSwipeStartX - endX > 50) moveDocPageBy(1)
+                      setDocSwipeStartX(null)
+                    }}
+                  >
+                    <div className="mb-3 text-center text-xl font-bold">{docModalContent.title}</div>
+                    {isSharedLyricsDoc && (
+                      <div
+                        className={`mb-3 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs ${
+                          sharedLyricsTheme === 'light'
+                            ? 'border-slate-300 bg-slate-100 text-slate-800'
+                            : 'border-white/15 bg-slate-900/70 text-slate-200'
+                        }`}
+                      >
+                        <label className="ml-1 font-semibold" htmlFor="shared-lyrics-font-public">
+                          Font
+                        </label>
+                        <select
+                          id="shared-lyrics-font-public"
+                          className="rounded-md border border-white/20 bg-transparent px-2 py-1"
+                          value={sharedLyricsFont}
+                          onChange={(event) => {
+                            queueLyricsPrefsUndo()
+                            const next = event.target.value
+                            setSharedLyricsFont(next === 'serif' || next === 'mono' ? next : 'sans')
+                          }}
+                        >
+                          <option value="sans">Sans</option>
+                          <option value="serif">Serif</option>
+                          <option value="mono">Mono</option>
+                        </select>
+                      </div>
+                    )}
+                    {renderLyricsTools()}
+                    {docModalContent.content ? (
+                      <div
+                        className={`relative min-h-0 flex-1 overflow-hidden rounded-xl border ${lyricsBodySurfaceClasses}`}
+                      >
+                        {lyricsEditMode && isTextLyricsDoc ? (
+                          <textarea
+                            className={`h-full w-full resize-none overflow-auto bg-transparent p-3 pb-16 text-sm leading-relaxed outline-none ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
+                            style={{ fontSize: `${lyricsFontSizeRem}rem` }}
+                            value={lyricsEditDraft}
+                            onChange={(event) => setLyricsEditDraft(event.target.value)}
+                          />
+                        ) : (
+                          <div
+                            ref={lyricsTextContainerRef}
+                            className={`h-full overflow-auto whitespace-pre-wrap p-3 pb-16 text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
+                            style={{ fontSize: `${lyricsFontSizeRem}rem` }}
+                            onMouseUp={handleLyricsSelectionCapture}
+                            onTouchEnd={handleLyricsSelectionCapture}
+                          >
+                            {renderHighlightedLyrics(`${resolvedLyricsText}\n\n\n`, activeLyricsDocState.highlights)}
+                          </div>
+                        )}
+                        {renderLyricsStrokeOverlay()}
+                      </div>
+                    ) : activeDocModalPage ? (
+                      <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-white/10 bg-black">
+                        {isImageFileUrl(activeDocModalPage) ? (
+                          <img
+                            src={activeDocModalPage}
+                            alt={docModalContent.title}
+                            className="h-full w-full object-contain"
+                          />
+                        ) : (
+                          <iframe
+                            src={getDocumentViewerUrl(activeDocModalPage)}
+                            className="h-full w-full"
+                            title={docModalContent.title}
+                          />
+                        )}
+                        {docModalPages.length > 1 && (
+                          <>
+                            <button
+                              className="absolute bottom-3 left-3 rounded-xl bg-slate-900/80 px-3 py-2 text-xs font-semibold"
+                              onClick={() => moveDocPageBy(-1)}
+                            >
+                              ◀ Page
+                            </button>
+                            <button
+                              className="absolute bottom-3 right-3 rounded-xl bg-slate-900/80 px-3 py-2 text-xs font-semibold"
+                              onClick={() => moveDocPageBy(1)}
+                            >
+                              Page ▶
+                            </button>
+                            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-slate-900/80 px-3 py-1 text-xs">
+                              {docModalPageIndex + 1} / {docModalPages.length}
+                            </div>
+                          </>
+                        )}
+                        {renderLyricsStrokeOverlay()}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-300">No document available.</div>
+                    )}
+                    <button
+                      className="absolute bottom-3 right-3 rounded-xl border border-white/10 bg-slate-900/85 px-3 py-2 text-xs font-semibold text-slate-100"
+                      onClick={printActiveDocument}
+                      title="Print chart or lyrics"
+                      aria-label="Print chart or lyrics"
+                    >
+                      Print
+                    </button>
+                  </div>
+                )}
               </div>
+            </div>
+          </div>
+        )}
+        {sharedPlaylistView && sharedWelcomeStep !== 'hidden' && (
+          <div className="fixed inset-0 z-[320] flex items-center justify-center bg-slate-950/92 px-5">
+            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900/95 p-5 text-center">
+              {sharedWelcomeStep === 'welcome' ? (
+                <div className="animate-[fade-in_420ms_ease-out]">
+                  <p className="text-xs uppercase tracking-[0.28em] text-teal-300/80">Setlist Connect</p>
+                  <h3 className="mt-2 text-2xl font-semibold">Welcome to Setlist Connect</h3>
+                  <p className="mt-2 text-sm text-slate-300">
+                    You are opening a live shared gig view for {sharedPlaylistView.gigName}.
+                  </p>
+                </div>
+              ) : sharedWelcomeStep === 'learn' ? (
+                <div className="animate-[fade-in_320ms_ease-out]">
+                  <h3 className="text-xl font-semibold">Learn More</h3>
+                  <p className="mt-3 text-sm text-slate-300">
+                    Setlist Connect helps band leaders and musicians stay aligned with live setlists,
+                    Up Next cues, audio links, charts, and lyrics in one mobile-friendly workspace.
+                  </p>
+                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                    <button
+                      type="button"
+                      className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                      onClick={() => setSharedWelcomeStep('cta')}
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                      onClick={() => {
+                        clearSharedPlaylistQueryParams()
+                        setSharedPlaylistView(null)
+                        setSharedWelcomeStep('hidden')
+                        setAuthMode('signup')
+                      }}
+                    >
+                      Sign up
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="animate-[fade-in_320ms_ease-out]">
+                  <h3 className="text-xl font-semibold">Explore or join Setlist Connect</h3>
+                  <p className="mt-2 text-sm text-slate-300">
+                    Learn more about the platform, create your account, or skip straight to this gig&apos;s
+                    details.
+                  </p>
+                  <div className="mt-4 flex flex-col gap-2">
+                    <button
+                      type="button"
+                      className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                      onClick={() => setSharedWelcomeStep('learn')}
+                    >
+                      Learn more about Setlist Connect
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                      onClick={() => {
+                        clearSharedPlaylistQueryParams()
+                        setSharedPlaylistView(null)
+                        setSharedWelcomeStep('hidden')
+                        setAuthMode('signup')
+                      }}
+                    >
+                      Sign up
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-xl border border-emerald-300/40 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100"
+                      onClick={() => {
+                        if (!sharedPlaylistView) return
+                        setSharedWelcomeCompletedSetlistId(sharedPlaylistView.setlistId)
+                        setSharedWelcomeStep('hidden')
+                      }}
+                    >
+                      Skip to Gig Info
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -12576,7 +12802,7 @@ function App() {
                 <div
                   className={`gig-sheet-upnext rounded-2xl border px-2.5 py-1.5 ${
                     gigSheetQueuedSong
-                      ? 'liquid-button upnext-flash border-emerald-300/60 bg-black text-emerald-100 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
+                      ? 'liquid-button border-lime-300/60 bg-black text-lime-100 shadow-[0_0_12px_rgba(190,242,100,0.24)]'
                       : 'border-emerald-300/35 bg-black'
                   }`}
                 >

@@ -8528,6 +8528,13 @@ function App() {
                     alt="Setlist Connect"
                     className="mx-auto h-20 w-auto object-contain"
                   />
+                  <p className="mt-3 text-xs uppercase tracking-[0.28em] text-teal-300/80">
+                    Setlist Connect
+                  </p>
+                  <h3 className="mt-2 text-2xl font-semibold">Welcome to Setlist Connect</h3>
+                  <p className="mt-2 text-sm text-slate-300">
+                    You are opening a live shared gig view for {sharedPlaylistView.gigName}.
+                  </p>
                 </div>
               ) : sharedWelcomeStep === 'learn' ? (
                 <div className="animate-[fade-in_320ms_ease-out]">

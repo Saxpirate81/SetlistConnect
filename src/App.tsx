@@ -3654,12 +3654,28 @@ function App() {
     setAuthLoading(true)
     try {
       const authTimeoutMs = 12000
+      const resolveAuthEmailRedirectUrl = () => {
+        const currentOrigin = window.location.origin
+        const configuredAppUrl = String(import.meta.env.VITE_APP_URL ?? '').trim()
+        if (!configuredAppUrl) return currentOrigin
+        let configuredOrigin = ''
+        try {
+          configuredOrigin = new URL(configuredAppUrl).origin
+        } catch {
+          return currentOrigin
+        }
+        const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(currentOrigin)
+        if (import.meta.env.PROD || isLocalOrigin) {
+          return configuredOrigin
+        }
+        return currentOrigin
+      }
       if (authMode === 'signup') {
         const signUpPromise = supabase.auth.signUp({
           email: authEmail.trim().toLowerCase(),
           password: authPassword,
           options: {
-            emailRedirectTo: window.location.origin,
+            emailRedirectTo: resolveAuthEmailRedirectUrl(),
           },
         })
         const { data, error } = (await Promise.race([

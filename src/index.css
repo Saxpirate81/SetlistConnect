@@ -758,6 +758,15 @@ button[aria-label="Print chart or lyrics"] {
   }
 }
 
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 .print-only {
   display: none;
 }

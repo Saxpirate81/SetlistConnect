@@ -505,9 +505,12 @@ function App() {
   const [sharedPlaylistView, setSharedPlaylistView] = useState<SharedPlaylistView | null>(null)
   const [sharedPlaylistLoading, setSharedPlaylistLoading] = useState(false)
   const [sharedPlaylistError, setSharedPlaylistError] = useState<string | null>(null)
-  const [sharedWelcomeStep, setSharedWelcomeStep] = useState<'hidden' | 'welcome' | 'cta' | 'learn'>(
+  const [sharedWelcomeStep, setSharedWelcomeStep] = useState<
+    'hidden' | 'welcome' | 'welcome-fade' | 'cta' | 'learn'
+  >(
     'hidden',
   )
+  const [sharedSignupReturnView, setSharedSignupReturnView] = useState<SharedPlaylistView | null>(null)
   const [sharedWelcomeCompletedSetlistId, setSharedWelcomeCompletedSetlistId] = useState<string | null>(
     null,
   )
@@ -6755,6 +6758,29 @@ function App() {
     window.history.replaceState({}, '', newUrl)
   }
 
+  const enterSignupFromSharedView = () => {
+    if (!sharedPlaylistView) return
+    setSharedSignupReturnView(sharedPlaylistView)
+    clearSharedPlaylistQueryParams()
+    setSharedPlaylistView(null)
+    setSharedWelcomeStep('hidden')
+    setAuthMode('signup')
+  }
+
+  const restoreSharedViewFromSignup = (skipWelcome: boolean) => {
+    if (!sharedSignupReturnView) return
+    setSharedPlaylistLoading(false)
+    setSharedPlaylistError(null)
+    setSharedPlaylistView(sharedSignupReturnView)
+    setSharedSignupReturnView(null)
+    if (skipWelcome) {
+      setSharedWelcomeCompletedSetlistId(sharedSignupReturnView.setlistId)
+      setSharedWelcomeStep('hidden')
+    } else {
+      setSharedWelcomeStep('cta')
+    }
+  }
+
   useEffect(() => {
     if (!supabase || !authUserId) return
     const params = new URLSearchParams(window.location.search)
@@ -7057,10 +7083,16 @@ function App() {
       return
     }
     setSharedWelcomeStep('welcome')
-    const timer = window.setTimeout(() => {
+    const fadeTimer = window.setTimeout(() => {
+      setSharedWelcomeStep('welcome-fade')
+    }, 1900)
+    const nextTimer = window.setTimeout(() => {
       setSharedWelcomeStep('cta')
-    }, 1400)
-    return () => window.clearTimeout(timer)
+    }, 2600)
+    return () => {
+      window.clearTimeout(fadeTimer)
+      window.clearTimeout(nextTimer)
+    }
   }, [authUserId, sharedPlaylistView, sharedWelcomeCompletedSetlistId])
 
   useEffect(() => {
@@ -8481,15 +8513,21 @@ function App() {
           </div>
         )}
         {sharedPlaylistView && sharedWelcomeStep !== 'hidden' && (
-          <div className="fixed inset-0 z-[320] flex items-center justify-center bg-slate-950/92 px-5">
+          <div className="fixed inset-0 z-[320] flex items-center justify-center bg-slate-950 px-5">
             <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900/95 p-5 text-center">
-              {sharedWelcomeStep === 'welcome' ? (
-                <div className="animate-[fade-in_420ms_ease-out]">
-                  <p className="text-xs uppercase tracking-[0.28em] text-teal-300/80">Setlist Connect</p>
-                  <h3 className="mt-2 text-2xl font-semibold">Welcome to Setlist Connect</h3>
-                  <p className="mt-2 text-sm text-slate-300">
-                    You are opening a live shared gig view for {sharedPlaylistView.gigName}.
-                  </p>
+              {sharedWelcomeStep === 'welcome' || sharedWelcomeStep === 'welcome-fade' ? (
+                <div
+                  className={
+                    sharedWelcomeStep === 'welcome-fade'
+                      ? 'animate-[fade-out_700ms_ease-in_forwards]'
+                      : 'animate-[fade-in_420ms_ease-out]'
+                  }
+                >
+                  <img
+                    src={setlistConnectLogo}
+                    alt="Setlist Connect"
+                    className="mx-auto h-20 w-auto object-contain"
+                  />
                 </div>
               ) : sharedWelcomeStep === 'learn' ? (
                 <div className="animate-[fade-in_320ms_ease-out]">
@@ -8509,12 +8547,7 @@ function App() {
                     <button
                       type="button"
                       className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                      onClick={() => {
-                        clearSharedPlaylistQueryParams()
-                        setSharedPlaylistView(null)
-                        setSharedWelcomeStep('hidden')
-                        setAuthMode('signup')
-                      }}
+                      onClick={enterSignupFromSharedView}
                     >
                       Sign up
                     </button>
@@ -8538,12 +8571,7 @@ function App() {
                     <button
                       type="button"
                       className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                      onClick={() => {
-                        clearSharedPlaylistQueryParams()
-                        setSharedPlaylistView(null)
-                        setSharedWelcomeStep('hidden')
-                        setAuthMode('signup')
-                      }}
+                      onClick={enterSignupFromSharedView}
                     >
                       Sign up
                     </button>
@@ -8652,6 +8680,24 @@ function App() {
               >
                 {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
               </button>
+            )}
+            {authMode === 'signup' && sharedSignupReturnView && (
+              <div className="mt-3 grid grid-cols-1 gap-2">
+                <button
+                  type="button"
+                  className="w-full rounded-xl border border-white/10 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => restoreSharedViewFromSignup(false)}
+                >
+                  Go back to previous view
+                </button>
+                <button
+                  type="button"
+                  className="w-full rounded-xl border border-emerald-300/40 bg-emerald-400/10 py-2 text-sm font-semibold text-emerald-100"
+                  onClick={() => restoreSharedViewFromSignup(true)}
+                >
+                  Skip and go to gig view
+                </button>
+              </div>
             )}
             {authError && <div className="mt-3 text-xs text-red-200">{authError}</div>}
           </form>

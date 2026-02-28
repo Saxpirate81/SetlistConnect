@@ -15,6 +15,7 @@ import setlistConnectLogo from './assets/setlist-connect-logo.png'
 
 type Role = 'admin' | 'user' | null
 type Screen = 'setlists' | 'builder' | 'song' | 'musicians' | 'account'
+type BandTier = 'free' | 'pro' | 'agency'
 
 type SongKey = {
   singer: string
@@ -239,7 +240,9 @@ const REQUEST_TYPE_TAG_EXCLUSIONS = [
 ]
 const SETLIST_PANEL_PREFIX = 'set:'
 const ACTIVE_BAND_KEY = 'setlist:activeBandId'
-const BAND_TIER_PREFS_KEY = 'setlist:bandTierByBandId'
+const FREE_TIER_MAX_SONGS = 50
+const FREE_TIER_MAX_MUSICIANS = 10
+const FREE_TIER_MAX_ACTIVE_GIGS = 2
 const GIG_LOCKED_SONGS_KEY = 'setlist:gigLockedSongs'
 const GIG_LAST_LOCKED_SONG_KEY = 'setlist:gigLastLockedSong'
 const SHARED_LYRICS_THEME_KEY = 'setlist:sharedLyricsTheme'
@@ -350,24 +353,13 @@ function App() {
   const [newBandName, setNewBandName] = useState('')
   const [accountBandNameDraft, setAccountBandNameDraft] = useState('')
   const [accountSaveStatus, setAccountSaveStatus] = useState('')
-  const [bandTierByBandId, setBandTierByBandId] = useState<Record<string, 'free' | 'pro' | 'business'>>(
-    () => {
-      try {
-        const raw = localStorage.getItem(BAND_TIER_PREFS_KEY)
-        if (!raw) return {}
-        const parsed = JSON.parse(raw) as Record<string, unknown>
-        const next: Record<string, 'free' | 'pro' | 'business'> = {}
-        Object.entries(parsed).forEach(([bandId, tier]) => {
-          if (tier === 'free' || tier === 'pro' || tier === 'business') {
-            next[bandId] = tier
-          }
-        })
-        return next
-      } catch {
-        return {}
-      }
-    },
+  const [bandSubscriptionTierByBandId, setBandSubscriptionTierByBandId] = useState<Record<string, BandTier>>(
+    {},
   )
+  const [showTierLimitModal, setShowTierLimitModal] = useState<{
+    resource: 'songs' | 'musicians' | 'gigs'
+    message: string
+  } | null>(null)
   const [showTeamModal, setShowTeamModal] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<'member' | 'admin'>('member')
@@ -519,7 +511,6 @@ function App() {
   const [sharedDocuments, setSharedDocuments] = useState<Document[]>([])
   const [sharedDocsLoading, setSharedDocsLoading] = useState(false)
   const [sharedDocsError, setSharedDocsError] = useState<string | null>(null)
-  const [sharedGigFlashPulse, setSharedGigFlashPulse] = useState(false)
   const [sharedNowPlayingSongId, setSharedNowPlayingSongId] = useState<string | null>(null)
   const [sharedDismissedUpNextId, setSharedDismissedUpNextId] = useState<string | null>(null)
   const [sharedBannerTouchStartX, setSharedBannerTouchStartX] = useState<number | null>(null)
@@ -688,7 +679,6 @@ function App() {
   const playlistDrawerAutoCloseTimerRef = useRef<number | null>(null)
   const sharedPlaylistDrawerAutoCloseTimerRef = useRef<number | null>(null)
   const sharedNowPlayingSongIdRef = useRef<string | null>(null)
-  const sharedFlashTimerRef = useRef<number | null>(null)
   const [showAddMusicianModal, setShowAddMusicianModal] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
   const [draggedSectionSongId, setDraggedSectionSongId] = useState<string | null>(null)
@@ -802,8 +792,11 @@ function App() {
   const [gigSongSectionOverrides, setGigSongSectionOverrides] = useState<
     Record<string, Record<string, string>>
   >({})
+  const [authIntroPhase, setAuthIntroPhase] = useState<'welcome' | 'fading' | 'login'>('welcome')
+  const [showAuthLearnMore, setShowAuthLearnMore] = useState(false)
   const [, setLoginPhase] = useState<'login' | 'transition' | 'app'>('login')
   const loginTimerRef = useRef<number | null>(null)
+  const authIntroTimerRef = useRef<number | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
   const sheetLongPressTimerRef = useRef<number | null>(null)
   const sheetLongPressTriggeredRef = useRef(false)
@@ -1171,7 +1164,129 @@ function App() {
     () => bands.find((band) => band.id === activeBandId)?.name ?? '',
     [bands, activeBandId],
   )
-  const activeBandTier = activeBandId ? (bandTierByBandId[activeBandId] ?? 'free') : 'free'
+  const activeBandTier: BandTier = activeBandId
+    ? (bandSubscriptionTierByBandId[activeBandId] ?? 'free')
+    : 'free'
+  const isFreeTier = activeBandTier === 'free'
+  const canAccessBillingControls = isAdmin && Boolean(activeBandId)
+  const stripeProCheckoutUrl = String(import.meta.env.VITE_STRIPE_CHECKOUT_PRO_URL ?? '').trim()
+  const stripeAgencyCheckoutUrl = String(import.meta.env.VITE_STRIPE_CHECKOUT_AGENCY_URL ?? '').trim()
+  const stripePortalUrl = String(import.meta.env.VITE_STRIPE_CUSTOMER_PORTAL_URL ?? '').trim()
+  const activeGigCount = appState.setlists.length
+  const songCount = appState.songs.length
+  const musicianCount = appState.musicians.length
+  const overFreeTierLimits = useMemo(() => {
+    const overages: string[] = []
+    if (songCount > FREE_TIER_MAX_SONGS) overages.push(`songs (${songCount}/${FREE_TIER_MAX_SONGS})`)
+    if (musicianCount > FREE_TIER_MAX_MUSICIANS) {
+      overages.push(`musicians (${musicianCount}/${FREE_TIER_MAX_MUSICIANS})`)
+    }
+    if (activeGigCount > FREE_TIER_MAX_ACTIVE_GIGS) {
+      overages.push(`active gigs (${activeGigCount}/${FREE_TIER_MAX_ACTIVE_GIGS})`)
+    }
+    return overages
+  }, [activeGigCount, musicianCount, songCount])
+  const isOverFreeTierLimit = isFreeTier && overFreeTierLimits.length > 0
+  const downgradeLockMessage = isOverFreeTierLimit
+    ? `Your band is currently over Free limits for ${overFreeTierLimits.join(', ')}. Upgrade to Pro or Agency to keep creating new items.`
+    : ''
+  const openTierLimitModal = useCallback((resource: 'songs' | 'musicians' | 'gigs', message: string) => {
+    setShowTierLimitModal({ resource, message })
+  }, [])
+  const canCreateSongs = useCallback(
+    (nextSongCount = 1) => {
+      if (isOverFreeTierLimit) {
+        openTierLimitModal('songs', downgradeLockMessage)
+        return false
+      }
+      if (!isFreeTier) return true
+      if (songCount + nextSongCount <= FREE_TIER_MAX_SONGS) return true
+      openTierLimitModal(
+        'songs',
+        `Free tier allows up to ${FREE_TIER_MAX_SONGS} songs. Upgrade to Pro to add more songs.`,
+      )
+      return false
+    },
+    [downgradeLockMessage, isFreeTier, isOverFreeTierLimit, openTierLimitModal, songCount],
+  )
+  const canCreateMusicians = useCallback(
+    (nextMusicianCount = 1) => {
+      if (isOverFreeTierLimit) {
+        openTierLimitModal('musicians', downgradeLockMessage)
+        return false
+      }
+      if (!isFreeTier) return true
+      if (musicianCount + nextMusicianCount <= FREE_TIER_MAX_MUSICIANS) return true
+      openTierLimitModal(
+        'musicians',
+        `Free tier allows up to ${FREE_TIER_MAX_MUSICIANS} musicians. Upgrade to Pro to add more musicians.`,
+      )
+      return false
+    },
+    [downgradeLockMessage, isFreeTier, isOverFreeTierLimit, musicianCount, openTierLimitModal],
+  )
+  const canCreateGigs = useCallback(
+    (nextGigCount = 1) => {
+      if (isOverFreeTierLimit) {
+        openTierLimitModal('gigs', downgradeLockMessage)
+        return false
+      }
+      if (!isFreeTier) return true
+      if (activeGigCount + nextGigCount <= FREE_TIER_MAX_ACTIVE_GIGS) return true
+      openTierLimitModal(
+        'gigs',
+        `Free tier allows up to ${FREE_TIER_MAX_ACTIVE_GIGS} active gigs. Upgrade to Pro to create more gigs.`,
+      )
+      return false
+    },
+    [activeGigCount, downgradeLockMessage, isFreeTier, isOverFreeTierLimit, openTierLimitModal],
+  )
+  const openStripeUrl = useCallback((url: string, targetTier?: BandTier) => {
+    if (!url) {
+      setAccountSaveStatus('Billing URL is not configured yet. Add Stripe checkout URLs in your environment.')
+      return
+    }
+    try {
+      const resolved = new URL(url)
+      if (activeBandId) {
+        resolved.searchParams.set('band_id', activeBandId)
+      }
+      if (targetTier && targetTier !== 'free') {
+        resolved.searchParams.set('requested_tier', targetTier)
+      }
+      window.open(resolved.toString(), '_blank', 'noopener,noreferrer')
+      setAccountSaveStatus(
+        targetTier && targetTier !== 'free'
+          ? `Opening ${targetTier === 'agency' ? 'Agency' : 'Pro'} checkout...`
+          : 'Opening billing portal...',
+      )
+    } catch {
+      setAccountSaveStatus('Billing URL is invalid. Check your Stripe URL environment variables.')
+    }
+  }, [activeBandId])
+  const openStripeCheckout = useCallback(async (targetTier: Extract<BandTier, 'pro' | 'agency'>) => {
+    if (!activeBandId || !canAccessBillingControls) return
+    if (supabase) {
+      const { data, error } = await supabase.functions.invoke('create-stripe-checkout-session', {
+        body: { bandId: activeBandId, tier: targetTier },
+      })
+      const checkoutUrl = (
+        data && typeof data === 'object' && 'url' in data ? (data as { url?: string }).url : ''
+      ) ?? ''
+      if (!error && checkoutUrl) {
+        window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
+        setAccountSaveStatus(`Opening ${targetTier === 'agency' ? 'Agency' : 'Pro'} checkout...`)
+        return
+      }
+    }
+    openStripeUrl(targetTier === 'pro' ? stripeProCheckoutUrl : stripeAgencyCheckoutUrl, targetTier)
+  }, [
+    activeBandId,
+    canAccessBillingControls,
+    openStripeUrl,
+    stripeAgencyCheckoutUrl,
+    stripeProCheckoutUrl,
+  ])
   const isSpecialSectionHidden = currentSetlist
     ? Boolean(gigHiddenSpecialSection[currentSetlist.id])
     : false
@@ -2923,16 +3038,6 @@ function App() {
     setPlaylistIndex(next)
     setPlaylistPlayNonce((current) => current + 1)
   }
-  const triggerSharedGigFlash = useCallback(() => {
-    setSharedGigFlashPulse(true)
-    if (sharedFlashTimerRef.current) {
-      window.clearTimeout(sharedFlashTimerRef.current)
-    }
-    sharedFlashTimerRef.current = window.setTimeout(() => {
-      setSharedGigFlashPulse(false)
-      sharedFlashTimerRef.current = null
-    }, 1500)
-  }, [])
   const copyPlaylistShareLink = async () => {
     if (!currentSetlist) return
     const currentShareEntry = visiblePlaylistEntries[playlistIndex]
@@ -3474,6 +3579,7 @@ function App() {
     const bandIds = mappedMemberships.map((item) => item.bandId)
     if (bandIds.length === 0) {
       setBands([])
+      setBandSubscriptionTierByBandId({})
       setActiveBandId('')
       setRole(null)
       return 0
@@ -3492,6 +3598,28 @@ function App() {
       createdBy: row.created_by ?? undefined,
     }))
     setBands(mappedBands)
+    const { data: subscriptionsData, error: subscriptionsError } = await supabase
+      .from('SetlistBandSubscriptions')
+      .select('band_id,tier,status')
+      .in('band_id', bandIds)
+    if (!subscriptionsError) {
+      const nextSubscriptionTiers: Record<string, BandTier> = {}
+      ;(subscriptionsData ?? []).forEach((row) => {
+        const bandId = String(row.band_id ?? '')
+        const rawTier = String(row.tier ?? '').toLowerCase()
+        const normalizedTier: BandTier =
+          rawTier === 'pro'
+            ? 'pro'
+            : rawTier === 'agency' || rawTier === 'business'
+              ? 'agency'
+              : 'free'
+        if (!bandId) return
+        const normalizedStatus = String(row.status ?? 'active').toLowerCase()
+        if (normalizedStatus !== 'active' && normalizedStatus !== 'trialing') return
+        nextSubscriptionTiers[bandId] = normalizedTier
+      })
+      setBandSubscriptionTierByBandId(nextSubscriptionTiers)
+    }
     const storedBandId = localStorage.getItem(ACTIVE_BAND_KEY) ?? ''
     const resolvedBandId = mappedBands.some((band) => band.id === storedBandId)
       ? storedBandId
@@ -3792,6 +3920,7 @@ function App() {
   const duplicateGig = (setlistId: string) => {
     const source = appState.setlists.find((setlist) => setlist.id === setlistId)
     if (!source) return
+    if (!canCreateGigs()) return
     const uniqueSourceSongIds = Array.from(new Set(source.songIds))
     const newId = createId()
     commitChange('Duplicate gig', (prev) => {
@@ -3897,6 +4026,7 @@ function App() {
   }
 
   const createBlankSetlist = () => {
+    if (!canCreateGigs()) return
     const newId = createId()
     commitChange('Create setlist', (prev) => ({
       ...prev,
@@ -4292,6 +4422,7 @@ function App() {
     const uniqueSongIdsToAdd = songIdsToAdd.filter(
       (songId, index) => songIdsToAdd.indexOf(songId) === index,
     )
+    if (newSongs.length > 0 && !canCreateSongs(newSongs.length)) return
 
     commitChange(`Import ${section} paste`, (prev) => ({
       ...prev,
@@ -4897,6 +5028,7 @@ function App() {
   const addMusician = () => {
     const name = newMusicianName.trim()
     if (!name) return
+    if (!canCreateMusicians()) return
     const id = createId()
     commitChange('Add musician', (prev) => ({
       ...prev,
@@ -5071,6 +5203,7 @@ function App() {
   const addSubAndAssign = () => {
     const name = newSubName.trim()
     if (!name || !activeGigId) return
+    if (!canCreateMusicians()) return
     setBuildPanelDirty(true)
     const id = createId()
     commitChange('Add sub to gig', (prev) => ({
@@ -5358,6 +5491,7 @@ function App() {
     },
     openEditor = false,
   ) => {
+    if (!canCreateSongs()) return
     const id = createId()
     const createdSong: Song = {
       id,
@@ -5827,6 +5961,7 @@ function App() {
     }
     const requestId = createId()
     const createdSongId = existingSong?.id ?? createId()
+    if (!existingSong && customSong && !canCreateSongs()) return
     const requestTags = normalizeTagList(['Special Request'])
     const existingSongTagsLower = new Set(
       (existingSong?.tags ?? []).map((tag) => tag.trim().toLowerCase()),
@@ -6367,6 +6502,7 @@ function App() {
   const addSongToLibrary = () => {
     const title = pendingSpecialSong.trim()
     if (!title) return
+    if (!canCreateSongs()) return
     const newId = createId()
     commitChange('Add song', (prev) => ({
       ...prev,
@@ -6664,14 +6800,6 @@ function App() {
     )
     setRole(membership?.role === 'admin' ? 'admin' : membership ? 'user' : null)
   }, [activeBandId, memberships])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(BAND_TIER_PREFS_KEY, JSON.stringify(bandTierByBandId))
-    } catch {
-      // Ignore localStorage write failures.
-    }
-  }, [bandTierByBandId])
 
   useEffect(() => {
     setAccountBandNameDraft(activeBandName)
@@ -7307,7 +7435,6 @@ function App() {
         }
         setPlaylistPlayNonce((current) => current + 1)
       }
-      triggerSharedGigFlash()
     }
 
     let cancelled = false
@@ -7361,7 +7488,6 @@ function App() {
     playlistSingerFilter,
     sharedPlaylistView,
     supabase,
-    triggerSharedGigFlash,
     visiblePlaylistEntries,
   ])
 
@@ -7455,16 +7581,6 @@ function App() {
       }
     }
   }, [sharedPlaylistDrawerOverlay])
-
-  useEffect(
-    () => () => {
-      if (sharedFlashTimerRef.current) {
-        window.clearTimeout(sharedFlashTimerRef.current)
-        sharedFlashTimerRef.current = null
-      }
-    },
-    [],
-  )
 
   useEffect(() => {
     if (playlistIndex < visiblePlaylistEntries.length) return
@@ -7666,6 +7782,22 @@ function App() {
   }, [loadSupabaseData])
 
   useEffect(() => {
+    const client = supabase
+    if (!client || !authUserId) return
+    const channel = client
+      .channel('band-subscription-sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'SetlistBandSubscriptions' },
+        () => void loadBandContext(authUserId),
+      )
+    channel.subscribe()
+    return () => {
+      void client.removeChannel(channel)
+    }
+  }, [authUserId, loadBandContext])
+
+  useEffect(() => {
     if (screen !== 'builder') return
     const onScroll = () => {
       setHideGigHeader(window.scrollY > 140)
@@ -7707,6 +7839,39 @@ function App() {
   const showLegacyPanels = useMemo(() => false, [])
 
   useEffect(() => {
+    let fadeTimer: number | null = null
+    if (!isAuthScreen) {
+      setAuthIntroPhase('welcome')
+      setShowAuthLearnMore(false)
+      if (authIntroTimerRef.current) {
+        window.clearTimeout(authIntroTimerRef.current)
+        authIntroTimerRef.current = null
+      }
+      return
+    }
+    setAuthIntroPhase('welcome')
+    if (authIntroTimerRef.current) {
+      window.clearTimeout(authIntroTimerRef.current)
+      authIntroTimerRef.current = null
+    }
+    authIntroTimerRef.current = window.setTimeout(() => {
+      setAuthIntroPhase('fading')
+      fadeTimer = window.setTimeout(() => {
+        setAuthIntroPhase('login')
+      }, 450)
+    }, 1250)
+    return () => {
+      if (authIntroTimerRef.current) {
+        window.clearTimeout(authIntroTimerRef.current)
+        authIntroTimerRef.current = null
+      }
+      if (fadeTimer) {
+        window.clearTimeout(fadeTimer)
+      }
+    }
+  }, [isAuthScreen])
+
+  useEffect(() => {
     if (isAuthScreen) {
       document.body.style.overflow = ''
       return
@@ -7717,6 +7882,7 @@ function App() {
       Boolean(docModalSongId) ||
       Boolean(audioModalUrl) ||
       showDeleteGigConfirm ||
+      Boolean(showTierLimitModal) ||
       Boolean(activeBuildPanel) ||
       Boolean(editingSongId) ||
       Boolean(singerModalSongId) ||
@@ -7747,6 +7913,7 @@ function App() {
     audioModalUrl,
     role,
     showDeleteGigConfirm,
+    showTierLimitModal,
     activeBuildPanel,
     editingSongId,
     singerModalSongId,
@@ -8252,11 +8419,7 @@ function App() {
         )}
         {sharedNowPlayingSongId && sharedNowPlayingSongId !== sharedDismissedUpNextId && (
           <div
-            className={`fixed inset-x-0 top-0 z-[260] border-b px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] transition-all duration-300 ${
-              sharedGigFlashPulse
-                ? 'shared-upnext-banner-pulse border-lime-300/80 bg-black text-lime-100 shadow-[0_0_28px_rgba(190,242,100,0.55)]'
-                : 'border-lime-300/70 bg-black text-lime-100 shadow-[0_0_16px_rgba(190,242,100,0.34)]'
-            }`}
+            className="shared-upnext-banner-pulse fixed inset-x-0 top-0 z-[260] border-b border-lime-300/80 bg-black px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] text-lime-100 shadow-[0_0_28px_rgba(190,242,100,0.55)] transition-all duration-300"
             onTouchStart={(event) => setSharedBannerTouchStartX(event.touches[0]?.clientX ?? null)}
             onTouchEnd={(event) => {
               if (sharedBannerTouchStartX === null) return
@@ -8612,109 +8775,174 @@ function App() {
 
   if (isAuthScreen) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white opacity-100">
+      <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white opacity-100">
+        <div className="pointer-events-none absolute -left-16 top-16 h-52 w-52 rounded-full bg-cyan-400/20 blur-3xl" />
+        <div className="pointer-events-none absolute -right-16 bottom-16 h-64 w-64 rounded-full bg-fuchsia-400/20 blur-3xl" />
         <div className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
-          <p className="text-sm uppercase tracking-[0.3em] text-teal-300/80">
-            Setlist Connect
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold">Welcome back</h1>
-          <p className="mt-2 text-sm text-slate-300">
-            Sign in with your account to access your band workspace.
-          </p>
-          <form
-            className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4"
-            autoComplete="on"
-            noValidate
-            onSubmit={(event) => {
-              event.preventDefault()
-              void handleLogin()
-            }}
+          <div
+            className={`transition-all duration-500 ${
+              authIntroPhase === 'login'
+                ? 'pointer-events-auto translate-y-0 opacity-100'
+                : 'pointer-events-none translate-y-4 opacity-0'
+            }`}
           >
-            {supabase ? (
-              <>
-                <label className="text-xs uppercase tracking-wide text-slate-400">
-                  Email
-                </label>
-                <input
-                  className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
-                  placeholder="you@band.com"
-                  value={authEmail}
-                  onChange={(event) => setAuthEmail(event.target.value)}
-                  type="email"
-                  autoComplete="email"
-                  inputMode="email"
-                />
-                <label className="mt-3 block text-xs uppercase tracking-wide text-slate-400">
-                  Password
-                </label>
-                <input
-                  className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
-                  placeholder="Enter password"
-                  value={authPassword}
-                  onChange={(event) => setAuthPassword(event.target.value)}
-                  type="password"
-                  autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
-                />
-              </>
-            ) : (
-              <>
-                <label className="text-xs uppercase tracking-wide text-slate-400">
-                  Password
-                </label>
-                <input
-                  className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
-                  placeholder="Enter shared password"
-                  value={loginInput}
-                  onChange={(event) => setLoginInput(event.target.value)}
-                  type="password"
-                  autoComplete="current-password"
-                />
-              </>
-            )}
-            <button
-              type="submit"
-              disabled={authLoading}
-              className={`mt-4 w-full rounded-xl bg-teal-400/90 py-3 font-semibold text-slate-950 ${
-                authLoading ? 'cursor-not-allowed opacity-70' : ''
-              }`}
+            <p className="text-sm uppercase tracking-[0.3em] text-teal-300/80">
+              Setlist Connect
+            </p>
+            <h1 className="mt-2 text-3xl font-semibold">Welcome back</h1>
+            <p className="mt-2 text-sm text-slate-300">
+              Sign in with your account to access your band workspace.
+            </p>
+            <form
+              className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur"
+              autoComplete="on"
+              noValidate
+              onSubmit={(event) => {
+                event.preventDefault()
+                void handleLogin()
+              }}
             >
-              {authLoading
-                ? 'Please wait...'
-                : !supabase
-                ? 'Login'
-                : authMode === 'signup'
-                ? 'Create account'
-                : 'Login'}
-            </button>
-            {supabase && (
+              {supabase ? (
+                <>
+                  <label className="text-xs uppercase tracking-wide text-slate-400">
+                    Email
+                  </label>
+                  <input
+                    className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
+                    placeholder="you@band.com"
+                    value={authEmail}
+                    onChange={(event) => setAuthEmail(event.target.value)}
+                    type="email"
+                    autoComplete="email"
+                    inputMode="email"
+                  />
+                  <label className="mt-3 block text-xs uppercase tracking-wide text-slate-400">
+                    Password
+                  </label>
+                  <input
+                    className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
+                    placeholder="Enter password"
+                    value={authPassword}
+                    onChange={(event) => setAuthPassword(event.target.value)}
+                    type="password"
+                    autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
+                  />
+                </>
+              ) : (
+                <>
+                  <label className="text-xs uppercase tracking-wide text-slate-400">
+                    Password
+                  </label>
+                  <input
+                    className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
+                    placeholder="Enter shared password"
+                    value={loginInput}
+                    onChange={(event) => setLoginInput(event.target.value)}
+                    type="password"
+                    autoComplete="current-password"
+                  />
+                </>
+              )}
+              <button
+                type="submit"
+                disabled={authLoading}
+                className={`mt-4 w-full rounded-xl bg-teal-400/90 py-3 font-semibold text-slate-950 ${
+                  authLoading ? 'cursor-not-allowed opacity-70' : ''
+                }`}
+              >
+                {authLoading
+                  ? 'Please wait...'
+                  : !supabase
+                  ? 'Login'
+                  : authMode === 'signup'
+                  ? 'Create account'
+                  : 'Login'}
+              </button>
+              {supabase && (
+                <button
+                  type="button"
+                  className="mt-3 w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
+                  onClick={() => setAuthMode((current) => (current === 'login' ? 'signup' : 'login'))}
+                >
+                  {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
+                </button>
+              )}
               <button
                 type="button"
-                className="mt-3 w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
-                onClick={() => setAuthMode((current) => (current === 'login' ? 'signup' : 'login'))}
+                className="mt-3 w-full rounded-xl border border-cyan-300/30 bg-cyan-400/10 py-2 text-sm font-semibold text-cyan-100"
+                onClick={() => setShowAuthLearnMore(true)}
               >
-                {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
+                Learn more
               </button>
-            )}
-            {authMode === 'signup' && sharedSignupReturnView && (
-              <div className="mt-3 grid grid-cols-1 gap-2">
+              {authMode === 'signup' && sharedSignupReturnView && (
+                <div className="mt-3 grid grid-cols-1 gap-2">
+                  <button
+                    type="button"
+                    className="w-full rounded-xl border border-white/10 py-2 text-sm font-semibold text-slate-200"
+                    onClick={() => restoreSharedViewFromSignup(false)}
+                  >
+                    Go back to previous view
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full rounded-xl border border-emerald-300/40 bg-emerald-400/10 py-2 text-sm font-semibold text-emerald-100"
+                    onClick={() => restoreSharedViewFromSignup(true)}
+                  >
+                    Skip and go to gig view
+                  </button>
+                </div>
+              )}
+              {authError && <div className="mt-3 text-xs text-red-200">{authError}</div>}
+            </form>
+          </div>
+
+          <div
+            className={`absolute inset-0 flex items-center justify-center px-6 transition-all duration-500 ${
+              authIntroPhase === 'welcome'
+                ? 'opacity-100'
+                : authIntroPhase === 'fading'
+                ? 'opacity-0'
+                : 'pointer-events-none opacity-0'
+            }`}
+          >
+            <div className="w-full max-w-sm rounded-3xl border border-white/15 bg-slate-900/70 p-7 text-center shadow-[0_20px_80px_rgba(6,182,212,0.2)] backdrop-blur-xl">
+              <p className="text-[11px] uppercase tracking-[0.28em] text-teal-200/90">Setlist Connect</p>
+              <h2 className="mt-3 text-3xl font-semibold leading-tight">Welcome to your next gig flow</h2>
+              <p className="mt-3 text-sm text-slate-300">
+                Build, organize, and run live setlists with your team in one clean workspace.
+              </p>
+            </div>
+          </div>
+
+          {showAuthLearnMore && (
+            <div
+              className="fixed inset-0 z-[170] flex items-center justify-center bg-slate-950/85 px-5"
+              onClick={() => setShowAuthLearnMore(false)}
+            >
+              <div
+                className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900/95 p-6 shadow-[0_22px_80px_rgba(14,116,144,0.3)]"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <p className="text-[10px] uppercase tracking-[0.28em] text-teal-300/80">Learn more</p>
+                <h3 className="mt-2 text-2xl font-semibold text-white">What Setlist Connect does</h3>
+                <p className="mt-3 text-sm text-slate-300">
+                  Setlist Connect is your live-performance command center. Build gigs, manage songs and charts, assign musicians, and share real-time setlists so everyone stays in sync on stage.
+                </p>
+                <div className="mt-4 space-y-2 text-sm text-slate-200">
+                  <p>• Plan and reorder songs fast for each event</p>
+                  <p>• Track special requests, keys, and singer assignments</p>
+                  <p>• Share mobile-friendly gig views with your team</p>
+                </div>
                 <button
                   type="button"
-                  className="w-full rounded-xl border border-white/10 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => restoreSharedViewFromSignup(false)}
+                  className="mt-5 w-full rounded-xl bg-teal-400/90 py-2.5 text-sm font-semibold text-slate-950"
+                  onClick={() => setShowAuthLearnMore(false)}
                 >
-                  Go back to previous view
-                </button>
-                <button
-                  type="button"
-                  className="w-full rounded-xl border border-emerald-300/40 bg-emerald-400/10 py-2 text-sm font-semibold text-emerald-100"
-                  onClick={() => restoreSharedViewFromSignup(true)}
-                >
-                  Skip and go to gig view
+                  Let&apos;s go
                 </button>
               </div>
-            )}
-            {authError && <div className="mt-3 text-xs text-red-200">{authError}</div>}
-          </form>
+            </div>
+          )}
         </div>
       </div>
     )
@@ -10310,41 +10538,57 @@ function App() {
                       {
                         id: 'free',
                         name: 'Free',
-                        detail: 'Core setlist tools',
+                        detail: `Up to ${FREE_TIER_MAX_SONGS} songs, ${FREE_TIER_MAX_MUSICIANS} musicians, ${FREE_TIER_MAX_ACTIVE_GIGS} gigs`,
                       },
                       {
                         id: 'pro',
                         name: 'Pro',
-                        detail: 'Advanced collaboration',
+                        detail: 'Higher limits and collaboration',
                       },
                       {
-                        id: 'business',
-                        name: 'Business',
-                        detail: 'Priority support + team controls',
+                        id: 'agency',
+                        name: 'Agency',
+                        detail: 'Multi-team scale and account controls',
                       },
                     ] as const).map((tier) => (
-                      <button
+                      <div
                         key={tier.id}
                         className={`rounded-xl border px-3 py-3 text-left text-sm ${
                           activeBandTier === tier.id
                             ? 'border-teal-300 bg-teal-400/10 text-teal-100'
                             : 'border-white/10 bg-slate-900/70 text-slate-300'
                         }`}
-                        onClick={() => {
-                          if (!activeBandId) return
-                          setBandTierByBandId((prev) => ({ ...prev, [activeBandId]: tier.id }))
-                          setAccountSaveStatus(
-                            tier.id === 'free'
-                              ? 'Free tier selected.'
-                              : `${tier.name} selected. Billing checkout can be connected next.`,
-                          )
-                        }}
-                        disabled={!activeBandId}
                       >
                         <div className="font-semibold">{tier.name}</div>
                         <div className="mt-1 text-xs text-slate-400">{tier.detail}</div>
-                      </button>
+                      </div>
                     ))}
+                  </div>
+                  <div className="mt-3 text-xs text-slate-400">
+                    Active tier for this band: <span className="font-semibold text-slate-200">{activeBandTier.toUpperCase()}</span>. Subscription status syncs from Supabase table `SetlistBandSubscriptions`.
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => void openStripeCheckout('pro')}
+                      disabled={!canAccessBillingControls || !stripeProCheckoutUrl}
+                    >
+                      Upgrade to Pro
+                    </button>
+                    <button
+                      className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => void openStripeCheckout('agency')}
+                      disabled={!canAccessBillingControls || !stripeAgencyCheckoutUrl}
+                    >
+                      Upgrade to Agency
+                    </button>
+                    <button
+                      className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => openStripeUrl(stripePortalUrl)}
+                      disabled={!canAccessBillingControls || !stripePortalUrl}
+                    >
+                      Manage billing
+                    </button>
                   </div>
                 </div>
               </div>
@@ -11374,6 +11618,43 @@ function App() {
                   Delete gig
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTierLimitModal && (
+        <div
+          className="fixed inset-0 z-[109] flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setShowTierLimitModal(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900 p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold">Upgrade required</h3>
+            <p className="mt-2 text-sm text-slate-300">{showTierLimitModal.message}</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                onClick={() => void openStripeCheckout('pro')}
+                disabled={!stripeProCheckoutUrl}
+              >
+                Upgrade to Pro
+              </button>
+              <button
+                className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-100"
+                onClick={() => void openStripeCheckout('agency')}
+                disabled={!stripeAgencyCheckoutUrl}
+              >
+                Upgrade to Agency
+              </button>
+              <button
+                className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                onClick={() => setShowTierLimitModal(null)}
+              >
+                Not now
+              </button>
             </div>
           </div>
         </div>

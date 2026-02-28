@@ -626,6 +626,11 @@ button[aria-label="Print chart or lyrics"] {
 }
 
 /* Public shared view: keep pulse only on the top banner. */
+.shared-public-mode .liquid-button,
+.shared-public-mode .liquid-button::after {
+  animation: none !important;
+}
+
 .shared-public-mode .upnext-flash {
   animation: none !important;
 }

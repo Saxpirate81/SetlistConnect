@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+  type ReactNode,
+  type TouchEvent,
+} from 'react'
 import { isSupabaseEnabled, supabase, supabaseEnvStatus } from './lib/supabaseClient'
 import downloadPdfIcon from './assets/download-pdf-icon.png'
 import openPlaylistIcon from './assets/open-playlist-icon.png'
@@ -135,6 +144,53 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
 }
 
+type LyricsHighlightRange = {
+  id: string
+  start: number
+  end: number
+  color: string
+}
+
+type LyricsStrokePoint = {
+  x: number
+  y: number
+}
+
+type LyricsStroke = {
+  id: string
+  color: string
+  width: number
+  points: LyricsStrokePoint[]
+}
+
+type LyricsDocState = {
+  fontScale: number
+  highlights: LyricsHighlightRange[]
+  strokes: LyricsStroke[]
+  editedText?: string
+}
+
+type LyricsUserPrefs = {
+  theme: 'dark' | 'light'
+  font: 'sans' | 'serif' | 'mono'
+  fontScale: number
+  centered: boolean
+}
+
+type LyricsUndoState =
+  | {
+      kind: 'prefs'
+      viewerId: string
+      prev: LyricsUserPrefs
+    }
+
+type LyricsToolPanelKey = 'font' | 'edit' | 'draw'
+
+type LyricsToolPanelPosition = {
+  x: number
+  y: number
+}
+
 type AppState = {
   songs: Song[]
   setlists: Setlist[]
@@ -187,7 +243,28 @@ const GIG_LOCKED_SONGS_KEY = 'setlist:gigLockedSongs'
 const GIG_LAST_LOCKED_SONG_KEY = 'setlist:gigLastLockedSong'
 const SHARED_LYRICS_THEME_KEY = 'setlist:sharedLyricsTheme'
 const SHARED_LYRICS_FONT_KEY = 'setlist:sharedLyricsFont'
+const LYRICS_DOC_STATE_KEY = 'setlist:lyricsDocState:v1'
+const LYRICS_USER_PREFS_KEY = 'setlist:lyricsUserPrefs:v1'
+const LYRICS_VIEWER_ID_KEY = 'setlist:lyricsViewerId'
 const GIG_SECTION_TAG_PREFIX = '__gigsection__'
+const LYRICS_COLOR_SWATCHES = [
+  '#fde047',
+  '#facc15',
+  '#fb7185',
+  '#f97316',
+  '#34d399',
+  '#38bdf8',
+  '#a78bfa',
+  '#f472b6',
+  '#60a5fa',
+  '#ffffff',
+]
+const DEFAULT_LYRICS_USER_PREFS: LyricsUserPrefs = {
+  theme: 'dark',
+  font: 'sans',
+  fontScale: 1,
+  centered: false,
+}
 
 const initialState: AppState = {
   songs: [],
@@ -423,6 +500,148 @@ function App() {
     if (stored === 'serif' || stored === 'mono') return stored
     return 'sans'
   })
+  const [lyricsGlobalFontScale, setLyricsGlobalFontScale] = useState(1)
+  const [lyricsCenterAligned, setLyricsCenterAligned] = useState(false)
+  const [lyricsUserPrefsByViewer, setLyricsUserPrefsByViewer] = useState<Record<string, LyricsUserPrefs>>(
+    () => {
+      try {
+        const raw = localStorage.getItem(LYRICS_USER_PREFS_KEY)
+        if (!raw) return {}
+        const parsed = JSON.parse(raw) as Record<string, Partial<LyricsUserPrefs>>
+        const next: Record<string, LyricsUserPrefs> = {}
+        Object.entries(parsed).forEach(([viewerId, value]) => {
+          next[viewerId] = {
+            theme: value.theme === 'light' ? 'light' : 'dark',
+            font: value.font === 'serif' || value.font === 'mono' ? value.font : 'sans',
+            fontScale:
+              typeof value.fontScale === 'number' && Number.isFinite(value.fontScale)
+                ? Math.min(1.8, Math.max(0.75, value.fontScale))
+                : 1,
+            centered: Boolean(value.centered),
+          }
+        })
+        return next
+      } catch {
+        return {}
+      }
+    },
+  )
+  const [lyricsDocStateByKey, setLyricsDocStateByKey] = useState<Record<string, LyricsDocState>>(() => {
+    try {
+      const raw = localStorage.getItem(LYRICS_DOC_STATE_KEY)
+      if (!raw) return {}
+      const parsed = JSON.parse(raw) as Record<string, Partial<LyricsDocState>>
+      const next: Record<string, LyricsDocState> = {}
+      Object.entries(parsed).forEach(([key, value]) => {
+        next[key] = {
+          fontScale:
+            typeof value.fontScale === 'number' && Number.isFinite(value.fontScale)
+              ? Math.min(1.8, Math.max(0.75, value.fontScale))
+              : 1,
+          highlights: Array.isArray(value.highlights)
+            ? value.highlights.filter(
+                (item): item is LyricsHighlightRange =>
+                  Boolean(
+                    item &&
+                      typeof item.id === 'string' &&
+                      typeof item.start === 'number' &&
+                      typeof item.end === 'number' &&
+                      typeof item.color === 'string',
+                  ),
+              )
+            : [],
+          strokes: Array.isArray(value.strokes)
+            ? value.strokes
+                .filter(
+                  (item): item is LyricsStroke =>
+                    Boolean(
+                      item &&
+                        typeof item.id === 'string' &&
+                        typeof item.color === 'string' &&
+                        typeof item.width === 'number' &&
+                        Array.isArray(item.points),
+                    ),
+                )
+                .map((stroke) => {
+                  const points = stroke.points.filter(
+                    (point): point is LyricsStrokePoint =>
+                      Boolean(
+                        point &&
+                          typeof point.x === 'number' &&
+                          Number.isFinite(point.x) &&
+                          typeof point.y === 'number' &&
+                          Number.isFinite(point.y),
+                      ),
+                  )
+                  if (!points.length) {
+                    return { ...stroke, width: 0.004, points: [] }
+                  }
+                  const maxX = Math.max(...points.map((point) => point.x))
+                  const maxY = Math.max(...points.map((point) => point.y))
+                  const needsNormalization = maxX > 1.2 || maxY > 1.2
+                  const normalizedPoints = needsNormalization
+                    ? points.map((point) => ({
+                        x: maxX > 0 ? point.x / maxX : 0,
+                        y: maxY > 0 ? point.y / maxY : 0,
+                      }))
+                    : points
+                  return {
+                    ...stroke,
+                    width: needsNormalization
+                      ? Math.min(0.02, Math.max(0.0015, stroke.width / Math.max(maxX, maxY, 1)))
+                      : Math.min(0.02, Math.max(0.0015, stroke.width)),
+                    points: normalizedPoints,
+                  }
+                })
+            : [],
+          editedText: typeof value.editedText === 'string' ? value.editedText : undefined,
+        }
+      })
+      return next
+    } catch {
+      return {}
+    }
+  })
+  const [anonymousLyricsViewerId] = useState(() => {
+    try {
+      const existing = localStorage.getItem(LYRICS_VIEWER_ID_KEY)
+      if (existing) return existing
+      const created = crypto.randomUUID()
+      localStorage.setItem(LYRICS_VIEWER_ID_KEY, created)
+      return created
+    } catch {
+      return 'anon-viewer'
+    }
+  })
+  const [lyricsActiveColor, setLyricsActiveColor] = useState(LYRICS_COLOR_SWATCHES[0])
+  const [lyricsDrawMode, setLyricsDrawMode] = useState(false)
+  const [selectedLyricsStrokeId, setSelectedLyricsStrokeId] = useState<string | null>(null)
+  const [showFontTools, setShowFontTools] = useState(false)
+  const [showEditTools, setShowEditTools] = useState(false)
+  const [showDrawTools, setShowDrawTools] = useState(false)
+  const [lyricsToolPanelPositions, setLyricsToolPanelPositions] = useState<
+    Record<LyricsToolPanelKey, LyricsToolPanelPosition>
+  >({
+    font: { x: 16, y: 84 },
+    edit: { x: 16, y: 148 },
+    draw: { x: 16, y: 212 },
+  })
+  const [lyricsEditMode, setLyricsEditMode] = useState(false)
+  const [lyricsEditDraft, setLyricsEditDraft] = useState('')
+  const [lyricsSelectionRange, setLyricsSelectionRange] = useState<{ start: number; end: number } | null>(
+    null,
+  )
+  const [lyricsUndoState, setLyricsUndoState] = useState<LyricsUndoState | null>(null)
+  const [lyricsDocUndoStackByKey, setLyricsDocUndoStackByKey] = useState<Record<string, LyricsDocState[]>>({})
+  const lyricsTextContainerRef = useRef<HTMLDivElement | null>(null)
+  const activeStrokeRef = useRef<LyricsStroke | null>(null)
+  const activeStrokePathRef = useRef<SVGPathElement | null>(null)
+  const lastAppliedLyricsViewerIdRef = useRef<string | null>(null)
+  const panelDragStateRef = useRef<{
+    panel: LyricsToolPanelKey
+    offsetX: number
+    offsetY: number
+  } | null>(null)
   const [playlistSingerFilter, setPlaylistSingerFilter] = useState('__all__')
   const [playlistShareStatus, setPlaylistShareStatus] = useState('')
   const playlistShareTimerRef = useRef<number | null>(null)
@@ -1548,15 +1767,787 @@ function App() {
     getDocumentSelectionItems,
     isSharedPublicDocsMode,
   ])
-  const isSharedLyricsDoc = Boolean(isSharedPublicDocsMode && docModalContent?.type === 'Lyrics')
-  const sharedLyricsContainerClasses = isSharedLyricsDoc
+  const isLyricsDoc = docModalContent?.type === 'Lyrics'
+  const isSharedLyricsDoc = Boolean(isSharedPublicDocsMode && isLyricsDoc)
+  const sharedLyricsContainerClasses = isLyricsDoc
     ? sharedLyricsTheme === 'light'
       ? 'border-slate-300/80 bg-white text-slate-900'
       : 'border-white/10 bg-slate-950/50 text-slate-200'
     : 'border-white/10 bg-slate-950/50 text-slate-200'
   const sharedLyricsPreClasses =
     sharedLyricsFont === 'serif' ? 'font-serif' : sharedLyricsFont === 'mono' ? 'font-mono' : 'font-sans'
-  const sharedLyricsAlignmentClass = isSharedLyricsDoc ? 'text-center' : ''
+  const lyricsViewerId = authUserId ? `auth:${authUserId}` : `anon:${anonymousLyricsViewerId}`
+  const sharedLyricsAlignmentClass = lyricsCenterAligned ? 'text-center' : 'text-left'
+  const lyricsBodySurfaceClasses =
+    sharedLyricsTheme === 'light'
+      ? 'border-slate-300/80 bg-white text-slate-900'
+      : 'border-white/10 bg-black/20 text-slate-200'
+  const snapshotLyricsPrefsForUndo = useCallback(
+    (): LyricsUserPrefs => ({
+      theme: sharedLyricsTheme,
+      font: sharedLyricsFont,
+      fontScale: lyricsGlobalFontScale,
+      centered: lyricsCenterAligned,
+    }),
+    [lyricsCenterAligned, lyricsGlobalFontScale, sharedLyricsFont, sharedLyricsTheme],
+  )
+  const queueLyricsPrefsUndo = useCallback(() => {
+    setLyricsUndoState({ kind: 'prefs', viewerId: lyricsViewerId, prev: snapshotLyricsPrefsForUndo() })
+  }, [lyricsViewerId, snapshotLyricsPrefsForUndo])
+  const activeLyricsDocKey = useMemo(() => {
+    if (!docModalSongId || !docModalContent?.id) return null
+    return `${lyricsViewerId}:${isSharedPublicDocsMode ? 'shared' : 'app'}:${docModalSongId}:${docModalContent.id}`
+  }, [docModalSongId, docModalContent?.id, isSharedPublicDocsMode, lyricsViewerId])
+  const activeLyricsDocState = useMemo<LyricsDocState>(() => {
+    if (!activeLyricsDocKey) return { fontScale: 1, highlights: [], strokes: [] }
+    return lyricsDocStateByKey[activeLyricsDocKey] ?? { fontScale: 1, highlights: [], strokes: [] }
+  }, [activeLyricsDocKey, lyricsDocStateByKey])
+  const activeLyricsDocUndoStack = useMemo(
+    () => (activeLyricsDocKey ? lyricsDocUndoStackByKey[activeLyricsDocKey] ?? [] : []),
+    [activeLyricsDocKey, lyricsDocUndoStackByKey],
+  )
+  const isTextLyricsDoc = Boolean(docModalContent?.type === 'Lyrics' && docModalContent?.content)
+  const baseLyricsText = isTextLyricsDoc ? docModalContent?.content ?? '' : ''
+  const resolvedLyricsText =
+    isTextLyricsDoc && typeof activeLyricsDocState.editedText === 'string'
+      ? activeLyricsDocState.editedText
+      : baseLyricsText
+  const lyricsFontSizeRem = useMemo(
+    () => Number((0.92 * lyricsGlobalFontScale).toFixed(2)),
+    [lyricsGlobalFontScale],
+  )
+  const updateActiveLyricsDocState = useCallback(
+    (
+      updater: (current: LyricsDocState) => LyricsDocState,
+      options?: { trackUndo?: boolean },
+    ) => {
+      if (!activeLyricsDocKey) return
+      setLyricsDocStateByKey((prev) => {
+        const current = prev[activeLyricsDocKey] ?? { fontScale: 1, highlights: [], strokes: [] }
+        if (options?.trackUndo) {
+          setLyricsDocUndoStackByKey((stackPrev) => {
+            const existing = stackPrev[activeLyricsDocKey] ?? []
+            const nextStack = [...existing, current]
+            const bounded = nextStack.length > 150 ? nextStack.slice(nextStack.length - 150) : nextStack
+            return { ...stackPrev, [activeLyricsDocKey]: bounded }
+          })
+        }
+        const next = updater(current)
+        return {
+          ...prev,
+          [activeLyricsDocKey]: {
+            fontScale: Math.min(1.8, Math.max(0.75, next.fontScale)),
+            highlights: next.highlights,
+            strokes: next.strokes,
+            editedText: next.editedText,
+          },
+        }
+      })
+    },
+    [activeLyricsDocKey],
+  )
+  const undoActiveLyricsDocAction = useCallback(() => {
+    if (!activeLyricsDocKey) return
+    setLyricsDocUndoStackByKey((prev) => {
+      const stack = prev[activeLyricsDocKey] ?? []
+      if (!stack.length) return prev
+      const restored = stack[stack.length - 1]
+      setLyricsDocStateByKey((docPrev) => ({ ...docPrev, [activeLyricsDocKey]: restored }))
+      return {
+        ...prev,
+        [activeLyricsDocKey]: stack.slice(0, -1),
+      }
+    })
+  }, [activeLyricsDocKey])
+  const clearAllActiveLyricsChanges = useCallback(() => {
+    updateActiveLyricsDocState(
+      (current) => ({
+        ...current,
+        highlights: [],
+        strokes: [],
+        editedText: baseLyricsText,
+      }),
+      { trackUndo: true },
+    )
+    setSelectedLyricsStrokeId(null)
+  }, [baseLyricsText, updateActiveLyricsDocState])
+  const applyLyricsHighlightSelection = useCallback(() => {
+    if (!isTextLyricsDoc || !lyricsSelectionRange || lyricsSelectionRange.end <= lyricsSelectionRange.start) {
+      return
+    }
+    updateActiveLyricsDocState(
+      (current) => ({
+        ...current,
+        highlights: [
+          ...current.highlights,
+          {
+            id: crypto.randomUUID(),
+            start: lyricsSelectionRange.start,
+            end: lyricsSelectionRange.end,
+            color: lyricsActiveColor,
+          },
+        ],
+      }),
+      { trackUndo: true },
+    )
+    setLyricsSelectionRange(null)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+  }, [isTextLyricsDoc, lyricsSelectionRange, lyricsActiveColor, updateActiveLyricsDocState])
+  const renderHighlightedLyrics = useCallback((text: string, highlights: LyricsHighlightRange[]) => {
+    if (!highlights.length) return text
+    const normalized = [...highlights]
+      .filter((item) => item.end > item.start && item.start < text.length && item.end > 0)
+      .map((item) => ({
+        ...item,
+        start: Math.max(0, Math.min(text.length, item.start)),
+        end: Math.max(0, Math.min(text.length, item.end)),
+      }))
+      .sort((a, b) => a.start - b.start)
+    if (!normalized.length) return text
+    const nodes: ReactNode[] = []
+    let cursor = 0
+    normalized.forEach((item) => {
+      if (item.start > cursor) nodes.push(text.slice(cursor, item.start))
+      const segment = text.slice(Math.max(cursor, item.start), Math.max(cursor, item.end))
+      if (segment) {
+        nodes.push(
+          <mark
+            key={item.id}
+            className="lyrics-highlight-mark"
+            style={{ backgroundColor: item.color, color: item.color === '#ffffff' ? '#111827' : undefined }}
+          >
+            {segment}
+          </mark>,
+        )
+      }
+      cursor = Math.max(cursor, item.end)
+    })
+    if (cursor < text.length) nodes.push(text.slice(cursor))
+    return nodes
+  }, [])
+  const handleLyricsSelectionCapture = useCallback(() => {
+    if (!isTextLyricsDoc || !lyricsTextContainerRef.current) return
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      setLyricsSelectionRange(null)
+      return
+    }
+    const range = selection.getRangeAt(0)
+    const container = lyricsTextContainerRef.current
+    if (!container.contains(range.commonAncestorContainer)) {
+      setLyricsSelectionRange(null)
+      return
+    }
+    const prefixRange = range.cloneRange()
+    prefixRange.selectNodeContents(container)
+    prefixRange.setEnd(range.startContainer, range.startOffset)
+    const start = prefixRange.toString().length
+    const selectedLength = range.toString().length
+    const end = start + selectedLength
+    if (end <= start) {
+      setLyricsSelectionRange(null)
+      return
+    }
+    setLyricsSelectionRange({ start, end })
+  }, [isTextLyricsDoc])
+  const toSvgPath = useCallback((points: LyricsStrokePoint[]) => {
+    if (!points.length) return ''
+    if (points.length === 1) return `M ${points[0].x} ${points[0].y}`
+    return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
+  }, [])
+  const handleLyricsDrawPointerStart = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!lyricsDrawMode) return
+      const rect = event.currentTarget.getBoundingClientRect()
+      if (!rect.width || !rect.height) return
+      const nextStroke: LyricsStroke = {
+        id: crypto.randomUUID(),
+        color: lyricsActiveColor,
+        width: Math.min(0.02, Math.max(0.0015, 3 / Math.max(rect.width, rect.height))),
+        points: [
+          {
+            x: (event.clientX - rect.left) / rect.width,
+            y: (event.clientY - rect.top) / rect.height,
+          },
+        ],
+      }
+      activeStrokeRef.current = nextStroke
+      if (activeStrokePathRef.current) {
+        activeStrokePathRef.current.setAttribute('stroke', nextStroke.color)
+        activeStrokePathRef.current.setAttribute('stroke-width', String(nextStroke.width))
+        activeStrokePathRef.current.setAttribute('d', toSvgPath(nextStroke.points))
+      }
+      event.currentTarget.setPointerCapture(event.pointerId)
+      event.preventDefault()
+    },
+    [lyricsActiveColor, lyricsDrawMode, toSvgPath],
+  )
+  const handleLyricsDrawPointerMove = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!lyricsDrawMode || !activeStrokeRef.current) return
+      const rect = event.currentTarget.getBoundingClientRect()
+      if (!rect.width || !rect.height) return
+      const point = {
+        x: (event.clientX - rect.left) / rect.width,
+        y: (event.clientY - rect.top) / rect.height,
+      }
+      const current = activeStrokeRef.current
+      current.points.push(point)
+      if (activeStrokePathRef.current) {
+        activeStrokePathRef.current.setAttribute('d', toSvgPath(current.points))
+      }
+      event.preventDefault()
+    },
+    [lyricsDrawMode, toSvgPath],
+  )
+  const commitActiveStroke = useCallback(() => {
+    const stroke = activeStrokeRef.current
+    if (!stroke || stroke.points.length < 2) {
+      activeStrokeRef.current = null
+      if (activeStrokePathRef.current) {
+        activeStrokePathRef.current.setAttribute('d', '')
+      }
+      return
+    }
+    updateActiveLyricsDocState(
+      (current) => ({ ...current, strokes: [...current.strokes, stroke] }),
+      { trackUndo: true },
+    )
+    activeStrokeRef.current = null
+    if (activeStrokePathRef.current) {
+      activeStrokePathRef.current.setAttribute('d', '')
+    }
+  }, [updateActiveLyricsDocState])
+  const handleLyricsDrawPointerEnd = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!lyricsDrawMode) return
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+      commitActiveStroke()
+      event.preventDefault()
+    },
+    [commitActiveStroke, lyricsDrawMode],
+  )
+  const renderLyricsStrokeOverlay = useCallback(
+    () => (
+      <div
+        className={`lyrics-draw-layer ${lyricsDrawMode ? 'is-active' : ''} ${
+          showDrawTools && !lyricsDrawMode ? 'is-select-active' : ''
+        }`}
+        onPointerDown={(event) => {
+          if (showDrawTools && !lyricsDrawMode) {
+            setSelectedLyricsStrokeId(null)
+          }
+          handleLyricsDrawPointerStart(event)
+        }}
+        onPointerMove={handleLyricsDrawPointerMove}
+        onPointerUp={handleLyricsDrawPointerEnd}
+        onPointerCancel={handleLyricsDrawPointerEnd}
+      >
+        <svg className="lyrics-draw-svg" viewBox="0 0 1 1" preserveAspectRatio="none">
+          {activeLyricsDocState.strokes.map((stroke) => (
+            <path
+              key={stroke.id}
+              d={toSvgPath(
+                stroke.points.map((point) => ({
+                  x: point.x,
+                  y: point.y,
+                })),
+              )}
+              stroke={stroke.color}
+              strokeWidth={selectedLyricsStrokeId === stroke.id ? stroke.width + 0.0025 : stroke.width}
+              opacity={selectedLyricsStrokeId === stroke.id ? 1 : 0.95}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              fill="none"
+              vectorEffect="none"
+              onPointerDown={(event) => {
+                if (lyricsDrawMode || !showDrawTools) return
+                event.stopPropagation()
+                setSelectedLyricsStrokeId(stroke.id)
+              }}
+            />
+          ))}
+          <path
+            ref={activeStrokePathRef}
+            d=""
+            stroke="transparent"
+            strokeWidth="0.004"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fill="none"
+            vectorEffect="none"
+          />
+        </svg>
+      </div>
+    ),
+    [
+      activeLyricsDocState.strokes,
+      handleLyricsDrawPointerEnd,
+      handleLyricsDrawPointerMove,
+      handleLyricsDrawPointerStart,
+      lyricsDrawMode,
+      showDrawTools,
+      selectedLyricsStrokeId,
+      toSvgPath,
+    ],
+  )
+  const beginLyricsPanelDrag = useCallback(
+    (panel: LyricsToolPanelKey, event: PointerEvent<HTMLDivElement>) => {
+      const rect = event.currentTarget.getBoundingClientRect()
+      panelDragStateRef.current = {
+        panel,
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top,
+      }
+      event.currentTarget.setPointerCapture(event.pointerId)
+      event.preventDefault()
+    },
+    [],
+  )
+  useEffect(() => {
+    const handleMove = (event: globalThis.PointerEvent) => {
+      if (!panelDragStateRef.current) return
+      const { panel, offsetX, offsetY } = panelDragStateRef.current
+      setLyricsToolPanelPositions((prev) => ({
+        ...prev,
+        [panel]: {
+          x: Math.max(8, Math.round(event.clientX - offsetX)),
+          y: Math.max(8, Math.round(event.clientY - offsetY)),
+        },
+      }))
+    }
+    const handleUp = () => {
+      panelDragStateRef.current = null
+    }
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+    return () => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+    }
+  }, [])
+  const renderLyricsTools = useCallback(
+    () => (
+      <div className="lyrics-tools-shell">
+        <div className="lyrics-tools-bar">
+          <button
+            type="button"
+            className="lyrics-tools-btn"
+            onClick={() => {
+              queueLyricsPrefsUndo()
+              setSharedLyricsTheme((current) => (current === 'dark' ? 'light' : 'dark'))
+            }}
+            title="Toggle dark/light lyrics mode"
+          >
+            🌓
+          </button>
+          <button
+            type="button"
+            className={`lyrics-tools-btn ${showFontTools ? 'is-active' : ''}`}
+            onClick={() => {
+              setShowFontTools((current) => !current)
+              setShowEditTools(false)
+              setShowDrawTools(false)
+            }}
+            title="Font and layout options"
+          >
+            🔤
+          </button>
+          <button
+            type="button"
+            className={`lyrics-tools-btn ${showEditTools ? 'is-active' : ''}`}
+            onClick={() => {
+              setShowEditTools((current) => !current)
+              setShowFontTools(false)
+              setShowDrawTools(false)
+            }}
+            title="Edit and highlight options"
+          >
+            ✍️
+          </button>
+          <button
+            type="button"
+            className={`lyrics-tools-btn ${showDrawTools || lyricsDrawMode ? 'is-active' : ''}`}
+            onClick={() => {
+              setShowDrawTools((current) => !current)
+              setShowEditTools(false)
+              setShowFontTools(false)
+            }}
+            title="Drawing tools"
+          >
+            🖌️
+          </button>
+          <button
+            type="button"
+            className="lyrics-tools-btn"
+            onClick={() => {
+              if (activeLyricsDocUndoStack.length > 0) {
+                undoActiveLyricsDocAction()
+                return
+              }
+              if (!lyricsUndoState) return
+              {
+                setSharedLyricsTheme(lyricsUndoState.prev.theme)
+                setSharedLyricsFont(lyricsUndoState.prev.font)
+                setLyricsGlobalFontScale(lyricsUndoState.prev.fontScale)
+                setLyricsCenterAligned(lyricsUndoState.prev.centered)
+              }
+              setLyricsUndoState(null)
+            }}
+            disabled={activeLyricsDocUndoStack.length === 0 && !lyricsUndoState}
+            title="Undo last action"
+          >
+            Undo
+          </button>
+        </div>
+
+        {showFontTools && (
+          <div
+            className="lyrics-floating-panel lyrics-floating-panel--font"
+            style={{ left: `${lyricsToolPanelPositions.font.x}px`, top: `${lyricsToolPanelPositions.font.y}px` }}
+          >
+            <div className="lyrics-floating-panel-handle" onPointerDown={(event) => beginLyricsPanelDrag('font', event)}>
+              Font
+              <button
+                type="button"
+                className="lyrics-floating-panel-close"
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                }}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setShowFontTools(false)
+                }}
+                aria-label="Close font tools"
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="lyrics-floating-panel-body">
+              <div className="lyrics-tools-row">
+                <button
+                  type="button"
+                  className="lyrics-tools-btn"
+                  onClick={() => {
+                    queueLyricsPrefsUndo()
+                    setLyricsGlobalFontScale((current) => Math.max(0.75, current - 0.08))
+                  }}
+                >
+                  A-
+                </button>
+                <button
+                  type="button"
+                  className="lyrics-tools-btn"
+                  onClick={() => {
+                    queueLyricsPrefsUndo()
+                    setLyricsGlobalFontScale((current) => Math.min(1.8, current + 0.08))
+                  }}
+                >
+                  A+
+                </button>
+                <button
+                  type="button"
+                  className={`lyrics-tools-btn ${!lyricsCenterAligned ? 'is-active' : ''}`}
+                  onClick={() => {
+                    queueLyricsPrefsUndo()
+                    setLyricsCenterAligned(false)
+                  }}
+                  title="Left align"
+                >
+                  ☰
+                </button>
+                <button
+                  type="button"
+                  className={`lyrics-tools-btn ${lyricsCenterAligned ? 'is-active' : ''}`}
+                  onClick={() => {
+                    queueLyricsPrefsUndo()
+                    setLyricsCenterAligned(true)
+                  }}
+                  title="Center align"
+                >
+                  ☷
+                </button>
+              </div>
+              <div className="lyrics-tools-row">
+                <select
+                  className="lyrics-font-select"
+                  value={sharedLyricsFont}
+                  onChange={(event) => {
+                    queueLyricsPrefsUndo()
+                    const next = event.target.value
+                    setSharedLyricsFont(next === 'serif' || next === 'mono' ? next : 'sans')
+                  }}
+                >
+                  <option value="sans">Sans</option>
+                  <option value="serif">Serif</option>
+                  <option value="mono">Mono</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showEditTools && (
+          <div
+            className="lyrics-floating-panel lyrics-floating-panel--edit"
+            style={{ left: `${lyricsToolPanelPositions.edit.x}px`, top: `${lyricsToolPanelPositions.edit.y}px` }}
+          >
+            <div className="lyrics-floating-panel-handle" onPointerDown={(event) => beginLyricsPanelDrag('edit', event)}>
+              Edit
+              <button
+                type="button"
+                className="lyrics-floating-panel-close"
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                }}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setShowEditTools(false)
+                }}
+                aria-label="Close edit tools"
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="lyrics-floating-panel-body">
+              <div className="lyrics-color-swatches">
+                {LYRICS_COLOR_SWATCHES.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    className={`lyrics-color-chip ${lyricsActiveColor === color ? 'is-active' : ''}`}
+                    style={{ backgroundColor: color }}
+                    onClick={() => setLyricsActiveColor(color)}
+                    title={`Color ${color}`}
+                    aria-label={`Select color ${color}`}
+                  />
+                ))}
+              </div>
+              <div className="lyrics-tools-row">
+                <button
+                  type="button"
+                  className="lyrics-tools-btn"
+                  onClick={applyLyricsHighlightSelection}
+                  disabled={!isTextLyricsDoc || !lyricsSelectionRange}
+                >
+                  Highlight
+                </button>
+                <button
+                  type="button"
+                  className="lyrics-tools-btn"
+                  onClick={clearAllActiveLyricsChanges}
+                  title="Clear all highlights, drawings, and text edits for this lyrics doc"
+                >
+                  Clear All
+                </button>
+                {isTextLyricsDoc && (
+                  <button
+                    type="button"
+                    className={`lyrics-tools-btn ${lyricsEditMode ? 'is-active' : ''}`}
+                    onClick={() => {
+                      if (lyricsEditMode) {
+                        setLyricsEditMode(false)
+                        return
+                      }
+                      setLyricsEditDraft(resolvedLyricsText)
+                      setLyricsEditMode(true)
+                      setLyricsDrawMode(false)
+                    }}
+                  >
+                    Edit Text
+                  </button>
+                )}
+              </div>
+              {isTextLyricsDoc && lyricsEditMode && (
+                <div className="lyrics-tools-row">
+                  <button
+                    type="button"
+                    className="lyrics-tools-btn"
+                    onClick={() => {
+                      updateActiveLyricsDocState(
+                        (current) => ({ ...current, editedText: lyricsEditDraft }),
+                        { trackUndo: true },
+                      )
+                      setLyricsEditMode(false)
+                    }}
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    className="lyrics-tools-btn"
+                    onClick={() => {
+                      setLyricsEditMode(false)
+                      setLyricsEditDraft(resolvedLyricsText)
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="lyrics-tools-btn"
+                    onClick={() => {
+                      updateActiveLyricsDocState(
+                        (current) => ({ ...current, editedText: baseLyricsText }),
+                        { trackUndo: true },
+                      )
+                      setLyricsEditDraft(baseLyricsText)
+                    }}
+                  >
+                    Revert
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {showDrawTools && (
+          <div
+            className="lyrics-floating-panel lyrics-floating-panel--draw"
+            style={{ left: `${lyricsToolPanelPositions.draw.x}px`, top: `${lyricsToolPanelPositions.draw.y}px` }}
+          >
+            <div className="lyrics-floating-panel-handle" onPointerDown={(event) => beginLyricsPanelDrag('draw', event)}>
+              Draw
+              <button
+                type="button"
+                className="lyrics-floating-panel-close"
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                }}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setShowDrawTools(false)
+                  setLyricsDrawMode(false)
+                }}
+                aria-label="Close draw tools"
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="lyrics-floating-panel-body">
+              <div className="lyrics-color-swatches">
+                {LYRICS_COLOR_SWATCHES.map((color) => (
+                  <button
+                    key={`draw-${color}`}
+                    type="button"
+                    className={`lyrics-color-chip ${lyricsActiveColor === color ? 'is-active' : ''}`}
+                    style={{ backgroundColor: color }}
+                    onClick={() => setLyricsActiveColor(color)}
+                    title={`Color ${color}`}
+                    aria-label={`Select color ${color}`}
+                  />
+                ))}
+              </div>
+              <div className="lyrics-tools-row">
+                <button
+                  type="button"
+                  className={`lyrics-tools-btn ${lyricsDrawMode ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setLyricsDrawMode((current) => !current)
+                    setSelectedLyricsStrokeId(null)
+                    setLyricsEditMode(false)
+                  }}
+                >
+                  {lyricsDrawMode ? 'Drawing On' : 'Drawing Off'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {selectedLyricsStrokeId && (
+          <div className="lyrics-floating-panel lyrics-floating-panel--ink" style={{ left: '16px', bottom: '16px' }}>
+            <div className="lyrics-floating-panel-body">
+              <div className="lyrics-tools-row">
+                <button
+                  type="button"
+                  className="lyrics-floating-panel-close inline-close"
+                  onPointerDown={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                  }}
+                  onClick={() => setSelectedLyricsStrokeId(null)}
+                  aria-label="Close ink actions"
+                  title="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="lyrics-tools-row">
+                <button
+                  type="button"
+                  className="lyrics-tools-btn"
+                  onClick={() => {
+                    updateActiveLyricsDocState(
+                      (current) => ({
+                        ...current,
+                        strokes: current.strokes.filter((stroke) => stroke.id !== selectedLyricsStrokeId),
+                      }),
+                      { trackUndo: true },
+                    )
+                    setSelectedLyricsStrokeId(null)
+                  }}
+                >
+                  Delete One
+                </button>
+                <button
+                  type="button"
+                  className="lyrics-tools-btn"
+                  onClick={() =>
+                    updateActiveLyricsDocState((current) => ({ ...current, strokes: [] }), { trackUndo: true })
+                  }
+                >
+                  Clear All
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    ),
+    [
+      activeLyricsDocUndoStack.length,
+      activeLyricsDocState.strokes.length,
+      applyLyricsHighlightSelection,
+      baseLyricsText,
+      beginLyricsPanelDrag,
+      clearAllActiveLyricsChanges,
+      isTextLyricsDoc,
+      lyricsActiveColor,
+      lyricsCenterAligned,
+      lyricsDrawMode,
+      lyricsEditDraft,
+      lyricsEditMode,
+      lyricsSelectionRange,
+      lyricsToolPanelPositions.draw.x,
+      lyricsToolPanelPositions.draw.y,
+      lyricsToolPanelPositions.edit.x,
+      lyricsToolPanelPositions.edit.y,
+      lyricsToolPanelPositions.font.x,
+      lyricsToolPanelPositions.font.y,
+      sharedLyricsTheme,
+      selectedLyricsStrokeId,
+      lyricsUndoState,
+      undoActiveLyricsDocAction,
+      queueLyricsPrefsUndo,
+      resolvedLyricsText,
+      showDrawTools,
+      showEditTools,
+      showFontTools,
+      sharedLyricsFont,
+      updateActiveLyricsDocState,
+    ],
+  )
   const isPlaylistEntryPlayable = (entry?: PlaylistEntry | null) =>
     Boolean(entry?.audioUrl && entry.audioUrl.trim())
 
@@ -5862,12 +6853,62 @@ function App() {
   }, [normalizeSharedMusicians, sharedPlaylistView, supabase])
 
   useEffect(() => {
-    localStorage.setItem(SHARED_LYRICS_THEME_KEY, sharedLyricsTheme)
-  }, [sharedLyricsTheme])
+    if (lastAppliedLyricsViewerIdRef.current === lyricsViewerId) return
+    lastAppliedLyricsViewerIdRef.current = lyricsViewerId
+    const prefs = lyricsUserPrefsByViewer[lyricsViewerId] ?? DEFAULT_LYRICS_USER_PREFS
+    setSharedLyricsTheme(prefs.theme)
+    setSharedLyricsFont(prefs.font)
+    setLyricsGlobalFontScale(prefs.fontScale)
+    setLyricsCenterAligned(prefs.centered)
+  }, [lyricsUserPrefsByViewer, lyricsViewerId])
 
   useEffect(() => {
-    localStorage.setItem(SHARED_LYRICS_FONT_KEY, sharedLyricsFont)
-  }, [sharedLyricsFont])
+    setLyricsUserPrefsByViewer((prev) => {
+      const current = prev[lyricsViewerId]
+      const nextPrefs: LyricsUserPrefs = {
+        theme: sharedLyricsTheme,
+        font: sharedLyricsFont,
+        fontScale: Math.min(1.8, Math.max(0.75, lyricsGlobalFontScale)),
+        centered: lyricsCenterAligned,
+      }
+      if (
+        current &&
+        current.theme === nextPrefs.theme &&
+        current.font === nextPrefs.font &&
+        current.fontScale === nextPrefs.fontScale &&
+        current.centered === nextPrefs.centered
+      ) {
+        return prev
+      }
+      return { ...prev, [lyricsViewerId]: nextPrefs }
+    })
+  }, [lyricsCenterAligned, lyricsGlobalFontScale, lyricsViewerId, sharedLyricsFont, sharedLyricsTheme])
+
+  useEffect(() => {
+    localStorage.setItem(LYRICS_USER_PREFS_KEY, JSON.stringify(lyricsUserPrefsByViewer))
+  }, [lyricsUserPrefsByViewer])
+
+  useEffect(() => {
+    localStorage.setItem(LYRICS_DOC_STATE_KEY, JSON.stringify(lyricsDocStateByKey))
+  }, [lyricsDocStateByKey])
+
+  useEffect(() => {
+    setLyricsDrawMode(false)
+    setSelectedLyricsStrokeId(null)
+    setLyricsEditMode(false)
+    setLyricsSelectionRange(null)
+    activeStrokeRef.current = null
+    if (activeStrokePathRef.current) {
+      activeStrokePathRef.current.setAttribute('d', '')
+    }
+  }, [activeLyricsDocKey])
+
+  useEffect(() => {
+    if (!selectedLyricsStrokeId) return
+    if (!activeLyricsDocState.strokes.some((stroke) => stroke.id === selectedLyricsStrokeId)) {
+      setSelectedLyricsStrokeId(null)
+    }
+  }, [activeLyricsDocState.strokes, selectedLyricsStrokeId])
 
   useEffect(() => {
     if (!sharedPlaylistView || !supabase) return
@@ -6932,15 +7973,6 @@ function App() {
                           : 'border-white/15 bg-slate-900/70 text-slate-200'
                       }`}
                     >
-                      <button
-                        type="button"
-                        className="rounded-md border border-white/20 bg-transparent px-2 py-1 font-semibold"
-                        onClick={() =>
-                          setSharedLyricsTheme((current) => (current === 'dark' ? 'light' : 'dark'))
-                        }
-                      >
-                        Theme: {sharedLyricsTheme === 'dark' ? 'Dark' : 'Light'}
-                      </button>
                       <label className="ml-1 font-semibold" htmlFor="shared-lyrics-font-public">
                         Font
                       </label>
@@ -6949,6 +7981,7 @@ function App() {
                         className="rounded-md border border-white/20 bg-transparent px-2 py-1"
                         value={sharedLyricsFont}
                         onChange={(event) => {
+                          queueLyricsPrefsUndo()
                           const next = event.target.value
                           setSharedLyricsFont(next === 'serif' || next === 'mono' ? next : 'sans')
                         }}
@@ -6959,14 +7992,33 @@ function App() {
                       </select>
                     </div>
                   )}
+                  {renderLyricsTools()}
                   {docModalContent.content ? (
-                    <pre
-                      className={`min-h-0 flex-1 overflow-auto whitespace-pre-wrap pb-16 text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
+                    <div
+                      className={`relative min-h-0 flex-1 overflow-hidden rounded-xl border ${lyricsBodySurfaceClasses}`}
                     >
-                      {`${docModalContent.content}\n\n\n`}
-                    </pre>
+                      {lyricsEditMode && isTextLyricsDoc ? (
+                        <textarea
+                          className={`h-full w-full resize-none overflow-auto bg-transparent p-3 pb-16 text-sm leading-relaxed outline-none ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
+                          style={{ fontSize: `${lyricsFontSizeRem}rem` }}
+                          value={lyricsEditDraft}
+                          onChange={(event) => setLyricsEditDraft(event.target.value)}
+                        />
+                      ) : (
+                        <div
+                          ref={lyricsTextContainerRef}
+                          className={`h-full overflow-auto whitespace-pre-wrap p-3 pb-16 text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
+                          style={{ fontSize: `${lyricsFontSizeRem}rem` }}
+                          onMouseUp={handleLyricsSelectionCapture}
+                          onTouchEnd={handleLyricsSelectionCapture}
+                        >
+                          {renderHighlightedLyrics(`${resolvedLyricsText}\n\n\n`, activeLyricsDocState.highlights)}
+                        </div>
+                      )}
+                      {renderLyricsStrokeOverlay()}
+                    </div>
                   ) : activeDocModalPage ? (
-                    <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-white/10 bg-black">
+                    <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-white/10 bg-black">
                       {isImageFileUrl(activeDocModalPage) ? (
                         <img src={activeDocModalPage} alt={docModalContent.title} className="h-full w-full object-contain" />
                       ) : (
@@ -6976,6 +8028,7 @@ function App() {
                           title={docModalContent.title}
                         />
                       )}
+                      {renderLyricsStrokeOverlay()}
                     </div>
                   ) : (
                     <div className="text-sm text-slate-300">No document available.</div>
@@ -8990,16 +10043,30 @@ function App() {
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
-              <h3 className="text-lg font-semibold">
-                {docModalContent
-                  ? docModalContent.type === 'Lyrics'
-                    ? 'Song Lyrics'
-                    : 'Song Chart'
-                  : 'Song documents'}
-              </h3>
-              <div className="mt-3 flex items-center gap-2">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-lg font-semibold">
+                  {docModalContent
+                    ? docModalContent.type === 'Lyrics'
+                      ? 'Song Lyrics'
+                      : 'Song Chart'
+                    : 'Song documents'}
+                </h3>
+                <div className="flex items-center gap-2">
+                  {docModalContent && (
+                    <button
+                      className="rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
+                      onClick={() => {
+                        setDocModalContent(null)
+                        setDocModalPageIndex(0)
+                      }}
+                      aria-label="Back"
+                      title="Back"
+                    >
+                      ←
+                    </button>
+                  )}
                 <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  className="rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => {
                     setDocModalSongId(null)
                     setDocModalContent(null)
@@ -9010,19 +10077,7 @@ function App() {
                 >
                   ✕
                 </button>
-                {docModalContent && (
-                  <button
-                    className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                    onClick={() => {
-                      setDocModalContent(null)
-                      setDocModalPageIndex(0)
-                    }}
-                    aria-label="Back"
-                    title="Back"
-                  >
-                    ←
-                  </button>
-                )}
+                </div>
               </div>
             </div>
             <div className="flex-1 min-h-0 overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
@@ -9117,15 +10172,6 @@ function App() {
                           : 'border-white/15 bg-slate-900/70 text-slate-200'
                       }`}
                     >
-                      <button
-                        type="button"
-                        className="rounded-md border border-white/20 bg-transparent px-2 py-1 font-semibold"
-                        onClick={() =>
-                          setSharedLyricsTheme((current) => (current === 'dark' ? 'light' : 'dark'))
-                        }
-                      >
-                        Theme: {sharedLyricsTheme === 'dark' ? 'Dark' : 'Light'}
-                      </button>
                       <label className="ml-1 font-semibold" htmlFor="shared-lyrics-font">
                         Font
                       </label>
@@ -9134,6 +10180,7 @@ function App() {
                         className="rounded-md border border-white/20 bg-transparent px-2 py-1"
                         value={sharedLyricsFont}
                         onChange={(event) => {
+                          queueLyricsPrefsUndo()
                           const next = event.target.value
                           setSharedLyricsFont(next === 'serif' || next === 'mono' ? next : 'sans')
                         }}
@@ -9144,12 +10191,31 @@ function App() {
                       </select>
                     </div>
                   )}
+                  {renderLyricsTools()}
                   {docModalContent.content ? (
-                    <pre
-                      className={`min-h-0 flex-1 overflow-auto whitespace-pre-wrap text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
+                    <div
+                      className={`relative min-h-0 flex-1 overflow-hidden rounded-xl border ${lyricsBodySurfaceClasses}`}
                     >
-                      {docModalContent.content}
-                    </pre>
+                      {lyricsEditMode && isTextLyricsDoc ? (
+                        <textarea
+                          className={`h-full w-full resize-none overflow-auto bg-transparent p-3 text-sm leading-relaxed outline-none ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
+                          style={{ fontSize: `${lyricsFontSizeRem}rem` }}
+                          value={lyricsEditDraft}
+                          onChange={(event) => setLyricsEditDraft(event.target.value)}
+                        />
+                      ) : (
+                        <div
+                          ref={lyricsTextContainerRef}
+                          className={`h-full overflow-auto whitespace-pre-wrap p-3 text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
+                          style={{ fontSize: `${lyricsFontSizeRem}rem` }}
+                          onMouseUp={handleLyricsSelectionCapture}
+                          onTouchEnd={handleLyricsSelectionCapture}
+                        >
+                          {renderHighlightedLyrics(resolvedLyricsText, activeLyricsDocState.highlights)}
+                        </div>
+                      )}
+                      {renderLyricsStrokeOverlay()}
+                    </div>
                   ) : activeDocModalPage ? (
                     <div className="relative min-h-0 flex-1 w-full overflow-hidden rounded-2xl border border-white/10 bg-black">
                       {isImageFileUrl(activeDocModalPage) ? (
@@ -9184,6 +10250,7 @@ function App() {
                           </div>
                         </>
                       )}
+                      {renderLyricsStrokeOverlay()}
                     </div>
                   ) : (
                     <div className="text-sm text-slate-300">No document URL available.</div>

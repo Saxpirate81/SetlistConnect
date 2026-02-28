@@ -640,13 +640,29 @@ button[aria-label="Print chart or lyrics"] {
   opacity: 0 !important;
 }
 
-.shared-public-mode .shared-top-upnext-flash {
+.shared-public-mode .shared-upnext-banner-pulse {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
   animation: upnext-flash 28s ease-in-out infinite !important;
 }
 
-.shared-public-mode .shared-top-upnext-flash::before {
+.shared-public-mode .shared-upnext-banner-pulse::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 18% 46%, rgba(250, 204, 21, 0.52), transparent 50%),
+    radial-gradient(circle at 78% 44%, rgba(163, 230, 53, 0.48), transparent 52%);
   opacity: 0.82 !important;
   animation: upnext-highlight 34s ease-in-out infinite !important;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.shared-public-mode .shared-upnext-banner-pulse > * {
+  position: relative;
+  z-index: 1;
 }
 
 .fade-in {

@@ -8254,7 +8254,7 @@ function App() {
           <div
             className={`fixed inset-x-0 top-0 z-[260] border-b px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] transition-all duration-300 ${
               sharedGigFlashPulse
-                ? 'upnext-flash shared-top-upnext-flash border-lime-300/80 bg-black text-lime-100 shadow-[0_0_28px_rgba(190,242,100,0.55)]'
+                ? 'shared-upnext-banner-pulse border-lime-300/80 bg-black text-lime-100 shadow-[0_0_28px_rgba(190,242,100,0.55)]'
                 : 'border-lime-300/70 bg-black text-lime-100 shadow-[0_0_16px_rgba(190,242,100,0.34)]'
             }`}
             onTouchStart={(event) => setSharedBannerTouchStartX(event.touches[0]?.clientX ?? null)}

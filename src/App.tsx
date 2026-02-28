@@ -14,7 +14,7 @@ import openPlaylistIcon from './assets/open-playlist-icon.png'
 import setlistConnectLogo from './assets/setlist-connect-logo.png'
 
 type Role = 'admin' | 'user' | null
-type Screen = 'setlists' | 'builder' | 'song' | 'musicians'
+type Screen = 'setlists' | 'builder' | 'song' | 'musicians' | 'account'
 
 type SongKey = {
   singer: string
@@ -239,6 +239,7 @@ const REQUEST_TYPE_TAG_EXCLUSIONS = [
 ]
 const SETLIST_PANEL_PREFIX = 'set:'
 const ACTIVE_BAND_KEY = 'setlist:activeBandId'
+const BAND_TIER_PREFS_KEY = 'setlist:bandTierByBandId'
 const GIG_LOCKED_SONGS_KEY = 'setlist:gigLockedSongs'
 const GIG_LAST_LOCKED_SONG_KEY = 'setlist:gigLastLockedSong'
 const SHARED_LYRICS_THEME_KEY = 'setlist:sharedLyricsTheme'
@@ -341,10 +342,32 @@ function App() {
   const [authUserEmail, setAuthUserEmail] = useState<string | null>(null)
   const [bands, setBands] = useState<Band[]>([])
   const [memberships, setMemberships] = useState<BandMembership[]>([])
+  const [bandContextLoading, setBandContextLoading] = useState(Boolean(supabase))
+  const [showCreateBandOnboarding, setShowCreateBandOnboarding] = useState(false)
   const [activeBandId, setActiveBandId] = useState<string>(() =>
     localStorage.getItem(ACTIVE_BAND_KEY) ?? '',
   )
   const [newBandName, setNewBandName] = useState('')
+  const [accountBandNameDraft, setAccountBandNameDraft] = useState('')
+  const [accountSaveStatus, setAccountSaveStatus] = useState('')
+  const [bandTierByBandId, setBandTierByBandId] = useState<Record<string, 'free' | 'pro' | 'business'>>(
+    () => {
+      try {
+        const raw = localStorage.getItem(BAND_TIER_PREFS_KEY)
+        if (!raw) return {}
+        const parsed = JSON.parse(raw) as Record<string, unknown>
+        const next: Record<string, 'free' | 'pro' | 'business'> = {}
+        Object.entries(parsed).forEach(([bandId, tier]) => {
+          if (tier === 'free' || tier === 'pro' || tier === 'business') {
+            next[bandId] = tier
+          }
+        })
+        return next
+      } catch {
+        return {}
+      }
+    },
+  )
   const [showTeamModal, setShowTeamModal] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<'member' | 'admin'>('member')
@@ -811,6 +834,54 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    const syncIconTitles = (root: ParentNode = document) => {
+      root.querySelectorAll<HTMLElement>('[aria-label]').forEach((element) => {
+        const label = element.getAttribute('aria-label')?.trim()
+        if (!label) return
+        const currentTitle = element.getAttribute('title')?.trim()
+        if (!currentTitle) {
+          element.setAttribute('title', label)
+        }
+      })
+    }
+
+    syncIconTitles()
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === 'attributes' && mutation.target instanceof HTMLElement) {
+          const label = mutation.target.getAttribute('aria-label')?.trim()
+          if (!label) return
+          const currentTitle = mutation.target.getAttribute('title')?.trim()
+          if (!currentTitle) {
+            mutation.target.setAttribute('title', label)
+          }
+          return
+        }
+
+        mutation.addedNodes.forEach((node) => {
+          if (!(node instanceof HTMLElement)) return
+          if (node.hasAttribute('aria-label')) {
+            const label = node.getAttribute('aria-label')?.trim()
+            if (label && !node.getAttribute('title')?.trim()) {
+              node.setAttribute('title', label)
+            }
+          }
+          syncIconTitles(node)
+        })
+      })
+    })
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['aria-label', 'title'],
+    })
+
+    return () => observer.disconnect()
+  }, [])
+
   const isAdmin = role === 'admin'
   const withBandId = <T extends Record<string, unknown>>(payload: T): T & { band_id: string } => ({
     ...payload,
@@ -1091,6 +1162,7 @@ function App() {
     () => bands.find((band) => band.id === activeBandId)?.name ?? '',
     [bands, activeBandId],
   )
+  const activeBandTier = activeBandId ? (bandTierByBandId[activeBandId] ?? 'free') : 'free'
   const isSpecialSectionHidden = currentSetlist
     ? Boolean(gigHiddenSpecialSection[currentSetlist.id])
     : false
@@ -2135,18 +2207,58 @@ function App() {
         <div className="lyrics-tools-bar">
           <button
             type="button"
-            className="lyrics-tools-btn"
+            className="lyrics-tools-btn icon-only"
             onClick={() => {
               queueLyricsPrefsUndo()
               setSharedLyricsTheme((current) => (current === 'dark' ? 'light' : 'dark'))
             }}
             title="Toggle dark/light lyrics mode"
           >
-            🌓
+            {sharedLyricsTheme === 'dark' ? (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="44"
+                height="44"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#f3f31a"
+                strokeWidth="1.25"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="lucide lucide-sun-icon lucide-sun"
+                aria-label="Light mode icon"
+              >
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2" />
+                <path d="M12 20v2" />
+                <path d="m4.93 4.93 1.41 1.41" />
+                <path d="m17.66 17.66 1.41 1.41" />
+                <path d="M2 12h2" />
+                <path d="M20 12h2" />
+                <path d="m6.34 17.66-1.41 1.41" />
+                <path d="m19.07 4.93-1.41 1.41" />
+              </svg>
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="44"
+                height="44"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#f3f31a"
+                strokeWidth="1.25"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="lucide lucide-moon-icon lucide-moon"
+                aria-label="Dark mode icon"
+              >
+                <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />
+              </svg>
+            )}
           </button>
           <button
             type="button"
-            className={`lyrics-tools-btn ${showFontTools ? 'is-active' : ''}`}
+            className={`lyrics-tools-btn icon-only ${showFontTools ? 'is-active' : ''}`}
             onClick={() => {
               setShowFontTools((current) => !current)
               setShowEditTools(false)
@@ -2154,11 +2266,27 @@ function App() {
             }}
             title="Font and layout options"
           >
-            🔤
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="44"
+              height="44"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#f3f31a"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="lucide lucide-type-icon lucide-type"
+              aria-label="Edit font icon"
+            >
+              <path d="M12 4v16" />
+              <path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" />
+              <path d="M9 20h6" />
+            </svg>
           </button>
           <button
             type="button"
-            className={`lyrics-tools-btn ${showEditTools ? 'is-active' : ''}`}
+            className={`lyrics-tools-btn icon-only ${showEditTools ? 'is-active' : ''}`}
             onClick={() => {
               setShowEditTools((current) => !current)
               setShowFontTools(false)
@@ -2166,11 +2294,26 @@ function App() {
             }}
             title="Edit and highlight options"
           >
-            ✍️
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="44"
+              height="44"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#f3f31a"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="lucide lucide-pencil-icon lucide-pencil"
+              aria-label="Edit icon"
+            >
+              <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+              <path d="m15 5 4 4" />
+            </svg>
           </button>
           <button
             type="button"
-            className={`lyrics-tools-btn ${showDrawTools || lyricsDrawMode ? 'is-active' : ''}`}
+            className={`lyrics-tools-btn icon-only ${showDrawTools || lyricsDrawMode ? 'is-active' : ''}`}
             onClick={() => {
               setShowDrawTools((current) => !current)
               setShowEditTools(false)
@@ -2178,11 +2321,27 @@ function App() {
             }}
             title="Drawing tools"
           >
-            🖌️
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="44"
+              height="44"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#f3f31a"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="lucide lucide-brush-icon lucide-brush"
+              aria-label="Draw icon"
+            >
+              <path d="m11 10 3 3" />
+              <path d="M6.5 21A3.5 3.5 0 1 0 3 17.5a2.62 2.62 0 0 1-.708 1.792A1 1 0 0 0 3 21z" />
+              <path d="M9.969 17.031 21.378 5.624a1 1 0 0 0-3.002-3.002L6.967 14.031" />
+            </svg>
           </button>
           <button
             type="button"
-            className="lyrics-tools-btn"
+            className="lyrics-tools-btn icon-only"
             onClick={() => {
               if (activeLyricsDocUndoStack.length > 0) {
                 undoActiveLyricsDocAction()
@@ -2200,7 +2359,22 @@ function App() {
             disabled={activeLyricsDocUndoStack.length === 0 && !lyricsUndoState}
             title="Undo last action"
           >
-            Undo
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="44"
+              height="44"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#f3f31a"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="lucide lucide-undo-icon lucide-undo"
+              aria-label="Undo icon"
+            >
+              <path d="M3 7v6h6" />
+              <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+            </svg>
           </button>
         </div>
 
@@ -2237,8 +2411,25 @@ function App() {
                     queueLyricsPrefsUndo()
                     setLyricsGlobalFontScale((current) => Math.max(0.75, current - 0.08))
                   }}
+                  aria-label="Decrease font size"
                 >
-                  A-
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="44"
+                    height="44"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="#f3f31a"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="lucide lucide-aarrow-up-icon lucide-a-arrow-up"
+                  >
+                    <path d="m14 11 4-4 4 4" />
+                    <path d="M18 16V7" />
+                    <path d="m2 16 4.039-9.69a.5.5 0 0 1 .923 0L11 16" />
+                    <path d="M3.304 13h6.392" />
+                  </svg>
                 </button>
                 <button
                   type="button"
@@ -2247,30 +2438,79 @@ function App() {
                     queueLyricsPrefsUndo()
                     setLyricsGlobalFontScale((current) => Math.min(1.8, current + 0.08))
                   }}
+                  aria-label="Increase font size"
                 >
-                  A+
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="44"
+                    height="44"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="#f3f31a"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="lucide lucide-aarrow-down-icon lucide-a-arrow-down"
+                  >
+                    <path d="m14 12 4 4 4-4" />
+                    <path d="M18 16V7" />
+                    <path d="m2 16 4.039-9.69a.5.5 0 0 1 .923 0L11 16" />
+                    <path d="M3.304 13h6.392" />
+                  </svg>
                 </button>
                 <button
                   type="button"
-                  className={`lyrics-tools-btn ${!lyricsCenterAligned ? 'is-active' : ''}`}
+                  className={`lyrics-tools-btn icon-only ${!lyricsCenterAligned ? 'is-active' : ''}`}
                   onClick={() => {
                     queueLyricsPrefsUndo()
                     setLyricsCenterAligned(false)
                   }}
                   title="Left align"
                 >
-                  ☰
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="44"
+                    height="44"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="#f3f31a"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="lucide lucide-text-align-start-icon lucide-text-align-start"
+                    aria-label="Left align icon"
+                  >
+                    <path d="M21 5H3" />
+                    <path d="M15 12H3" />
+                    <path d="M17 19H3" />
+                  </svg>
                 </button>
                 <button
                   type="button"
-                  className={`lyrics-tools-btn ${lyricsCenterAligned ? 'is-active' : ''}`}
+                  className={`lyrics-tools-btn icon-only ${lyricsCenterAligned ? 'is-active' : ''}`}
                   onClick={() => {
                     queueLyricsPrefsUndo()
                     setLyricsCenterAligned(true)
                   }}
                   title="Center align"
                 >
-                  ☷
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="44"
+                    height="44"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="#f3f31a"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="lucide lucide-text-align-center-icon lucide-text-align-center"
+                    aria-label="Center align icon"
+                  >
+                    <path d="M21 5H3" />
+                    <path d="M17 12H7" />
+                    <path d="M19 19H5" />
+                  </svg>
                 </button>
               </div>
               <div className="lyrics-tools-row">
@@ -3203,7 +3443,7 @@ function App() {
   }
 
   const loadBandContext = useCallback(async (userId: string) => {
-    if (!supabase) return
+    if (!supabase) return 0
     const { data: membershipsData, error: membershipsError } = await supabase
       .from('band_memberships')
       .select('*')
@@ -3211,7 +3451,7 @@ function App() {
       .eq('status', 'active')
     if (membershipsError) {
       setSupabaseError(`Band membership load failed: ${membershipsError.message}`)
-      return
+      return 0
     }
     const mappedMemberships: BandMembership[] = (membershipsData ?? []).map((row) => ({
       id: row.id,
@@ -3227,7 +3467,7 @@ function App() {
       setBands([])
       setActiveBandId('')
       setRole(null)
-      return
+      return 0
     }
     const { data: bandsData, error: bandsError } = await supabase
       .from('bands')
@@ -3235,7 +3475,7 @@ function App() {
       .in('id', bandIds)
     if (bandsError) {
       setSupabaseError(`Band load failed: ${bandsError.message}`)
-      return
+      return 0
     }
     const mappedBands: Band[] = (bandsData ?? []).map((row) => ({
       id: row.id,
@@ -3250,6 +3490,7 @@ function App() {
     setActiveBandId(resolvedBandId)
     const membership = mappedMemberships.find((item) => item.bandId === resolvedBandId)
     setRole(membership?.role === 'admin' ? 'admin' : 'user')
+    return mappedBands.length
   }, [])
 
   const createBandAsFirstAdmin = async () => {
@@ -3435,6 +3676,7 @@ function App() {
           return
         }
         if (data.session) {
+          setShowCreateBandOnboarding(true)
           return
         }
         setAuthError('Check your email to confirm signup, then log in.')
@@ -6399,6 +6641,18 @@ function App() {
   }, [activeBandId, memberships])
 
   useEffect(() => {
+    try {
+      localStorage.setItem(BAND_TIER_PREFS_KEY, JSON.stringify(bandTierByBandId))
+    } catch {
+      // Ignore localStorage write failures.
+    }
+  }, [bandTierByBandId])
+
+  useEffect(() => {
+    setAccountBandNameDraft(activeBandName)
+  }, [activeBandName])
+
+  useEffect(() => {
     if (!supabase) return
     let cancelled = false
     let syncToken = 0
@@ -6412,13 +6666,20 @@ function App() {
         setBands([])
         setMemberships([])
         setActiveBandId('')
+        setShowCreateBandOnboarding(false)
+        setBandContextLoading(false)
         setLoginPhase('login')
         return
       }
+      setBandContextLoading(true)
       setLoginPhase('app')
-      await loadBandContext(user.id)
+      const bandCount = await loadBandContext(user.id)
       // Ignore stale async completions when another auth event has fired.
       if (cancelled || token !== syncToken) return
+      setBandContextLoading(false)
+      if (bandCount > 0) {
+        setShowCreateBandOnboarding(false)
+      }
     }
 
     void supabase.auth.getSession().then(({ data }) => {
@@ -6435,6 +6696,29 @@ function App() {
       sub.subscription.unsubscribe()
     }
   }, [loadBandContext])
+
+  const saveActiveBandName = async () => {
+    if (!activeBandId || !authUserId) return
+    const trimmed = accountBandNameDraft.trim()
+    if (!trimmed) {
+      setAccountSaveStatus('Band name cannot be empty.')
+      return
+    }
+    setAccountSaveStatus('')
+    setBands((prev) =>
+      prev.map((band) => (band.id === activeBandId ? { ...band, name: trimmed } : band)),
+    )
+    if (!supabase) {
+      setAccountSaveStatus('Band name saved.')
+      return
+    }
+    const { error } = await supabase.from('bands').update({ name: trimmed }).eq('id', activeBandId)
+    if (error) {
+      setAccountSaveStatus(`Band name update failed: ${error.message}`)
+      return
+    }
+    setAccountSaveStatus('Band name updated.')
+  }
 
   useEffect(() => {
     if (!supabase || !authUserId) return
@@ -8134,7 +8418,7 @@ function App() {
     )
   }
 
-  if (supabase && authUserId && !activeBandId) {
+  if (supabase && authUserId && !activeBandId && !bandContextLoading && showCreateBandOnboarding) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
         <div className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
@@ -9661,6 +9945,110 @@ function App() {
             </div>
           </section>
         )}
+
+        {screen === 'account' && (
+          <section className="flex flex-col gap-6">
+            <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-5">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Account</p>
+                  <h2 className="text-xl font-semibold">Band leader settings</h2>
+                  <p className="text-xs text-slate-400">
+                    Manage your band name and choose a paid tier.
+                  </p>
+                </div>
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => setScreen('setlists')}
+                  aria-label="Back"
+                  title="Back"
+                >
+                  ←
+                </button>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">Band name</div>
+                  <input
+                    className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
+                    placeholder="Band name"
+                    value={accountBandNameDraft}
+                    onChange={(event) => {
+                      setAccountBandNameDraft(event.target.value)
+                      setAccountSaveStatus('')
+                    }}
+                  />
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                      onClick={() => void saveActiveBandName()}
+                      disabled={!activeBandId}
+                    >
+                      Save band name
+                    </button>
+                    {!activeBandId && (
+                      <button
+                        className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                        onClick={() => void createBandAsFirstAdmin()}
+                      >
+                        Create first band
+                      </button>
+                    )}
+                  </div>
+                  {accountSaveStatus && (
+                    <div className="mt-2 text-xs text-slate-300">{accountSaveStatus}</div>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">Paid tiers</div>
+                  <div className="mt-2 grid gap-2 md:grid-cols-3">
+                    {([
+                      {
+                        id: 'free',
+                        name: 'Free',
+                        detail: 'Core setlist tools',
+                      },
+                      {
+                        id: 'pro',
+                        name: 'Pro',
+                        detail: 'Advanced collaboration',
+                      },
+                      {
+                        id: 'business',
+                        name: 'Business',
+                        detail: 'Priority support + team controls',
+                      },
+                    ] as const).map((tier) => (
+                      <button
+                        key={tier.id}
+                        className={`rounded-xl border px-3 py-3 text-left text-sm ${
+                          activeBandTier === tier.id
+                            ? 'border-teal-300 bg-teal-400/10 text-teal-100'
+                            : 'border-white/10 bg-slate-900/70 text-slate-300'
+                        }`}
+                        onClick={() => {
+                          if (!activeBandId) return
+                          setBandTierByBandId((prev) => ({ ...prev, [activeBandId]: tier.id }))
+                          setAccountSaveStatus(
+                            tier.id === 'free'
+                              ? 'Free tier selected.'
+                              : `${tier.name} selected. Billing checkout can be connected next.`,
+                          )
+                        }}
+                        disabled={!activeBandId}
+                      >
+                        <div className="font-semibold">{tier.name}</div>
+                        <div className="mt-1 text-xs text-slate-400">{tier.detail}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
       </main>
 
       <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-white/10 bg-slate-950/90 backdrop-blur">
@@ -9683,6 +10071,14 @@ function App() {
               onClick={() => setScreen('musicians')}
               icon="🎤"
               label="Musicians"
+            />
+          )}
+          {isAdmin && (
+            <NavButton
+              active={screen === 'account'}
+              onClick={() => setScreen('account')}
+              icon="👤"
+              label="Account"
             />
           )}
         </div>
@@ -10044,17 +10440,17 @@ function App() {
           >
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
               <div className="flex items-center justify-between gap-3">
-                <h3 className="text-lg font-semibold">
+                <h3 className="min-w-0 flex-1 truncate text-lg font-semibold">
                   {docModalContent
                     ? docModalContent.type === 'Lyrics'
                       ? 'Song Lyrics'
                       : 'Song Chart'
                     : 'Song documents'}
                 </h3>
-                <div className="flex items-center gap-2">
+                <div className="flex shrink-0 items-center gap-2">
                   {docModalContent && (
                     <button
-                      className="rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
+                      className="icon-header-btn rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
                       onClick={() => {
                         setDocModalContent(null)
                         setDocModalPageIndex(0)
@@ -10066,7 +10462,7 @@ function App() {
                     </button>
                   )}
                 <button
-                  className="rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
+                  className="icon-header-btn rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
                   onClick={() => {
                     setDocModalSongId(null)
                     setDocModalContent(null)
@@ -13783,25 +14179,27 @@ function App() {
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
-              <h3 className="text-lg font-semibold">
-                {activeBuildPanel === 'musicians'
-                  ? 'Assign Musicians'
-                  : activeBuildPanel === 'addSongs'
-                    ? 'Add Songs Not on Setlist'
-                    : activeBuildPanel === 'special'
-                      ? 'Special Requests'
-                      : getSectionFromPanel(activeBuildPanel) ?? 'Setlist'}
-              </h3>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="min-w-0 flex-1 truncate text-lg font-semibold">
+                  {activeBuildPanel === 'musicians'
+                    ? 'Assign Musicians'
+                    : activeBuildPanel === 'addSongs'
+                      ? 'Add Songs Not on Setlist'
+                      : activeBuildPanel === 'special'
+                        ? 'Special Requests'
+                        : getSectionFromPanel(activeBuildPanel) ?? 'Setlist'}
+                </h3>
+                <button
+                  className="icon-header-btn rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => setActiveBuildPanel(null)}
+                  aria-label="Close"
+                  title="Close"
+                >
+                  ✕
+                </button>
+              </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <button
-                    className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                    onClick={() => setActiveBuildPanel(null)}
-                    aria-label={buildPanelDirty ? 'Save' : 'Close'}
-                    title={buildPanelDirty ? 'Save' : 'Close'}
-                  >
-                    {buildPanelDirty ? 'Save' : '✕'}
-                  </button>
                   {activeBuildPanel && (
                     <button
                       className={`flex items-center gap-3 rounded-full border px-4 py-2 text-sm font-semibold ${
@@ -14313,22 +14711,39 @@ function App() {
                           {section}
                         </h3>
                         {!buildCompletion[completionKey] && !gigMode && (
-                          <select
-                            className="w-[170px] shrink-0 rounded-xl border border-white/10 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-200"
-                            onChange={(event) => {
-                              if (event.target.value) {
-                                importSectionFromGig(section, event.target.value)
-                                event.target.value = ''
-                              }
-                            }}
-                          >
-                            <option value="">Import Previous Gig</option>
-                            {recentGigs.map((gig) => (
-                              <option key={gig.id} value={gig.id}>
-                                {gig.gigName} · {gig.date}
-                              </option>
-                            ))}
-                          </select>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <select
+                              className="w-[170px] shrink-0 rounded-xl border border-white/10 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-200"
+                              onChange={(event) => {
+                                if (event.target.value) {
+                                  importSectionFromGig(section, event.target.value)
+                                  event.target.value = ''
+                                }
+                              }}
+                            >
+                              <option value="">Import Previous Gig</option>
+                              {recentGigs.map((gig) => (
+                                <option key={gig.id} value={gig.id}>
+                                  {gig.gigName} · {gig.date}
+                                </option>
+                              ))}
+                            </select>
+                            {starterPasteOpen[section] && (
+                              <button
+                                className="icon-header-btn rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
+                                onClick={() =>
+                                  setStarterPasteOpen((prev) => ({
+                                    ...prev,
+                                    [section]: false,
+                                  }))
+                                }
+                                aria-label="Close"
+                                title="Close"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                       <p className="mt-1 text-xs text-slate-400">
@@ -14342,33 +14757,17 @@ function App() {
                       {!buildCompletion[completionKey] && !gigMode && (
                         <div className="mt-3 space-y-3">
                           <div className="flex items-center gap-2">
-                            {!starterPasteOpen[section] ? (
-                              <button
-                                className="min-w-[170px] whitespace-nowrap rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                                onClick={() =>
-                                  setStarterPasteOpen((prev) => ({
-                                    ...prev,
-                                    [section]: true,
-                                  }))
-                                }
-                              >
-                                Paste starter list
-                              </button>
-                            ) : (
-                              <button
-                                className="min-w-[170px] whitespace-nowrap rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                                onClick={() =>
-                                  setStarterPasteOpen((prev) => ({
-                                    ...prev,
-                                    [section]: false,
-                                  }))
-                                }
-                                aria-label="Close"
-                                title="Close"
-                              >
-                                ✕
-                              </button>
-                            )}
+                            <button
+                              className="min-w-[170px] whitespace-nowrap rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                              onClick={() =>
+                                setStarterPasteOpen((prev) => ({
+                                  ...prev,
+                                  [section]: !prev[section],
+                                }))
+                              }
+                            >
+                              Paste starter list
+                            </button>
                             <button
                               className="inline-flex min-w-[130px] items-center justify-center whitespace-nowrap rounded-xl border border-white/10 px-4 py-2 text-center text-sm font-semibold text-slate-200"
                               onClick={() => openAddSongsForSection(section)}

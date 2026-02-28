@@ -6814,6 +6814,7 @@ function App() {
     if (payloadEncoded) {
       const parsed = parseSharedPlaylistPayload(payloadEncoded)
       if (parsed) {
+        setSharedWelcomeStep('welcome')
         setSharedPlaylistView({
           setlistId: parsed.setlistId || setlistId,
           bandName: parsed.bandName ?? sharedBandNameParam ?? activeBandName ?? 'Band',
@@ -7055,6 +7056,7 @@ function App() {
         })
       })
       const playableEntries = entries.filter((entry) => Boolean(entry.audioUrl && entry.audioUrl.trim()))
+      setSharedWelcomeStep('welcome')
       setSharedPlaylistView({
         setlistId: gig.id,
         bandName: sharedBandName,
@@ -8512,10 +8514,15 @@ function App() {
             </div>
           </div>
         )}
-        {sharedPlaylistView && sharedWelcomeStep !== 'hidden' && (
+        {sharedPlaylistView &&
+          !authUserId &&
+          (sharedWelcomeStep !== 'hidden' ||
+            sharedWelcomeCompletedSetlistId !== sharedPlaylistView.setlistId) && (
           <div className="fixed inset-0 z-[320] flex items-center justify-center bg-slate-950 px-5">
             <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900/95 p-5 text-center">
-              {sharedWelcomeStep === 'welcome' || sharedWelcomeStep === 'welcome-fade' ? (
+              {sharedWelcomeStep === 'welcome' ||
+              sharedWelcomeStep === 'welcome-fade' ||
+              sharedWelcomeStep === 'hidden' ? (
                 <div
                   className={
                     sharedWelcomeStep === 'welcome-fade'

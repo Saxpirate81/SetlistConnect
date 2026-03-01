@@ -694,6 +694,7 @@ function App() {
   const [lyricsActiveColor, setLyricsActiveColor] = useState(LYRICS_COLOR_SWATCHES[0])
   const [lyricsDrawMode, setLyricsDrawMode] = useState(false)
   const [selectedLyricsStrokeId, setSelectedLyricsStrokeId] = useState<string | null>(null)
+  const [showLyricsToolbar, setShowLyricsToolbar] = useState(false)
   const [showFontTools, setShowFontTools] = useState(false)
   const [showEditTools, setShowEditTools] = useState(false)
   const [showDrawTools, setShowDrawTools] = useState(false)
@@ -2041,7 +2042,6 @@ function App() {
     isSharedPublicDocsMode,
   ])
   const isLyricsDoc = docModalContent?.type === 'Lyrics'
-  const isSharedLyricsDoc = Boolean(isSharedPublicDocsMode && isLyricsDoc)
   const sharedLyricsContainerClasses = isLyricsDoc
     ? sharedLyricsTheme === 'light'
       ? 'border-slate-300/80 bg-white text-slate-900'
@@ -2405,17 +2405,86 @@ function App() {
   const renderLyricsTools = useCallback(
     () => (
       <div className="lyrics-tools-shell">
-        <div className="lyrics-tools-bar">
-          <button
-            type="button"
-            className="lyrics-tools-btn icon-only"
-            onClick={() => {
-              queueLyricsPrefsUndo()
-              setSharedLyricsTheme((current) => (current === 'dark' ? 'light' : 'dark'))
-            }}
-            title="Toggle dark/light lyrics mode"
-          >
-            {sharedLyricsTheme === 'dark' ? (
+        <button
+          type="button"
+          className="lyrics-tools-btn"
+          onClick={() => {
+            setShowLyricsToolbar((current) => {
+              const next = !current
+              if (!next) {
+                setShowFontTools(false)
+                setShowEditTools(false)
+                setShowDrawTools(false)
+              }
+              return next
+            })
+          }}
+        >
+          {showLyricsToolbar ? 'Hide tools' : 'Show tools'}
+        </button>
+        {showLyricsToolbar && (
+          <div className="lyrics-tools-bar">
+            <button
+              type="button"
+              className="lyrics-tools-btn icon-only"
+              onClick={() => {
+                queueLyricsPrefsUndo()
+                setSharedLyricsTheme((current) => (current === 'dark' ? 'light' : 'dark'))
+              }}
+              title="Toggle dark/light lyrics mode"
+            >
+              {sharedLyricsTheme === 'dark' ? (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="44"
+                  height="44"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="#f3f31a"
+                  strokeWidth="1.25"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="lucide lucide-sun-icon lucide-sun"
+                  aria-label="Light mode icon"
+                >
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2" />
+                  <path d="M12 20v2" />
+                  <path d="m4.93 4.93 1.41 1.41" />
+                  <path d="m17.66 17.66 1.41 1.41" />
+                  <path d="M2 12h2" />
+                  <path d="M20 12h2" />
+                  <path d="m6.34 17.66-1.41 1.41" />
+                  <path d="m19.07 4.93-1.41 1.41" />
+                </svg>
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="44"
+                  height="44"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="#f3f31a"
+                  strokeWidth="1.25"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="lucide lucide-moon-icon lucide-moon"
+                  aria-label="Dark mode icon"
+                >
+                  <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />
+                </svg>
+              )}
+            </button>
+            <button
+              type="button"
+              className={`lyrics-tools-btn icon-only ${showFontTools ? 'is-active' : ''}`}
+              onClick={() => {
+                setShowFontTools((current) => !current)
+                setShowEditTools(false)
+                setShowDrawTools(false)
+              }}
+              title="Font and layout options"
+            >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 width="44"
@@ -2423,23 +2492,27 @@ function App() {
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="#f3f31a"
-                strokeWidth="1.25"
+                strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="lucide lucide-sun-icon lucide-sun"
-                aria-label="Light mode icon"
+                className="lucide lucide-type-icon lucide-type"
+                aria-label="Edit font icon"
               >
-                <circle cx="12" cy="12" r="4" />
-                <path d="M12 2v2" />
-                <path d="M12 20v2" />
-                <path d="m4.93 4.93 1.41 1.41" />
-                <path d="m17.66 17.66 1.41 1.41" />
-                <path d="M2 12h2" />
-                <path d="M20 12h2" />
-                <path d="m6.34 17.66-1.41 1.41" />
-                <path d="m19.07 4.93-1.41 1.41" />
+                <path d="M12 4v16" />
+                <path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" />
+                <path d="M9 20h6" />
               </svg>
-            ) : (
+            </button>
+            <button
+              type="button"
+              className={`lyrics-tools-btn icon-only ${showEditTools ? 'is-active' : ''}`}
+              onClick={() => {
+                setShowEditTools((current) => !current)
+                setShowFontTools(false)
+                setShowDrawTools(false)
+              }}
+              title="Edit and highlight options"
+            >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 width="44"
@@ -2447,139 +2520,85 @@ function App() {
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="#f3f31a"
-                strokeWidth="1.25"
+                strokeWidth="1.75"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="lucide lucide-moon-icon lucide-moon"
-                aria-label="Dark mode icon"
+                className="lucide lucide-pencil-icon lucide-pencil"
+                aria-label="Edit icon"
               >
-                <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />
+                <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+                <path d="m15 5 4 4" />
               </svg>
-            )}
-          </button>
-          <button
-            type="button"
-            className={`lyrics-tools-btn icon-only ${showFontTools ? 'is-active' : ''}`}
-            onClick={() => {
-              setShowFontTools((current) => !current)
-              setShowEditTools(false)
-              setShowDrawTools(false)
-            }}
-            title="Font and layout options"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="44"
-              height="44"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#f3f31a"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="lucide lucide-type-icon lucide-type"
-              aria-label="Edit font icon"
+            </button>
+            <button
+              type="button"
+              className={`lyrics-tools-btn icon-only ${showDrawTools || lyricsDrawMode ? 'is-active' : ''}`}
+              onClick={() => {
+                setShowDrawTools((current) => !current)
+                setShowEditTools(false)
+                setShowFontTools(false)
+              }}
+              title="Drawing tools"
             >
-              <path d="M12 4v16" />
-              <path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" />
-              <path d="M9 20h6" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className={`lyrics-tools-btn icon-only ${showEditTools ? 'is-active' : ''}`}
-            onClick={() => {
-              setShowEditTools((current) => !current)
-              setShowFontTools(false)
-              setShowDrawTools(false)
-            }}
-            title="Edit and highlight options"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="44"
-              height="44"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#f3f31a"
-              strokeWidth="1.75"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="lucide lucide-pencil-icon lucide-pencil"
-              aria-label="Edit icon"
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="44"
+                height="44"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#f3f31a"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="lucide lucide-brush-icon lucide-brush"
+                aria-label="Draw icon"
+              >
+                <path d="m11 10 3 3" />
+                <path d="M6.5 21A3.5 3.5 0 1 0 3 17.5a2.62 2.62 0 0 1-.708 1.792A1 1 0 0 0 3 21z" />
+                <path d="M9.969 17.031 21.378 5.624a1 1 0 0 0-3.002-3.002L6.967 14.031" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="lyrics-tools-btn icon-only"
+              onClick={() => {
+                if (activeLyricsDocUndoStack.length > 0) {
+                  undoActiveLyricsDocAction()
+                  return
+                }
+                if (!lyricsUndoState) return
+                {
+                  setSharedLyricsTheme(lyricsUndoState.prev.theme)
+                  setSharedLyricsFont(lyricsUndoState.prev.font)
+                  setLyricsGlobalFontScale(lyricsUndoState.prev.fontScale)
+                  setLyricsCenterAligned(lyricsUndoState.prev.centered)
+                }
+                setLyricsUndoState(null)
+              }}
+              disabled={activeLyricsDocUndoStack.length === 0 && !lyricsUndoState}
+              title="Undo last action"
             >
-              <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
-              <path d="m15 5 4 4" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className={`lyrics-tools-btn icon-only ${showDrawTools || lyricsDrawMode ? 'is-active' : ''}`}
-            onClick={() => {
-              setShowDrawTools((current) => !current)
-              setShowEditTools(false)
-              setShowFontTools(false)
-            }}
-            title="Drawing tools"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="44"
-              height="44"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#f3f31a"
-              strokeWidth="1.75"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="lucide lucide-brush-icon lucide-brush"
-              aria-label="Draw icon"
-            >
-              <path d="m11 10 3 3" />
-              <path d="M6.5 21A3.5 3.5 0 1 0 3 17.5a2.62 2.62 0 0 1-.708 1.792A1 1 0 0 0 3 21z" />
-              <path d="M9.969 17.031 21.378 5.624a1 1 0 0 0-3.002-3.002L6.967 14.031" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="lyrics-tools-btn icon-only"
-            onClick={() => {
-              if (activeLyricsDocUndoStack.length > 0) {
-                undoActiveLyricsDocAction()
-                return
-              }
-              if (!lyricsUndoState) return
-              {
-                setSharedLyricsTheme(lyricsUndoState.prev.theme)
-                setSharedLyricsFont(lyricsUndoState.prev.font)
-                setLyricsGlobalFontScale(lyricsUndoState.prev.fontScale)
-                setLyricsCenterAligned(lyricsUndoState.prev.centered)
-              }
-              setLyricsUndoState(null)
-            }}
-            disabled={activeLyricsDocUndoStack.length === 0 && !lyricsUndoState}
-            title="Undo last action"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="44"
-              height="44"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#f3f31a"
-              strokeWidth="1.75"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="lucide lucide-undo-icon lucide-undo"
-              aria-label="Undo icon"
-            >
-              <path d="M3 7v6h6" />
-              <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
-            </svg>
-          </button>
-        </div>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="44"
+                height="44"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#f3f31a"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="lucide lucide-undo-icon lucide-undo"
+                aria-label="Undo icon"
+              >
+                <path d="M3 7v6h6" />
+                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+              </svg>
+            </button>
+          </div>
+        )}
 
-        {showFontTools && (
+        {showLyricsToolbar && showFontTools && (
           <div
             className="lyrics-floating-panel lyrics-floating-panel--font"
             style={{ left: `${lyricsToolPanelPositions.font.x}px`, top: `${lyricsToolPanelPositions.font.y}px` }}
@@ -2714,26 +2733,11 @@ function App() {
                   </svg>
                 </button>
               </div>
-              <div className="lyrics-tools-row">
-                <select
-                  className="lyrics-font-select"
-                  value={sharedLyricsFont}
-                  onChange={(event) => {
-                    queueLyricsPrefsUndo()
-                    const next = event.target.value
-                    setSharedLyricsFont(next === 'serif' || next === 'mono' ? next : 'sans')
-                  }}
-                >
-                  <option value="sans">Sans</option>
-                  <option value="serif">Serif</option>
-                  <option value="mono">Mono</option>
-                </select>
-              </div>
             </div>
           </div>
         )}
 
-        {showEditTools && (
+        {showLyricsToolbar && showEditTools && (
           <div
             className="lyrics-floating-panel lyrics-floating-panel--edit"
             style={{ left: `${lyricsToolPanelPositions.edit.x}px`, top: `${lyricsToolPanelPositions.edit.y}px` }}
@@ -2850,7 +2854,7 @@ function App() {
           </div>
         )}
 
-        {showDrawTools && (
+        {showLyricsToolbar && showDrawTools && (
           <div
             className="lyrics-floating-panel lyrics-floating-panel--draw"
             style={{ left: `${lyricsToolPanelPositions.draw.x}px`, top: `${lyricsToolPanelPositions.draw.y}px` }}
@@ -2985,6 +2989,7 @@ function App() {
       showDrawTools,
       showEditTools,
       showFontTools,
+      showLyricsToolbar,
       sharedLyricsFont,
       updateActiveLyricsDocState,
     ],
@@ -8603,7 +8608,7 @@ function App() {
                   </div>
                 </div>
               </div>
-              <div className="flex-1 min-h-0 overflow-auto px-6 pb-[calc(4.5rem+env(safe-area-inset-bottom))]">
+              <div className="flex-1 min-h-0 overflow-auto px-6 pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
                 {!docModalContent && (
                   <div className="mt-4 space-y-2">
                     {docModalSelectionItems.map((doc) => (
@@ -8649,7 +8654,7 @@ function App() {
                 )}
                 {docModalContent && (
                   <div
-                    className={`relative mt-4 flex h-[calc(100%-1rem)] min-h-0 flex-col rounded-2xl border p-4 ${sharedLyricsContainerClasses}`}
+                    className={`relative mt-2 flex h-full min-h-0 flex-col rounded-2xl border p-4 ${sharedLyricsContainerClasses}`}
                     onTouchStart={(event) => setDocSwipeStartX(event.touches[0]?.clientX ?? null)}
                     onTouchEnd={(event) => {
                       if (docSwipeStartX === null) return
@@ -8660,33 +8665,6 @@ function App() {
                     }}
                   >
                     <div className="mb-3 text-center text-xl font-bold">{docModalContent.title}</div>
-                    {isSharedLyricsDoc && (
-                      <div
-                        className={`mb-3 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs ${
-                          sharedLyricsTheme === 'light'
-                            ? 'border-slate-300 bg-slate-100 text-slate-800'
-                            : 'border-white/15 bg-slate-900/70 text-slate-200'
-                        }`}
-                      >
-                        <label className="ml-1 font-semibold" htmlFor="shared-lyrics-font-public">
-                          Font
-                        </label>
-                        <select
-                          id="shared-lyrics-font-public"
-                          className="rounded-md border border-white/20 bg-transparent px-2 py-1"
-                          value={sharedLyricsFont}
-                          onChange={(event) => {
-                            queueLyricsPrefsUndo()
-                            const next = event.target.value
-                            setSharedLyricsFont(next === 'serif' || next === 'mono' ? next : 'sans')
-                          }}
-                        >
-                          <option value="sans">Sans</option>
-                          <option value="serif">Serif</option>
-                          <option value="mono">Mono</option>
-                        </select>
-                      </div>
-                    )}
                     {renderLyricsTools()}
                     {docModalContent.content ? (
                       <div
@@ -8694,7 +8672,7 @@ function App() {
                       >
                         {lyricsEditMode && isTextLyricsDoc ? (
                           <textarea
-                            className={`h-full w-full resize-none overflow-auto bg-transparent p-3 pb-16 text-sm leading-relaxed outline-none ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
+                            className={`h-full w-full resize-none overflow-auto bg-transparent p-3 pb-4 text-sm leading-relaxed outline-none ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
                             style={{ fontSize: `${lyricsFontSizeRem}rem` }}
                             value={lyricsEditDraft}
                             onChange={(event) => setLyricsEditDraft(event.target.value)}
@@ -8702,7 +8680,7 @@ function App() {
                         ) : (
                           <div
                             ref={lyricsTextContainerRef}
-                            className={`h-full overflow-auto whitespace-pre-wrap p-3 pb-16 text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
+                            className={`h-full overflow-auto whitespace-pre-wrap p-3 pb-4 text-sm leading-relaxed ${sharedLyricsPreClasses} ${sharedLyricsAlignmentClass}`}
                             style={{ fontSize: `${lyricsFontSizeRem}rem` }}
                             onMouseUp={handleLyricsSelectionCapture}
                             onTouchEnd={handleLyricsSelectionCapture}
@@ -11192,7 +11170,7 @@ function App() {
                 </div>
               </div>
             </div>
-            <div className="flex-1 min-h-0 overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
+            <div className="flex-1 min-h-0 overflow-auto px-6 pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
               {!docModalContent && (
                 <div className="mt-4 space-y-2">
                   {docModalSelectionItems.map((doc) => (
@@ -11265,7 +11243,7 @@ function App() {
               )}
               {docModalContent && (
                 <div
-                  className={`relative mt-4 flex h-[calc(100%-1rem)] min-h-0 flex-col rounded-2xl border p-4 ${sharedLyricsContainerClasses}`}
+                  className={`relative mt-2 flex h-full min-h-0 flex-col rounded-2xl border p-4 ${sharedLyricsContainerClasses}`}
                   onTouchStart={(event) => setDocSwipeStartX(event.touches[0]?.clientX ?? null)}
                   onTouchEnd={(event) => {
                     if (docSwipeStartX === null) return
@@ -11276,33 +11254,6 @@ function App() {
                   }}
                 >
                   <div className="mb-3 text-center text-xl font-bold">{docModalContent.title}</div>
-                  {isSharedLyricsDoc && (
-                    <div
-                      className={`mb-3 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs ${
-                        sharedLyricsTheme === 'light'
-                          ? 'border-slate-300 bg-slate-100 text-slate-800'
-                          : 'border-white/15 bg-slate-900/70 text-slate-200'
-                      }`}
-                    >
-                      <label className="ml-1 font-semibold" htmlFor="shared-lyrics-font">
-                        Font
-                      </label>
-                      <select
-                        id="shared-lyrics-font"
-                        className="rounded-md border border-white/20 bg-transparent px-2 py-1"
-                        value={sharedLyricsFont}
-                        onChange={(event) => {
-                          queueLyricsPrefsUndo()
-                          const next = event.target.value
-                          setSharedLyricsFont(next === 'serif' || next === 'mono' ? next : 'sans')
-                        }}
-                      >
-                        <option value="sans">Sans</option>
-                        <option value="serif">Serif</option>
-                        <option value="mono">Mono</option>
-                      </select>
-                    </div>
-                  )}
                   {renderLyricsTools()}
                   {docModalContent.content ? (
                     <div

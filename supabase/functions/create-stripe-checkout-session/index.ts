@@ -20,14 +20,22 @@ if (!SUCCESS_URL) throw new Error('Missing STRIPE_CHECKOUT_SUCCESS_URL')
 if (!CANCEL_URL) throw new Error('Missing STRIPE_CHECKOUT_CANCEL_URL')
 
 const stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' })
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+}
 
 const json = (payload: unknown, status = 200) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { ...corsHeaders, 'content-type': 'application/json' },
   })
 
 Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
 
   try {

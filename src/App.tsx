@@ -1241,7 +1241,7 @@ function App() {
     selectedTier && tierRank[selectedTier] < tierRank[activeBandTier],
   )
   const isFreeTier = activeBandTier === 'free'
-  const canAccessBillingControls = isAdmin && Boolean(activeBandId)
+  const canAccessBillingControls = isAdmin && Boolean(activeBandId) && Boolean(authUserId)
   const stripeProCheckoutUrl = String(import.meta.env.VITE_STRIPE_CHECKOUT_PRO_URL ?? '').trim()
   const stripeAgencyCheckoutUrl = String(import.meta.env.VITE_STRIPE_CHECKOUT_AGENCY_URL ?? '').trim()
   const stripePortalUrl = String(import.meta.env.VITE_STRIPE_CUSTOMER_PORTAL_URL ?? '').trim()
@@ -1347,6 +1347,11 @@ function App() {
       return
     }
     if (supabase) {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError || !sessionData.session?.access_token) {
+        setAccountSaveStatus('Your login session expired. Please sign out and log back in to manage billing.')
+        return
+      }
       const { data, error } = await supabase.functions.invoke('create-stripe-checkout-session', {
         body: { bandId: activeBandId, tier: targetTier },
       })
@@ -1362,9 +1367,10 @@ function App() {
         setAccountSaveStatus(`Opening ${targetTier === 'agency' ? 'Agency' : 'Pro'} checkout...`)
         return
       }
-      if (error) {
-        setAccountSaveStatus(`Checkout setup failed: ${error.message ?? 'Unknown error'}`)
-      }
+      setAccountSaveStatus(
+        `Checkout setup failed: ${error?.message ?? 'No checkout URL returned from billing service.'}`,
+      )
+      return
     }
     openStripeUrl(targetTier === 'pro' ? stripeProCheckoutUrl : stripeAgencyCheckoutUrl, targetTier)
   }, [
@@ -1384,6 +1390,11 @@ function App() {
       return
     }
     if (supabase) {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError || !sessionData.session?.access_token) {
+        setAccountSaveStatus('Your login session expired. Please sign out and log back in to manage billing.')
+        return
+      }
       const { data, error } = await supabase.functions.invoke('create-stripe-portal-session', {
         body: { bandId: activeBandId },
       })
@@ -1399,9 +1410,10 @@ function App() {
         setAccountSaveStatus('Opening billing portal...')
         return
       }
-      if (error) {
-        setAccountSaveStatus(`Billing portal failed: ${error.message ?? 'Unknown error'}`)
-      }
+      setAccountSaveStatus(
+        `Billing portal failed: ${error?.message ?? 'No portal URL returned from billing service.'}`,
+      )
+      return
     }
     openStripeUrl(stripePortalUrl)
   }, [activeBandId, canAccessBillingControls, openStripeUrl, stripePortalUrl])

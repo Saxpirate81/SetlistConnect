@@ -243,6 +243,60 @@ const ACTIVE_BAND_KEY = 'setlist:activeBandId'
 const FREE_TIER_MAX_SONGS = 50
 const FREE_TIER_MAX_MUSICIANS = 10
 const FREE_TIER_MAX_ACTIVE_GIGS = 2
+const BAND_TIER_DETAILS: Record<
+  BandTier,
+  {
+    name: string
+    summary: string
+    includes: string[]
+  }
+> = {
+  free: {
+    name: 'Free',
+    summary: 'Best for getting started',
+    includes: [
+      `Up to ${FREE_TIER_MAX_SONGS} songs`,
+      `Up to ${FREE_TIER_MAX_MUSICIANS} musicians`,
+      `Up to ${FREE_TIER_MAX_ACTIVE_GIGS} active gigs`,
+      'Core setlist builder',
+      'Special request tracking',
+      'Shareable gig view',
+    ],
+  },
+  pro: {
+    name: 'Pro',
+    summary: 'Best for active working bands',
+    includes: [
+      'Unlimited songs',
+      'Unlimited musicians',
+      'Unlimited active gigs',
+      'Core setlist builder',
+      'Special request tracking',
+      'Shareable gig view',
+      'Advanced collaboration tools',
+      'Priority support',
+      'Team billing management',
+    ],
+  },
+  agency: {
+    name: 'Agency',
+    summary: 'Best for larger organizations',
+    includes: [
+      'Unlimited songs',
+      'Unlimited musicians',
+      'Unlimited active gigs',
+      'Core setlist builder',
+      'Special request tracking',
+      'Shareable gig view',
+      'Advanced collaboration tools',
+      'Priority support',
+      'Team billing management',
+      'Multi-band agency controls',
+      'Expanded admin controls',
+      'White-glove onboarding',
+    ],
+  },
+}
 const GIG_LOCKED_SONGS_KEY = 'setlist:gigLockedSongs'
 const GIG_LAST_LOCKED_SONG_KEY = 'setlist:gigLastLockedSong'
 const SHARED_LYRICS_THEME_KEY = 'setlist:sharedLyricsTheme'
@@ -360,6 +414,7 @@ function App() {
     resource: 'songs' | 'musicians' | 'gigs'
     message: string
   } | null>(null)
+  const [showTierDetailsModal, setShowTierDetailsModal] = useState<BandTier | null>(null)
   const [showTeamModal, setShowTeamModal] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<'member' | 'admin'>('member')
@@ -792,6 +847,7 @@ function App() {
   const [gigSongSectionOverrides, setGigSongSectionOverrides] = useState<
     Record<string, Record<string, string>>
   >({})
+  const [authEntryView, setAuthEntryView] = useState<'home' | 'auth'>('home')
   const [authIntroPhase, setAuthIntroPhase] = useState<'welcome' | 'fading' | 'login'>('welcome')
   const [showAuthLearnMore, setShowAuthLearnMore] = useState(false)
   const [, setLoginPhase] = useState<'login' | 'transition' | 'app'>('login')
@@ -1167,6 +1223,27 @@ function App() {
   const activeBandTier: BandTier = activeBandId
     ? (bandSubscriptionTierByBandId[activeBandId] ?? 'free')
     : 'free'
+  const tierRank: Record<BandTier, number> = { free: 0, pro: 1, agency: 2 }
+  const selectedTier = showTierDetailsModal
+  const selectedTierDetails = selectedTier ? BAND_TIER_DETAILS[selectedTier] : null
+  const currentTierDetails = BAND_TIER_DETAILS[activeBandTier]
+  const tierGainItems = useMemo(() => {
+    if (!selectedTierDetails) return []
+    const currentSet = new Set(currentTierDetails.includes)
+    return selectedTierDetails.includes.filter((item) => !currentSet.has(item))
+  }, [currentTierDetails.includes, selectedTierDetails])
+  const tierLoseItems = useMemo(() => {
+    if (!selectedTierDetails) return []
+    const selectedSet = new Set(selectedTierDetails.includes)
+    return currentTierDetails.includes.filter((item) => !selectedSet.has(item))
+  }, [currentTierDetails.includes, selectedTierDetails])
+  const isSelectedCurrentTier = Boolean(selectedTier && selectedTier === activeBandTier)
+  const isSelectedUpgrade = Boolean(
+    selectedTier && tierRank[selectedTier] > tierRank[activeBandTier],
+  )
+  const isSelectedDowngrade = Boolean(
+    selectedTier && tierRank[selectedTier] < tierRank[activeBandTier],
+  )
   const isFreeTier = activeBandTier === 'free'
   const canAccessBillingControls = isAdmin && Boolean(activeBandId)
   const stripeProCheckoutUrl = String(import.meta.env.VITE_STRIPE_CHECKOUT_PRO_URL ?? '').trim()
@@ -7841,8 +7918,17 @@ function App() {
   useEffect(() => {
     let fadeTimer: number | null = null
     if (!isAuthScreen) {
+      setAuthEntryView('home')
       setAuthIntroPhase('welcome')
       setShowAuthLearnMore(false)
+      if (authIntroTimerRef.current) {
+        window.clearTimeout(authIntroTimerRef.current)
+        authIntroTimerRef.current = null
+      }
+      return
+    }
+    if (authEntryView !== 'auth') {
+      setAuthIntroPhase('welcome')
       if (authIntroTimerRef.current) {
         window.clearTimeout(authIntroTimerRef.current)
         authIntroTimerRef.current = null
@@ -7869,7 +7955,7 @@ function App() {
         window.clearTimeout(fadeTimer)
       }
     }
-  }, [isAuthScreen])
+  }, [authEntryView, isAuthScreen])
 
   useEffect(() => {
     if (isAuthScreen) {
@@ -7883,6 +7969,7 @@ function App() {
       Boolean(audioModalUrl) ||
       showDeleteGigConfirm ||
       Boolean(showTierLimitModal) ||
+      Boolean(showTierDetailsModal) ||
       Boolean(activeBuildPanel) ||
       Boolean(editingSongId) ||
       Boolean(singerModalSongId) ||
@@ -7914,6 +8001,7 @@ function App() {
     role,
     showDeleteGigConfirm,
     showTierLimitModal,
+    showTierDetailsModal,
     activeBuildPanel,
     editingSongId,
     singerModalSongId,
@@ -8778,141 +8866,207 @@ function App() {
       <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white opacity-100">
         <div className="pointer-events-none absolute -left-16 top-16 h-52 w-52 rounded-full bg-cyan-400/20 blur-3xl" />
         <div className="pointer-events-none absolute -right-16 bottom-16 h-64 w-64 rounded-full bg-fuchsia-400/20 blur-3xl" />
-        <div className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
-          <div
-            className={`transition-all duration-500 ${
-              authIntroPhase === 'login'
-                ? 'pointer-events-auto translate-y-0 opacity-100'
-                : 'pointer-events-none translate-y-4 opacity-0'
-            }`}
-          >
-            <p className="text-sm uppercase tracking-[0.3em] text-teal-300/80">
-              Setlist Connect
-            </p>
-            <h1 className="mt-2 text-3xl font-semibold">Welcome back</h1>
-            <p className="mt-2 text-sm text-slate-300">
-              Sign in with your account to access your band workspace.
-            </p>
-            <form
-              className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur"
-              autoComplete="on"
-              noValidate
-              onSubmit={(event) => {
-                event.preventDefault()
-                void handleLogin()
-              }}
-            >
-              {supabase ? (
-                <>
-                  <label className="text-xs uppercase tracking-wide text-slate-400">
-                    Email
-                  </label>
-                  <input
-                    className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
-                    placeholder="you@band.com"
-                    value={authEmail}
-                    onChange={(event) => setAuthEmail(event.target.value)}
-                    type="email"
-                    autoComplete="email"
-                    inputMode="email"
-                  />
-                  <label className="mt-3 block text-xs uppercase tracking-wide text-slate-400">
-                    Password
-                  </label>
-                  <input
-                    className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
-                    placeholder="Enter password"
-                    value={authPassword}
-                    onChange={(event) => setAuthPassword(event.target.value)}
-                    type="password"
-                    autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
-                  />
-                </>
-              ) : (
-                <>
-                  <label className="text-xs uppercase tracking-wide text-slate-400">
-                    Password
-                  </label>
-                  <input
-                    className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
-                    placeholder="Enter shared password"
-                    value={loginInput}
-                    onChange={(event) => setLoginInput(event.target.value)}
-                    type="password"
-                    autoComplete="current-password"
-                  />
-                </>
-              )}
-              <button
-                type="submit"
-                disabled={authLoading}
-                className={`mt-4 w-full rounded-xl bg-teal-400/90 py-3 font-semibold text-slate-950 ${
-                  authLoading ? 'cursor-not-allowed opacity-70' : ''
-                }`}
-              >
-                {authLoading
-                  ? 'Please wait...'
-                  : !supabase
-                  ? 'Login'
-                  : authMode === 'signup'
-                  ? 'Create account'
-                  : 'Login'}
-              </button>
-              {supabase && (
+        <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col justify-center px-6 py-8">
+          {authEntryView === 'home' ? (
+            <div className="rounded-3xl border border-white/10 bg-white/5 p-7 shadow-[0_24px_90px_rgba(8,145,178,0.18)] backdrop-blur">
+              <p className="text-xs uppercase tracking-[0.32em] text-teal-300/85">Setlist Connect</p>
+              <h1 className="mt-3 text-4xl font-semibold leading-tight">
+                Your band&apos;s modern live setlist workspace
+              </h1>
+              <p className="mt-4 max-w-2xl text-sm text-slate-300">
+                Organize songs, assign musicians, handle special requests, and run performances from one clean app built for busy gig days.
+              </p>
+              <div className="mt-6 flex flex-wrap gap-3">
                 <button
                   type="button"
-                  className="mt-3 w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
-                  onClick={() => setAuthMode((current) => (current === 'login' ? 'signup' : 'login'))}
+                  className="rounded-xl bg-teal-400/90 px-5 py-2.5 text-sm font-semibold text-slate-950"
+                  onClick={() => {
+                    setAuthMode('login')
+                    setAuthEntryView('auth')
+                  }}
                 >
-                  {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
+                  Get started
                 </button>
-              )}
-              <button
-                type="button"
-                className="mt-3 w-full rounded-xl border border-cyan-300/30 bg-cyan-400/10 py-2 text-sm font-semibold text-cyan-100"
-                onClick={() => setShowAuthLearnMore(true)}
-              >
-                Learn more
-              </button>
-              {authMode === 'signup' && sharedSignupReturnView && (
-                <div className="mt-3 grid grid-cols-1 gap-2">
-                  <button
-                    type="button"
-                    className="w-full rounded-xl border border-white/10 py-2 text-sm font-semibold text-slate-200"
-                    onClick={() => restoreSharedViewFromSignup(false)}
-                  >
-                    Go back to previous view
-                  </button>
-                  <button
-                    type="button"
-                    className="w-full rounded-xl border border-emerald-300/40 bg-emerald-400/10 py-2 text-sm font-semibold text-emerald-100"
-                    onClick={() => restoreSharedViewFromSignup(true)}
-                  >
-                    Skip and go to gig view
-                  </button>
+                <button
+                  type="button"
+                  className="rounded-xl border border-white/15 px-5 py-2.5 text-sm font-semibold text-slate-100"
+                  onClick={() => {
+                    setAuthMode('signup')
+                    setAuthEntryView('auth')
+                  }}
+                >
+                  Create account
+                </button>
+                <button
+                  type="button"
+                  className="rounded-xl border border-cyan-300/30 bg-cyan-400/10 px-5 py-2.5 text-sm font-semibold text-cyan-100"
+                  onClick={() => setShowAuthLearnMore(true)}
+                >
+                  Learn more
+                </button>
+              </div>
+              <div className="mt-8 grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-teal-200">Build faster</p>
+                  <p className="mt-2 text-sm text-slate-300">Create and duplicate gigs with organized sections and drag-and-drop flow.</p>
                 </div>
-              )}
-              {authError && <div className="mt-3 text-xs text-red-200">{authError}</div>}
-            </form>
-          </div>
-
-          <div
-            className={`absolute inset-0 flex items-center justify-center px-6 transition-all duration-500 ${
-              authIntroPhase === 'welcome'
-                ? 'opacity-100'
-                : authIntroPhase === 'fading'
-                ? 'opacity-0'
-                : 'pointer-events-none opacity-0'
-            }`}
-          >
-            <div className="w-full max-w-sm rounded-3xl border border-white/15 bg-slate-900/70 p-7 text-center shadow-[0_20px_80px_rgba(6,182,212,0.2)] backdrop-blur-xl">
-              <p className="text-[11px] uppercase tracking-[0.28em] text-teal-200/90">Setlist Connect</p>
-              <h2 className="mt-3 text-3xl font-semibold leading-tight">Welcome to your next gig flow</h2>
-              <p className="mt-3 text-sm text-slate-300">
-                Build, organize, and run live setlists with your team in one clean workspace.
-              </p>
+                <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-teal-200">Stay in sync</p>
+                  <p className="mt-2 text-sm text-slate-300">Share musician-ready views and keep the whole team aligned in real time.</p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-teal-200">Run live gigs</p>
+                  <p className="mt-2 text-sm text-slate-300">Track songs, keys, and special requests without the usual show-day chaos.</p>
+                </div>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="mx-auto w-full max-w-md">
+              <div
+                className={`transition-all duration-500 ${
+                  authIntroPhase === 'login'
+                    ? 'pointer-events-auto translate-y-0 opacity-100'
+                    : 'pointer-events-none translate-y-4 opacity-0'
+                }`}
+              >
+                <p className="text-sm uppercase tracking-[0.3em] text-teal-300/80">
+                  Setlist Connect
+                </p>
+                <h1 className="mt-2 text-3xl font-semibold">Welcome back</h1>
+                <p className="mt-2 text-sm text-slate-300">
+                  Sign in with your account to access your band workspace.
+                </p>
+                <form
+                  className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur"
+                  autoComplete="on"
+                  noValidate
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void handleLogin()
+                  }}
+                >
+                  {supabase ? (
+                    <>
+                      <label className="text-xs uppercase tracking-wide text-slate-400">
+                        Email
+                      </label>
+                      <input
+                        className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
+                        placeholder="you@band.com"
+                        value={authEmail}
+                        onChange={(event) => setAuthEmail(event.target.value)}
+                        type="email"
+                        autoComplete="email"
+                        inputMode="email"
+                      />
+                      <label className="mt-3 block text-xs uppercase tracking-wide text-slate-400">
+                        Password
+                      </label>
+                      <input
+                        className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
+                        placeholder="Enter password"
+                        value={authPassword}
+                        onChange={(event) => setAuthPassword(event.target.value)}
+                        type="password"
+                        autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <label className="text-xs uppercase tracking-wide text-slate-400">
+                        Password
+                      </label>
+                      <input
+                        className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
+                        placeholder="Enter shared password"
+                        value={loginInput}
+                        onChange={(event) => setLoginInput(event.target.value)}
+                        type="password"
+                        autoComplete="current-password"
+                      />
+                    </>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className={`mt-4 w-full rounded-xl bg-teal-400/90 py-3 font-semibold text-slate-950 ${
+                      authLoading ? 'cursor-not-allowed opacity-70' : ''
+                    }`}
+                  >
+                    {authLoading
+                      ? 'Please wait...'
+                      : !supabase
+                      ? 'Login'
+                      : authMode === 'signup'
+                      ? 'Create account'
+                      : 'Login'}
+                  </button>
+                  {supabase && (
+                    <button
+                      type="button"
+                      className="mt-3 w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
+                      onClick={() => setAuthMode((current) => (current === 'login' ? 'signup' : 'login'))}
+                    >
+                      {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="mt-3 w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
+                    onClick={() => setAuthEntryView('home')}
+                  >
+                    Back to home
+                  </button>
+                  <button
+                    type="button"
+                    className="mt-3 w-full rounded-xl border border-cyan-300/30 bg-cyan-400/10 py-2 text-sm font-semibold text-cyan-100"
+                    onClick={() => setShowAuthLearnMore(true)}
+                  >
+                    Learn more
+                  </button>
+                  {authMode === 'signup' && sharedSignupReturnView && (
+                    <div className="mt-3 grid grid-cols-1 gap-2">
+                      <button
+                        type="button"
+                        className="w-full rounded-xl border border-white/10 py-2 text-sm font-semibold text-slate-200"
+                        onClick={() => restoreSharedViewFromSignup(false)}
+                      >
+                        Go back to previous view
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full rounded-xl border border-emerald-300/40 bg-emerald-400/10 py-2 text-sm font-semibold text-emerald-100"
+                        onClick={() => restoreSharedViewFromSignup(true)}
+                      >
+                        Skip and go to gig view
+                      </button>
+                    </div>
+                  )}
+                  {authError && <div className="mt-3 text-xs text-red-200">{authError}</div>}
+                </form>
+              </div>
+            </div>
+          )}
+
+          {authEntryView === 'auth' && (
+            <div
+              className={`absolute inset-0 flex items-center justify-center px-6 transition-all duration-500 ${
+                authIntroPhase === 'welcome'
+                  ? 'opacity-100'
+                  : authIntroPhase === 'fading'
+                  ? 'opacity-0'
+                  : 'pointer-events-none opacity-0'
+              }`}
+            >
+              <div className="w-full max-w-sm rounded-3xl border border-white/15 bg-slate-900/70 p-7 text-center shadow-[0_20px_80px_rgba(6,182,212,0.2)] backdrop-blur-xl">
+                <p className="text-[11px] uppercase tracking-[0.28em] text-teal-200/90">Setlist Connect</p>
+                <h2 className="mt-3 text-3xl font-semibold leading-tight">Welcome to your next gig flow</h2>
+                <p className="mt-3 text-sm text-slate-300">
+                  Build, organize, and run live setlists with your team in one clean workspace.
+                </p>
+              </div>
+            </div>
+          )}
 
           {showAuthLearnMore && (
             <div
@@ -10551,17 +10705,19 @@ function App() {
                         detail: 'Multi-team scale and account controls',
                       },
                     ] as const).map((tier) => (
-                      <div
+                      <button
+                        type="button"
                         key={tier.id}
                         className={`rounded-xl border px-3 py-3 text-left text-sm ${
                           activeBandTier === tier.id
                             ? 'border-teal-300 bg-teal-400/10 text-teal-100'
-                            : 'border-white/10 bg-slate-900/70 text-slate-300'
+                            : 'border-white/10 bg-slate-900/70 text-slate-300 hover:border-cyan-300/40'
                         }`}
+                        onClick={() => setShowTierDetailsModal(tier.id)}
                       >
                         <div className="font-semibold">{tier.name}</div>
                         <div className="mt-1 text-xs text-slate-400">{tier.detail}</div>
-                      </div>
+                      </button>
                     ))}
                   </div>
                   <div className="mt-3 text-xs text-slate-400">
@@ -11618,6 +11774,100 @@ function App() {
                   Delete gig
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTierDetailsModal && selectedTierDetails && (
+        <div
+          className="fixed inset-0 z-[109] flex items-center justify-center bg-slate-950/85 px-4 py-6"
+          onClick={() => setShowTierDetailsModal(null)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-3xl border border-white/10 bg-slate-900 p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.24em] text-teal-300/80">Plan details</p>
+                <h3 className="mt-2 text-2xl font-semibold">{selectedTierDetails.name}</h3>
+                <p className="mt-1 text-sm text-slate-300">{selectedTierDetails.summary}</p>
+              </div>
+              <button
+                type="button"
+                className="rounded-xl border border-white/10 px-3 py-1.5 text-sm text-slate-200"
+                onClick={() => setShowTierDetailsModal(null)}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-400">What&apos;s included</p>
+              <div className="mt-2 grid gap-1 text-sm text-slate-200 md:grid-cols-2">
+                {selectedTierDetails.includes.map((item) => (
+                  <p key={`tier-include-${item}`}>• {item}</p>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <div className="rounded-2xl border border-emerald-300/20 bg-emerald-400/10 p-3">
+                <p className="text-xs uppercase tracking-wide text-emerald-200">You gain</p>
+                <div className="mt-2 space-y-1 text-sm text-emerald-100">
+                  {tierGainItems.length > 0
+                    ? tierGainItems.map((item) => <p key={`gain-${item}`}>+ {item}</p>)
+                    : <p>No additional features beyond your current plan.</p>}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 p-3">
+                <p className="text-xs uppercase tracking-wide text-amber-200">You lose</p>
+                <div className="mt-2 space-y-1 text-sm text-amber-100">
+                  {tierLoseItems.length > 0
+                    ? tierLoseItems.map((item) => <p key={`lose-${item}`}>- {item}</p>)
+                    : <p>No feature loss from your current plan.</p>}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              {isSelectedCurrentTier ? (
+                <button
+                  type="button"
+                  className="rounded-xl border border-teal-300/40 bg-teal-400/10 px-4 py-2 text-sm font-semibold text-teal-100"
+                  disabled
+                >
+                  Current plan
+                </button>
+              ) : isSelectedUpgrade && selectedTier && selectedTier !== 'free' ? (
+                <button
+                  type="button"
+                  className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                  onClick={() => {
+                    void openStripeCheckout(selectedTier)
+                    setShowTierDetailsModal(null)
+                  }}
+                  disabled={!canAccessBillingControls}
+                >
+                  Upgrade to {selectedTierDetails.name}
+                </button>
+              ) : isSelectedDowngrade ? (
+                <button
+                  type="button"
+                  className="rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold text-slate-100"
+                  onClick={() => {
+                    openStripeUrl(stripePortalUrl)
+                    setShowTierDetailsModal(null)
+                  }}
+                  disabled={!canAccessBillingControls || !stripePortalUrl}
+                >
+                  {selectedTier === 'free' ? 'Downgrade to Free' : `Switch to ${selectedTierDetails.name}`} in billing
+                </button>
+              ) : null}
+              {!canAccessBillingControls && (
+                <span className="text-xs text-slate-400">Only band admins can change billing plans.</span>
+              )}
             </div>
           </div>
         </div>

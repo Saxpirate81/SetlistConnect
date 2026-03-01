@@ -8869,6 +8869,11 @@ function App() {
         <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col justify-center px-6 py-8">
           {authEntryView === 'home' ? (
             <div className="rounded-3xl border border-white/10 bg-white/5 p-7 shadow-[0_24px_90px_rgba(8,145,178,0.18)] backdrop-blur">
+              <img
+                src={setlistConnectLogo}
+                alt="Setlist Connect"
+                className="h-16 w-auto object-contain"
+              />
               <p className="text-xs uppercase tracking-[0.32em] text-teal-300/85">Setlist Connect</p>
               <h1 className="mt-3 text-4xl font-semibold leading-tight">
                 Your band&apos;s modern live setlist workspace
@@ -8906,15 +8911,24 @@ function App() {
                 </button>
               </div>
               <div className="mt-8 grid gap-3 md:grid-cols-3">
-                <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
+                <div className="relative overflow-visible rounded-2xl border border-white/10 bg-slate-900/70 p-4">
+                  <span className="pointer-events-none absolute -right-3 -top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-200/60 bg-emerald-400 text-base font-extrabold text-slate-950 shadow-[0_10px_25px_rgba(16,185,129,0.45)]">
+                    ✓
+                  </span>
                   <p className="text-xs uppercase tracking-wide text-teal-200">Build faster</p>
                   <p className="mt-2 text-sm text-slate-300">Create and duplicate gigs with organized sections and drag-and-drop flow.</p>
                 </div>
-                <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
+                <div className="relative overflow-visible rounded-2xl border border-white/10 bg-slate-900/70 p-4">
+                  <span className="pointer-events-none absolute -right-3 -top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-cyan-200/60 bg-cyan-400 text-base font-extrabold text-slate-950 shadow-[0_10px_25px_rgba(34,211,238,0.45)]">
+                    ✓
+                  </span>
                   <p className="text-xs uppercase tracking-wide text-teal-200">Stay in sync</p>
                   <p className="mt-2 text-sm text-slate-300">Share musician-ready views and keep the whole team aligned in real time.</p>
                 </div>
-                <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
+                <div className="relative overflow-visible rounded-2xl border border-white/10 bg-slate-900/70 p-4">
+                  <span className="pointer-events-none absolute -right-3 -top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-fuchsia-200/60 bg-fuchsia-400 text-base font-extrabold text-slate-950 shadow-[0_10px_25px_rgba(232,121,249,0.45)]">
+                    ✓
+                  </span>
                   <p className="text-xs uppercase tracking-wide text-teal-200">Run live gigs</p>
                   <p className="mt-2 text-sm text-slate-300">Track songs, keys, and special requests without the usual show-day chaos.</p>
                 </div>

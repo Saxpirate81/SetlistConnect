@@ -1245,6 +1245,8 @@ function App() {
   const stripeProCheckoutUrl = String(import.meta.env.VITE_STRIPE_CHECKOUT_PRO_URL ?? '').trim()
   const stripeAgencyCheckoutUrl = String(import.meta.env.VITE_STRIPE_CHECKOUT_AGENCY_URL ?? '').trim()
   const stripePortalUrl = String(import.meta.env.VITE_STRIPE_CUSTOMER_PORTAL_URL ?? '').trim()
+  const supabaseFunctionsBaseUrl = String(import.meta.env.VITE_SUPABASE_URL ?? '').replace(/\/$/, '')
+  const supabaseAnonPublicKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim()
   const activeGigCount = appState.setlists.length
   const songCount = appState.songs.length
   const musicianCount = appState.musicians.length
@@ -1353,16 +1355,30 @@ function App() {
         return
       }
       const accessToken = sessionData.session.access_token
-      const { data, error } = await supabase.functions.invoke('create-stripe-checkout-session', {
-        body: { bandId: activeBandId, tier: targetTier },
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
+      if (!supabaseFunctionsBaseUrl || !supabaseAnonPublicKey) {
+        setAccountSaveStatus('Supabase billing endpoint is not configured. Please contact support.')
+        return
+      }
+      const response = await fetch(
+        `${supabaseFunctionsBaseUrl}/functions/v1/create-stripe-checkout-session`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            apikey: supabaseAnonPublicKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ bandId: activeBandId, tier: targetTier }),
         },
-      })
-      const checkoutUrl = (
-        data && typeof data === 'object' && 'url' in data ? (data as { url?: string }).url : ''
-      ) ?? ''
-      if (!error && checkoutUrl) {
+      )
+      let payload: { url?: string; error?: string } | null = null
+      try {
+        payload = await response.json()
+      } catch {
+        payload = null
+      }
+      const checkoutUrl = String(payload?.url ?? '').trim()
+      if (response.ok && checkoutUrl) {
         const opened = window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
         if (!opened) {
           setAccountSaveStatus('Popup blocked. Allow popups for this site and try again.')
@@ -1372,7 +1388,7 @@ function App() {
         return
       }
       setAccountSaveStatus(
-        `Checkout setup failed: ${error?.message ?? 'No checkout URL returned from billing service.'}`,
+        `Checkout setup failed: ${payload?.error ?? `Request failed (${response.status}).`}`,
       )
       return
     }
@@ -1381,6 +1397,8 @@ function App() {
     activeBandId,
     canAccessBillingControls,
     openStripeUrl,
+    supabaseAnonPublicKey,
+    supabaseFunctionsBaseUrl,
     stripeAgencyCheckoutUrl,
     stripeProCheckoutUrl,
   ])
@@ -1400,16 +1418,30 @@ function App() {
         return
       }
       const accessToken = sessionData.session.access_token
-      const { data, error } = await supabase.functions.invoke('create-stripe-portal-session', {
-        body: { bandId: activeBandId },
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
+      if (!supabaseFunctionsBaseUrl || !supabaseAnonPublicKey) {
+        setAccountSaveStatus('Supabase billing endpoint is not configured. Please contact support.')
+        return
+      }
+      const response = await fetch(
+        `${supabaseFunctionsBaseUrl}/functions/v1/create-stripe-portal-session`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            apikey: supabaseAnonPublicKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ bandId: activeBandId }),
         },
-      })
-      const portalUrl = (
-        data && typeof data === 'object' && 'url' in data ? (data as { url?: string }).url : ''
-      ) ?? ''
-      if (!error && portalUrl) {
+      )
+      let payload: { url?: string; error?: string } | null = null
+      try {
+        payload = await response.json()
+      } catch {
+        payload = null
+      }
+      const portalUrl = String(payload?.url ?? '').trim()
+      if (response.ok && portalUrl) {
         const opened = window.open(portalUrl, '_blank', 'noopener,noreferrer')
         if (!opened) {
           setAccountSaveStatus('Popup blocked. Allow popups for this site and try again.')
@@ -1419,12 +1451,19 @@ function App() {
         return
       }
       setAccountSaveStatus(
-        `Billing portal failed: ${error?.message ?? 'No portal URL returned from billing service.'}`,
+        `Billing portal failed: ${payload?.error ?? `Request failed (${response.status}).`}`,
       )
       return
     }
     openStripeUrl(stripePortalUrl)
-  }, [activeBandId, canAccessBillingControls, openStripeUrl, stripePortalUrl])
+  }, [
+    activeBandId,
+    canAccessBillingControls,
+    openStripeUrl,
+    stripePortalUrl,
+    supabaseAnonPublicKey,
+    supabaseFunctionsBaseUrl,
+  ])
   const isSpecialSectionHidden = currentSetlist
     ? Boolean(gigHiddenSpecialSection[currentSetlist.id])
     : false

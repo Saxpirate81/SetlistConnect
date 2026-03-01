@@ -1338,7 +1338,14 @@ function App() {
     }
   }, [activeBandId])
   const openStripeCheckout = useCallback(async (targetTier: Extract<BandTier, 'pro' | 'agency'>) => {
-    if (!activeBandId || !canAccessBillingControls) return
+    if (!activeBandId) {
+      setAccountSaveStatus('Select or create a band before managing billing.')
+      return
+    }
+    if (!canAccessBillingControls) {
+      setAccountSaveStatus('Only band admins can manage billing.')
+      return
+    }
     if (supabase) {
       const { data, error } = await supabase.functions.invoke('create-stripe-checkout-session', {
         body: { bandId: activeBandId, tier: targetTier },
@@ -1347,9 +1354,16 @@ function App() {
         data && typeof data === 'object' && 'url' in data ? (data as { url?: string }).url : ''
       ) ?? ''
       if (!error && checkoutUrl) {
-        window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
+        const opened = window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
+        if (!opened) {
+          setAccountSaveStatus('Popup blocked. Allow popups for this site and try again.')
+          return
+        }
         setAccountSaveStatus(`Opening ${targetTier === 'agency' ? 'Agency' : 'Pro'} checkout...`)
         return
+      }
+      if (error) {
+        setAccountSaveStatus(`Checkout setup failed: ${error.message ?? 'Unknown error'}`)
       }
     }
     openStripeUrl(targetTier === 'pro' ? stripeProCheckoutUrl : stripeAgencyCheckoutUrl, targetTier)
@@ -1361,7 +1375,14 @@ function App() {
     stripeProCheckoutUrl,
   ])
   const openStripePortal = useCallback(async () => {
-    if (!activeBandId || !canAccessBillingControls) return
+    if (!activeBandId) {
+      setAccountSaveStatus('Select or create a band before managing billing.')
+      return
+    }
+    if (!canAccessBillingControls) {
+      setAccountSaveStatus('Only band admins can manage billing.')
+      return
+    }
     if (supabase) {
       const { data, error } = await supabase.functions.invoke('create-stripe-portal-session', {
         body: { bandId: activeBandId },
@@ -1370,9 +1391,16 @@ function App() {
         data && typeof data === 'object' && 'url' in data ? (data as { url?: string }).url : ''
       ) ?? ''
       if (!error && portalUrl) {
-        window.open(portalUrl, '_blank', 'noopener,noreferrer')
+        const opened = window.open(portalUrl, '_blank', 'noopener,noreferrer')
+        if (!opened) {
+          setAccountSaveStatus('Popup blocked. Allow popups for this site and try again.')
+          return
+        }
         setAccountSaveStatus('Opening billing portal...')
         return
+      }
+      if (error) {
+        setAccountSaveStatus(`Billing portal failed: ${error.message ?? 'Unknown error'}`)
       }
     }
     openStripeUrl(stripePortalUrl)

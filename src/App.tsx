@@ -1352,8 +1352,12 @@ function App() {
         setAccountSaveStatus('Your login session expired. Please sign out and log back in to manage billing.')
         return
       }
+      const accessToken = sessionData.session.access_token
       const { data, error } = await supabase.functions.invoke('create-stripe-checkout-session', {
         body: { bandId: activeBandId, tier: targetTier },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
       })
       const checkoutUrl = (
         data && typeof data === 'object' && 'url' in data ? (data as { url?: string }).url : ''
@@ -1395,8 +1399,12 @@ function App() {
         setAccountSaveStatus('Your login session expired. Please sign out and log back in to manage billing.')
         return
       }
+      const accessToken = sessionData.session.access_token
       const { data, error } = await supabase.functions.invoke('create-stripe-portal-session', {
         body: { bandId: activeBandId },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
       })
       const portalUrl = (
         data && typeof data === 'object' && 'url' in data ? (data as { url?: string }).url : ''

@@ -1233,11 +1233,6 @@ function App() {
     const currentSet = new Set(currentTierDetails.includes)
     return selectedTierDetails.includes.filter((item) => !currentSet.has(item))
   }, [currentTierDetails.includes, selectedTierDetails])
-  const tierLoseItems = useMemo(() => {
-    if (!selectedTierDetails) return []
-    const selectedSet = new Set(selectedTierDetails.includes)
-    return currentTierDetails.includes.filter((item) => !selectedSet.has(item))
-  }, [currentTierDetails.includes, selectedTierDetails])
   const isSelectedCurrentTier = Boolean(selectedTier && selectedTier === activeBandTier)
   const isSelectedUpgrade = Boolean(
     selectedTier && tierRank[selectedTier] > tierRank[activeBandTier],
@@ -1365,6 +1360,23 @@ function App() {
     stripeAgencyCheckoutUrl,
     stripeProCheckoutUrl,
   ])
+  const openStripePortal = useCallback(async () => {
+    if (!activeBandId || !canAccessBillingControls) return
+    if (supabase) {
+      const { data, error } = await supabase.functions.invoke('create-stripe-portal-session', {
+        body: { bandId: activeBandId },
+      })
+      const portalUrl = (
+        data && typeof data === 'object' && 'url' in data ? (data as { url?: string }).url : ''
+      ) ?? ''
+      if (!error && portalUrl) {
+        window.open(portalUrl, '_blank', 'noopener,noreferrer')
+        setAccountSaveStatus('Opening billing portal...')
+        return
+      }
+    }
+    openStripeUrl(stripePortalUrl)
+  }, [activeBandId, canAccessBillingControls, openStripeUrl, stripePortalUrl])
   const isSpecialSectionHidden = currentSetlist
     ? Boolean(gigHiddenSpecialSection[currentSetlist.id])
     : false
@@ -8859,7 +8871,7 @@ function App() {
               <p className="mt-4 max-w-2xl text-sm text-slate-300">
                 Organize songs, assign musicians, handle special requests, and run performances from one clean app built for busy gig days.
               </p>
-              <div className="mt-6 flex flex-wrap gap-3">
+              <div className="mt-6 flex flex-wrap justify-center gap-3">
                 <button
                   type="button"
                   className="rounded-xl bg-teal-400/90 px-5 py-2.5 text-sm font-semibold text-slate-950"
@@ -10719,21 +10731,21 @@ function App() {
                     <button
                       className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => void openStripeCheckout('pro')}
-                      disabled={!canAccessBillingControls || !stripeProCheckoutUrl}
+                      disabled={!canAccessBillingControls}
                     >
                       Upgrade to Pro
                     </button>
                     <button
                       className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => void openStripeCheckout('agency')}
-                      disabled={!canAccessBillingControls || !stripeAgencyCheckoutUrl}
+                      disabled={!canAccessBillingControls}
                     >
                       Upgrade to Agency
                     </button>
                     <button
                       className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => openStripeUrl(stripePortalUrl)}
-                      disabled={!canAccessBillingControls || !stripePortalUrl}
+                      onClick={() => void openStripePortal()}
+                      disabled={!canAccessBillingControls}
                     >
                       Manage billing
                     </button>
@@ -11777,24 +11789,16 @@ function App() {
               </div>
             </div>
 
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <div className="rounded-2xl border border-emerald-300/20 bg-emerald-400/10 p-3">
-                <p className="text-xs uppercase tracking-wide text-emerald-200">You gain</p>
+            {isSelectedUpgrade && (
+              <div className="mt-3 rounded-2xl border border-emerald-300/20 bg-emerald-400/10 p-3">
+                <p className="text-xs uppercase tracking-wide text-emerald-200">What you gain</p>
                 <div className="mt-2 space-y-1 text-sm text-emerald-100">
                   {tierGainItems.length > 0
                     ? tierGainItems.map((item) => <p key={`gain-${item}`}>+ {item}</p>)
-                    : <p>No additional features beyond your current plan.</p>}
+                    : <p>This upgrade includes additional plan capacity and benefits.</p>}
                 </div>
               </div>
-              <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 p-3">
-                <p className="text-xs uppercase tracking-wide text-amber-200">You lose</p>
-                <div className="mt-2 space-y-1 text-sm text-amber-100">
-                  {tierLoseItems.length > 0
-                    ? tierLoseItems.map((item) => <p key={`lose-${item}`}>- {item}</p>)
-                    : <p>No feature loss from your current plan.</p>}
-                </div>
-              </div>
-            </div>
+            )}
 
             <div className="mt-4 flex flex-wrap items-center gap-2">
               {isSelectedCurrentTier ? (
@@ -11822,10 +11826,10 @@ function App() {
                   type="button"
                   className="rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold text-slate-100"
                   onClick={() => {
-                    openStripeUrl(stripePortalUrl)
+                    void openStripePortal()
                     setShowTierDetailsModal(null)
                   }}
-                  disabled={!canAccessBillingControls || !stripePortalUrl}
+                  disabled={!canAccessBillingControls}
                 >
                   {selectedTier === 'free' ? 'Downgrade to Free' : `Switch to ${selectedTierDetails.name}`} in billing
                 </button>
@@ -11853,14 +11857,12 @@ function App() {
               <button
                 className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                 onClick={() => void openStripeCheckout('pro')}
-                disabled={!stripeProCheckoutUrl}
               >
                 Upgrade to Pro
               </button>
               <button
                 className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-100"
                 onClick={() => void openStripeCheckout('agency')}
-                disabled={!stripeAgencyCheckoutUrl}
               >
                 Upgrade to Agency
               </button>

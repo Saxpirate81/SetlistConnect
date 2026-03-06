@@ -53,12 +53,15 @@ type SpecialRequest = {
   gigId: string
   type: string
   songTitle: string
+  artist?: string
   songId?: string
   singers: string[]
   key: string
   note?: string
   djOnly?: boolean
   externalAudioUrl?: string
+  sourceType?: 'spotify_playlist' | 'spotify_track' | 'youtube' | 'apple_music' | 'external'
+  origin?: 'special_request' | 'dj_track'
 }
 
 type Chart = {
@@ -225,8 +228,8 @@ const LAST_ACTIVE_KEY = 'setlist:lastActive'
 
 const INSTRUMENTS = ['Vocals', 'Guitar', 'Keys', 'Bass', 'Drums', 'Sax', 'Trumpet']
 const INSTRUMENTAL_LABEL = 'Instrumental'
-const DEFAULT_TAGS = ['Special Request', 'Dinner', 'Latin', 'Dance']
-const DEFAULT_SPECIAL_TYPES = ['First Dance', 'Last Dance', 'Parent Dance', 'Anniversary']
+const DEFAULT_TAGS = ['Special Request', 'DJ Only', 'Dinner', 'Latin', 'Dance']
+const DEFAULT_SPECIAL_TYPES = ['First Dance', 'Last Dance', 'Parent Dance', 'Anniversary', 'DJ Only']
 const REQUEST_TYPE_TAG_EXCLUSIONS = [
   'Special Request',
   'Special Requests',
@@ -459,6 +462,7 @@ function App() {
   const [hideGigHeader, setHideGigHeader] = useState(false)
   const [pendingSpecialType, setPendingSpecialType] = useState('')
   const [pendingSpecialSong, setPendingSpecialSong] = useState('')
+  const [pendingSpecialArtist, setPendingSpecialArtist] = useState('')
   const [pendingSpecialSingers, setPendingSpecialSingers] = useState<string[]>([])
   const [pendingSpecialKey, setPendingSpecialKey] = useState('')
   const [pendingSpecialNote, setPendingSpecialNote] = useState('')
@@ -1219,6 +1223,29 @@ function App() {
     () => new Set(appState.specialTypes.map((type) => normalizeTagIdentity(type))),
     [appState.specialTypes],
   )
+  const djRequestTypeIdentitySet = useMemo(
+    () =>
+      new Set(
+        appState.specialRequests
+          .filter((request) => Boolean(request.djOnly))
+          .map((request) => normalizeTagIdentity(request.type ?? ''))
+          .filter(Boolean),
+      ),
+    [appState.specialRequests],
+  )
+  const isDjRequestType = useCallback(
+    (value: string) => {
+      const identity = normalizeTagIdentity(value)
+      if (!identity) return false
+      return identity === 'djonly' || identity.includes('dj') || djRequestTypeIdentitySet.has(identity)
+    },
+    [djRequestTypeIdentitySet],
+  )
+  const pendingSpecialForcesDjOnly = useMemo(
+    () => isDjRequestType(pendingSpecialType),
+    [isDjRequestType, pendingSpecialType],
+  )
+  const isPendingSpecialDjOnly = pendingSpecialDjOnly || pendingSpecialForcesDjOnly
   const requestTypeIdentitySet = useMemo(
     () => new Set(REQUEST_TYPE_TAG_EXCLUSIONS.map((value) => normalizeTagIdentity(value))),
     [],
@@ -1231,6 +1258,7 @@ function App() {
     if (lower === 'special request' || lower === 'special requests') return false
     const identity = normalizeTagIdentity(normalized)
     if (!identity) return false
+    if (identity === 'djonly') return true
     if (requestTypeIdentitySet.has(identity)) return false
     return !specialTypeIdentitySet.has(identity)
   }, [requestTypeIdentitySet, specialTypeIdentitySet])
@@ -1619,6 +1647,8 @@ function App() {
     if (normalized === 'special requests' || normalized === 'special request') {
       return 'print-tone-special'
     }
+    if (djRequestTypeIdentitySet.has(normalizeTagIdentity(section))) return 'print-tone-dj'
+    if (normalized === 'dj only') return 'print-tone-dj'
     if (normalized.includes('dinner')) return 'print-tone-dinner'
     if (normalized.includes('dance')) return 'print-tone-dance'
     if (normalized.includes('latin')) return 'print-tone-latin'
@@ -1628,6 +1658,7 @@ function App() {
   const getPrintLayoutClass = (section: string) => {
     const normalized = section.trim().toLowerCase()
     if (normalized === 'special requests' || normalized === 'special request') return 'print-special'
+    if (normalized === 'dj only') return 'print-dj'
     if (normalized.includes('musician')) return 'print-musicians'
     if (normalized.includes('dinner')) return 'print-dinner'
     if (normalized.includes('dance')) return 'print-dance'
@@ -1639,6 +1670,7 @@ function App() {
     if (!normalized) return ''
     const lower = normalized.toLowerCase()
     if (lower === 'special request' || lower === 'special requests') return 'Special Requests'
+    if (lower === 'dj only') return 'DJ Only'
     return normalized
   }, [])
   const getPlaylistSections = useCallback((entry: PlaylistEntry) => {
@@ -1654,7 +1686,7 @@ function App() {
       })
     const sections = normalizedTags.filter((tag) => {
       const lower = tag.toLowerCase()
-      return lower === 'special requests' || isSetlistTypeTag(tag)
+      return lower === 'special requests' || lower === 'dj only' || isSetlistTypeTag(tag)
     })
     return sections.length ? sections : ['Setlist']
   }, [isSetlistTypeTag, normalizePlaylistSection])
@@ -1662,6 +1694,9 @@ function App() {
     const tone = getPrintToneClass(section)
     if (tone === 'print-tone-special') {
       return 'border-fuchsia-300/40 bg-fuchsia-500/10 text-fuchsia-100'
+    }
+    if (tone === 'print-tone-dj') {
+      return 'border-rose-300/40 bg-rose-900/40 text-rose-100'
     }
     if (tone === 'print-tone-dinner') {
       return 'border-amber-300/40 bg-amber-500/10 text-amber-100'
@@ -1678,6 +1713,12 @@ function App() {
     const normalized = tag.trim().toLowerCase()
     if (normalized === 'special request' || normalized === 'special requests') {
       return 'bg-fuchsia-500/20 text-fuchsia-100'
+    }
+    if (djRequestTypeIdentitySet.has(normalizeTagIdentity(tag))) {
+      return 'border border-rose-300/35 bg-rose-900/45 text-rose-100'
+    }
+    if (normalized === 'dj only') {
+      return 'border border-rose-300/35 bg-rose-900/45 text-rose-100'
     }
     if (normalized.includes('dinner')) {
       return 'bg-amber-500/20 text-amber-100'
@@ -2027,16 +2068,15 @@ function App() {
     }
 
     getOrderedSpecialRequests(currentSetlist.id)
-      .filter((request) => !request.djOnly)
       .forEach((request) => {
         const linkedSong = appState.songs.find((song) => song.id === request.songId)
         const key = `special-request:${request.id}`
         addOrMerge({
           key,
           title: linkedSong?.title || request.songTitle,
-          artist: linkedSong?.artist || '',
+          artist: request.artist || linkedSong?.artist || '',
           audioUrl: (request.externalAudioUrl || linkedSong?.youtubeUrl || '').trim(),
-          tags: ['Special Request'],
+          tags: request.djOnly ? [request.type || 'DJ Only'] : ['Special Request'],
           songId: request.songId,
           assignmentSingers: request.djOnly ? ['DJ'] : request.singers,
           assignmentKeys: request.djOnly ? [] : request.key ? [request.key] : [],
@@ -2070,7 +2110,14 @@ function App() {
           assignmentKeys: assignments.map((entry) => entry.key),
         })
       })
-    return ordered.filter((entry) => Boolean(entry.audioUrl && entry.audioUrl.trim()))
+    const isAlwaysVisibleSpecialEntry = (entry: PlaylistEntry) =>
+      entry.tags.some((tag) => {
+        const normalized = tag.trim().toLowerCase()
+        return normalized === 'special request' || normalized === 'special requests' || normalized === 'dj only'
+      })
+    return ordered.filter(
+      (entry) => Boolean(entry.audioUrl && entry.audioUrl.trim()) || isAlwaysVisibleSpecialEntry(entry),
+    )
   }, [
     appState.songs,
     currentSetlist,
@@ -2176,10 +2223,28 @@ function App() {
     sharedPlaylistView,
     sharedResolvedUpNextEntry,
   ])
+  const sharedNowPlayingIsDjOnly = useMemo(() => {
+    const hasDjOnlyTag = (entry?: PlaylistEntry | null) =>
+      Boolean(
+        entry?.tags.some((tag) => {
+          const normalized = tag.trim().toLowerCase()
+          return normalized === 'dj only'
+        }),
+      )
+    if (hasDjOnlyTag(sharedResolvedUpNextEntry)) return true
+    if (!sharedNowPlayingSongId) return false
+    const bySongId =
+      sharedAllPlaylistEntries.find((entry) => entry.songId === sharedNowPlayingSongId) ??
+      activePlaylistEntries.find((entry) => entry.songId === sharedNowPlayingSongId) ??
+      null
+    return hasDjOnlyTag(bySongId)
+  }, [activePlaylistEntries, sharedAllPlaylistEntries, sharedNowPlayingSongId, sharedResolvedUpNextEntry])
   const sharedNowPlayingKeyLabel = sharedNowPlayingAssignments.keys.length
     ? sharedNowPlayingAssignments.keys.join(', ')
     : '—'
-  const sharedNowPlayingSingerLabel = sharedNowPlayingAssignments.singers.length
+  const sharedNowPlayingSingerLabel = sharedNowPlayingIsDjOnly
+    ? 'DJ ONLY'
+    : sharedNowPlayingAssignments.singers.length
     ? sharedNowPlayingAssignments.singers.join(', ')
     : 'Unassigned'
   const playlistSingerOptions = useMemo(() => {
@@ -3250,12 +3315,12 @@ function App() {
 
   const jumpToPlaylistIndex = (index: number) => {
     if (!visiblePlaylistEntries.length) return
-    const playable = isPlaylistEntryPlayable(visiblePlaylistEntries[index])
-      ? index
-      : findNextPlayableIndex(index, 1)
-    if (playable < 0) return
-    setPlaylistIndex(playable)
-    setPlaylistPlayNonce((current) => current + 1)
+    const selectedEntry = visiblePlaylistEntries[index]
+    if (!selectedEntry) return
+    setPlaylistIndex(index)
+    if (isPlaylistEntryPlayable(selectedEntry)) {
+      setPlaylistPlayNonce((current) => current + 1)
+    }
   }
   const handlePlaylistDrawerTouchStart = (event: TouchEvent<HTMLDivElement>) => {
     if (playlistDrawerOverlay) {
@@ -3501,6 +3566,14 @@ function App() {
   }
 
   const getPlaylistAssignmentText = (entry: PlaylistEntry) => {
+    if (
+      entry.tags.some((tag) => {
+        const normalized = tag.trim().toLowerCase()
+        return normalized === 'dj only'
+      })
+    ) {
+      return 'DJ only track - no learning needed'
+    }
     const { singers, keys } = getPlaylistEntryAssignments(entry)
     const singerLabel = singers.length ? `Assigned: ${singers.join(', ')}` : 'Assigned: none'
     const keyLabel = keys.length ? `Key: ${keys.join(', ')}` : 'Key: —'
@@ -5026,6 +5099,18 @@ function App() {
         specialRequests: [...others, ...orderedForGig],
       }
     })
+    if (supabase) {
+      const client = supabase
+      reordered.forEach((request, index) => {
+        if (request.origin !== 'dj_track') return
+        runSupabase(
+          client
+            .from('SetlistGigDjTracks')
+            .update({ sort_order: index })
+            .eq('id', request.id),
+        )
+      })
+    }
   }
   const autoScrollDragContainer = (event: React.DragEvent<HTMLElement>) => {
     const container = event.currentTarget.closest('[data-drag-scroll-container="build-panel"]')
@@ -5661,9 +5746,9 @@ function App() {
       setShowSpecialRequestModal(false)
       return
     }
-    setNewSongArtist('')
+    setNewSongArtist(pendingSpecialArtist.trim())
     setNewSongAudio(pendingSpecialExternalUrl.trim())
-    setNewSongOriginalKey(pendingSpecialDjOnly ? '' : pendingSpecialKey.trim())
+    setNewSongOriginalKey(isPendingSpecialDjOnly ? '' : pendingSpecialKey.trim())
     setNewSongTitle(trimmedTitle)
     setNewSongTags(
       normalizeTagList(['Special Request', pendingSpecialType.trim()].filter(Boolean)),
@@ -6209,6 +6294,7 @@ function App() {
   const resetPendingSpecialRequest = () => {
     setPendingSpecialType('')
     setPendingSpecialSong('')
+    setPendingSpecialArtist('')
     setPendingSpecialSingers([])
     setPendingSpecialKey('')
     setPendingSpecialNote('')
@@ -6219,8 +6305,12 @@ function App() {
   }
 
   const openSpecialRequestEditor = (request: SpecialRequest) => {
+    const linkedSong = request.songId
+      ? appState.songs.find((song) => song.id === request.songId)
+      : null
     setPendingSpecialType(request.type ?? '')
     setPendingSpecialSong(request.songTitle ?? '')
+    setPendingSpecialArtist(request.artist ?? linkedSong?.artist ?? '')
     setPendingSpecialSingers(request.djOnly ? [] : normalizeTagList(request.singers ?? []))
     setPendingSpecialKey(request.djOnly ? '' : request.key ?? '')
     setPendingSpecialNote(request.note ?? '')
@@ -6232,6 +6322,7 @@ function App() {
   }
   const deleteSpecialRequest = (requestId: string) => {
     if (!currentSetlist) return
+    const targetRequest = appState.specialRequests.find((request) => request.id === requestId)
     setBuildPanelDirty(true)
     commitChange('Delete special request', (prev) => ({
       ...prev,
@@ -6246,63 +6337,165 @@ function App() {
       }
     })
     if (supabase) {
-      runSupabase(supabase.from('SetlistSpecialRequests').delete().eq('id', requestId))
+      if (targetRequest?.origin === 'dj_track') {
+        runSupabase(supabase.from('SetlistGigDjTracks').delete().eq('id', requestId))
+      } else {
+        runSupabase(supabase.from('SetlistSpecialRequests').delete().eq('id', requestId))
+      }
     }
   }
 
   const updateSpecialRequest = () => {
     if (!currentSetlist || !editingSpecialRequestId) return
+    const existingRequest =
+      appState.specialRequests.find((request) => request.id === editingSpecialRequestId) ?? null
     setBuildPanelDirty(true)
     setSpecialRequestError('')
     const type = pendingSpecialType.trim()
     const customSong = pendingSpecialSong.trim()
-    if (!type || !customSong) {
+    const shouldPersistAsDjTrack =
+      isPendingSpecialDjOnly || isDjRequestType(type) || existingRequest?.origin === 'dj_track'
+    const normalizedType = type || (shouldPersistAsDjTrack ? 'DJ Only' : '')
+    if (!normalizedType || !customSong) {
       setSpecialRequestError('Request type and song title are required.')
       return
     }
     const matchingSong = appState.songs.find(
       (song) => song.title.trim().toLowerCase() === customSong.toLowerCase(),
     )
-    const normalizedSingers = pendingSpecialDjOnly ? [] : normalizeTagList(pendingSpecialSingers)
-    const normalizedKey = pendingSpecialDjOnly ? '' : pendingSpecialKey.trim()
+    const normalizedSingers = shouldPersistAsDjTrack ? [] : normalizeTagList(pendingSpecialSingers)
+    const normalizedKey = shouldPersistAsDjTrack ? '' : pendingSpecialKey.trim()
+    const normalizedArtist = pendingSpecialArtist.trim()
     const nextSongId = matchingSong?.id
+    const djSongId = shouldPersistAsDjTrack
+      ? matchingSong?.id ?? existingRequest?.songId ?? createId()
+      : undefined
     commitChange('Update special request', (prev) => ({
       ...prev,
       specialRequests: prev.specialRequests.map((request) =>
         request.id === editingSpecialRequestId
           ? {
               ...request,
-              type,
+              type: normalizedType,
               songTitle: customSong,
-              songId: nextSongId,
+              artist: normalizedArtist || undefined,
+              songId: shouldPersistAsDjTrack ? djSongId : nextSongId,
               singers: normalizedSingers,
               key: normalizedKey,
               note: pendingSpecialNote.trim() || undefined,
-              djOnly: pendingSpecialDjOnly,
+              djOnly: shouldPersistAsDjTrack ? true : isPendingSpecialDjOnly,
               externalAudioUrl: pendingSpecialExternalUrl.trim() || undefined,
+              sourceType: shouldPersistAsDjTrack
+                ? getDjSourceTypeFromUrl(pendingSpecialExternalUrl)
+                : undefined,
+              origin: shouldPersistAsDjTrack ? 'dj_track' : 'special_request',
             }
           : request,
       ),
-      specialTypes: prev.specialTypes.includes(type) ? prev.specialTypes : [...prev.specialTypes, type],
+      specialTypes: prev.specialTypes.includes(normalizedType)
+        ? prev.specialTypes
+        : [...prev.specialTypes, normalizedType],
     }))
     if (supabase) {
-      runSupabase(
-        supabase
-          .from('SetlistSpecialRequests')
-          .update(
-            withBandId({
-              request_type: type,
-              song_title: customSong,
-              song_id: nextSongId ?? null,
-              singers: normalizedSingers,
-              song_key: normalizedKey || null,
-              note: pendingSpecialNote.trim() || null,
-              dj_only: pendingSpecialDjOnly,
-              external_audio_url: pendingSpecialExternalUrl.trim() || null,
-            }),
-          )
-          .eq('id', editingSpecialRequestId),
-      )
+      if (shouldPersistAsDjTrack) {
+        const orderedRequests = getOrderedSpecialRequests(currentSetlist.id)
+        const sortOrder = Math.max(
+          0,
+          orderedRequests.findIndex((request) => request.id === editingSpecialRequestId),
+        )
+        runSupabase(
+          (async () => {
+            if (existingRequest?.origin !== 'dj_track') {
+              const { error: deleteSpecialError } = await supabase
+                .from('SetlistSpecialRequests')
+                .delete()
+                .eq('id', editingSpecialRequestId)
+              if (deleteSpecialError) return { error: deleteSpecialError }
+            }
+            const { error: upsertDjError } = await supabase.from('SetlistGigDjTracks').upsert(
+              withBandId({
+                id: editingSpecialRequestId,
+                gig_id: currentSetlist.id,
+                sort_order: sortOrder,
+                title: customSong,
+                artist: normalizedArtist,
+                notes: pendingSpecialNote.trim(),
+                source_type: getDjSourceTypeFromUrl(pendingSpecialExternalUrl),
+                source_url: pendingSpecialExternalUrl.trim(),
+                status: 'active',
+                metadata: { type: normalizedType, song_id: djSongId },
+              }),
+              { onConflict: 'id' },
+            )
+            if (upsertDjError) return { error: upsertDjError }
+            if (!djSongId) return { error: null }
+
+            const { error: ensureSongError } = await supabase.from('SetlistSongs').upsert(
+              withBandId({
+                id: djSongId,
+                title: customSong,
+                artist: normalizedArtist,
+                audio_url: pendingSpecialExternalUrl.trim() || null,
+                original_key: null,
+                deleted_at: null,
+              }),
+              { onConflict: 'id' },
+            )
+            if (ensureSongError) return { error: ensureSongError }
+
+            const djTags = ['Special Request', 'DJ Only']
+            const { data: existingTags, error: tagReadError } = await supabase
+              .from('SetlistSongTags')
+              .select('tag')
+              .eq('song_id', djSongId)
+              .in('tag', djTags)
+            if (tagReadError) return { error: tagReadError }
+            const existingTagSet = new Set(
+              (existingTags ?? []).map((row) => String(row.tag ?? '').trim().toLowerCase()),
+            )
+            const missingTags = djTags.filter((tag) => !existingTagSet.has(tag.toLowerCase()))
+            if (missingTags.length > 0) {
+              const { error: tagInsertError } = await supabase.from('SetlistSongTags').insert(
+                missingTags.map((tag) => withBandId({
+                  id: createId(),
+                  song_id: djSongId,
+                  tag,
+                })),
+              )
+              if (tagInsertError) return { error: tagInsertError }
+            }
+            return { error: null }
+          })(),
+        )
+      } else {
+        runSupabase(
+          (async () => {
+            if (existingRequest?.origin === 'dj_track') {
+              const { error: deleteDjError } = await supabase
+                .from('SetlistGigDjTracks')
+                .delete()
+                .eq('id', editingSpecialRequestId)
+              if (deleteDjError) return { error: deleteDjError }
+            }
+            const { error: updateSpecialError } = await supabase
+              .from('SetlistSpecialRequests')
+              .update(
+                withBandId({
+                  request_type: normalizedType,
+                  song_title: customSong,
+                  song_id: nextSongId ?? null,
+                  singers: normalizedSingers,
+                  song_key: normalizedKey || null,
+                  note: pendingSpecialNote.trim() || null,
+                  dj_only: isPendingSpecialDjOnly,
+                  external_audio_url: pendingSpecialExternalUrl.trim() || null,
+                }),
+              )
+              .eq('id', editingSpecialRequestId)
+            return { error: updateSpecialError }
+          })(),
+        )
+      }
     }
     resetPendingSpecialRequest()
     setShowSpecialRequestModal(false)
@@ -6322,20 +6515,25 @@ function App() {
     setSpecialRequestError('')
     const type = pendingSpecialType.trim()
     const customSong = pendingSpecialSong.trim()
+    const normalizedArtist = pendingSpecialArtist.trim()
+    const shouldPersistAsDjTrack = isPendingSpecialDjOnly || isDjRequestType(type)
+    const normalizedType = type || (shouldPersistAsDjTrack ? 'DJ Only' : '')
     const existingSong = appState.songs.find(
       (song) => song.title.toLowerCase() === customSong.toLowerCase(),
     )
     const songTitle = existingSong?.title ?? customSong
-    const normalizedSingers = pendingSpecialDjOnly ? [] : normalizeTagList(pendingSpecialSingers)
-    const normalizedKey = pendingSpecialDjOnly ? '' : pendingSpecialKey.trim()
-    if (!type || !songTitle) {
+    const normalizedSingers = shouldPersistAsDjTrack ? [] : normalizeTagList(pendingSpecialSingers)
+    const normalizedKey = shouldPersistAsDjTrack ? '' : pendingSpecialKey.trim()
+    if (!normalizedType || !songTitle) {
       setSpecialRequestError('Request type and song title are required.')
       return
     }
     const requestId = createId()
     const createdSongId = existingSong?.id ?? createId()
-    if (!existingSong && customSong && !canCreateSongs()) return
-    const requestTags = normalizeTagList(['Special Request'])
+    if (!shouldPersistAsDjTrack && !existingSong && customSong && !canCreateSongs()) return
+    const requestTags = normalizeTagList(
+      shouldPersistAsDjTrack ? ['Special Request', 'DJ Only'] : ['Special Request'],
+    )
     const existingSongTagsLower = new Set(
       (existingSong?.tags ?? []).map((tag) => tag.trim().toLowerCase()),
     )
@@ -6358,7 +6556,7 @@ function App() {
               {
                 id: createdSongId,
                 title: customSong,
-                artist: '',
+                artist: normalizedArtist,
                 tags: requestTags,
                 keys: normalizedSingers.map((singer) => ({
                   singer,
@@ -6375,21 +6573,26 @@ function App() {
           {
             id: requestId,
             gigId: currentSetlist.id,
-            type,
+            type: normalizedType,
             songTitle,
-            songId: createdSongId,
-            singers: normalizedSingers,
-            key: normalizedKey,
+            artist: normalizedArtist || existingSong?.artist || undefined,
+            songId: shouldPersistAsDjTrack ? undefined : createdSongId,
+            singers: shouldPersistAsDjTrack ? ['DJ'] : normalizedSingers,
+            key: shouldPersistAsDjTrack ? '' : normalizedKey,
             note: pendingSpecialNote.trim() || undefined,
-            djOnly: pendingSpecialDjOnly,
+              djOnly: shouldPersistAsDjTrack ? true : isPendingSpecialDjOnly,
             externalAudioUrl: pendingSpecialExternalUrl.trim() || undefined,
+            sourceType: shouldPersistAsDjTrack
+              ? getDjSourceTypeFromUrl(pendingSpecialExternalUrl)
+              : undefined,
+            origin: shouldPersistAsDjTrack ? 'dj_track' : 'special_request',
           },
           ...prev.specialRequests,
         ],
         songs: nextSongs,
-        specialTypes: prev.specialTypes.includes(type)
+        specialTypes: prev.specialTypes.includes(normalizedType)
           ? prev.specialTypes
-          : [...prev.specialTypes, type],
+          : [...prev.specialTypes, normalizedType],
       }
     })
     setSpecialRequestOrderByGig((prev) => ({
@@ -6399,6 +6602,63 @@ function App() {
     resetPendingSpecialRequest()
     setShowSpecialRequestModal(false)
     if (supabase) {
+      if (shouldPersistAsDjTrack) {
+        runSupabase(
+          (async () => {
+            const { error: ensureSongError } = await supabase.from('SetlistSongs').upsert(
+              withBandId({
+                id: createdSongId,
+                title: songTitle,
+                artist: normalizedArtist,
+                audio_url: pendingSpecialExternalUrl.trim() || null,
+                original_key: null,
+                deleted_at: null,
+              }),
+              { onConflict: 'id' },
+            )
+            if (ensureSongError) return { error: ensureSongError }
+
+            const djTags = ['Special Request', 'DJ Only']
+            const { data: existingTags, error: tagReadError } = await supabase
+              .from('SetlistSongTags')
+              .select('tag')
+              .eq('song_id', createdSongId)
+              .in('tag', djTags)
+            if (tagReadError) return { error: tagReadError }
+            const existingTagSet = new Set(
+              (existingTags ?? []).map((row) => String(row.tag ?? '').trim().toLowerCase()),
+            )
+            const missingTags = djTags.filter((tag) => !existingTagSet.has(tag.toLowerCase()))
+            if (missingTags.length > 0) {
+              const { error: tagInsertError } = await supabase.from('SetlistSongTags').insert(
+                missingTags.map((tag) => withBandId({
+                  id: createId(),
+                  song_id: createdSongId,
+                  tag,
+                })),
+              )
+              if (tagInsertError) return { error: tagInsertError }
+            }
+
+            const { error: djInsertError } = await supabase.from('SetlistGigDjTracks').insert(
+              withBandId({
+                id: requestId,
+                gig_id: currentSetlist.id,
+                sort_order: getOrderedSpecialRequests(currentSetlist.id).length,
+                title: songTitle,
+                artist: normalizedArtist,
+                notes: pendingSpecialNote.trim(),
+                source_type: getDjSourceTypeFromUrl(pendingSpecialExternalUrl),
+                source_url: pendingSpecialExternalUrl.trim(),
+                status: 'active',
+                metadata: { type: normalizedType, song_id: createdSongId },
+              }),
+            )
+            return { error: djInsertError }
+          })(),
+        )
+        return
+      }
       runSupabase(
         (async () => {
           // Ensure the referenced song row exists in Supabase before inserting special request.
@@ -6447,13 +6707,13 @@ function App() {
             .insert(withBandId({
               id: requestId,
               gig_id: currentSetlist.id,
-              request_type: type,
+              request_type: normalizedType,
               song_title: songTitle,
               song_id: createdSongId,
               singers: normalizedSingers,
               song_key: normalizedKey || null,
               note: pendingSpecialNote.trim() || null,
-              dj_only: pendingSpecialDjOnly,
+              dj_only: isPendingSpecialDjOnly,
               external_audio_url: pendingSpecialExternalUrl.trim() || null,
             }))
           return { error: requestInsertError }
@@ -6475,6 +6735,23 @@ function App() {
   const isSpotifyUrl = (url: string | null) => Boolean(url?.includes('open.spotify.com'))
   const isAudioFileUrl = (url: string | null) =>
     Boolean(url && (url.endsWith('.mp3') || url.endsWith('.wav') || url.endsWith('.m4a')))
+  const getDjSourceTypeFromUrl = (
+    url: string,
+  ): 'spotify_playlist' | 'spotify_track' | 'youtube' | 'apple_music' | 'external' => {
+    const normalized = url.trim().toLowerCase()
+    if (!normalized) return 'external'
+    if (normalized.includes('spotify.com/playlist')) return 'spotify_playlist'
+    if (normalized.includes('spotify.com/track')) return 'spotify_track'
+    if (
+      normalized.includes('youtube.com') ||
+      normalized.includes('youtu.be') ||
+      normalized.includes('music.youtube.com')
+    ) {
+      return 'youtube'
+    }
+    if (normalized.includes('music.apple.com')) return 'apple_music'
+    return 'external'
+  }
 
   const openDocsForSong = (songId?: string) => {
     if (!songId) return
@@ -6589,6 +6866,7 @@ function App() {
       gigSongsRes,
       gigSingerKeysRes,
       specialReqRes,
+      djTracksRes,
       docsRes,
       musiciansRes,
       gigMusiciansRes,
@@ -6601,12 +6879,17 @@ function App() {
       supabase.from('SetlistGigSongs').select('*').eq('band_id', activeBandId),
       supabase.from('SetlistGigSingerKeys').select('*').eq('band_id', activeBandId),
       supabase.from('SetlistSpecialRequests').select('*').eq('band_id', activeBandId),
+      supabase.from('SetlistGigDjTracks').select('*').eq('band_id', activeBandId),
       supabase.from('SetlistDocuments').select('*').eq('band_id', activeBandId),
       supabase.from('SetlistMusicians').select('*').eq('band_id', activeBandId).is('deleted_at', null),
       supabase.from('SetlistGigMusicians').select('*').eq('band_id', activeBandId),
       supabase.from('SetlistGigNowPlaying').select('*').eq('band_id', activeBandId),
     ])
 
+    const canIgnoreDjTracksError = Boolean(
+      djTracksRes.error &&
+      /SetlistGigDjTracks|does not exist|schema cache/i.test(djTracksRes.error.message ?? ''),
+    )
     const firstError =
       songsRes.error ||
       tagsRes.error ||
@@ -6615,6 +6898,7 @@ function App() {
       gigSongsRes.error ||
       gigSingerKeysRes.error ||
       specialReqRes.error ||
+      (canIgnoreDjTracksError ? null : djTracksRes.error) ||
       docsRes.error ||
       musiciansRes.error ||
       gigMusiciansRes.error ||
@@ -6642,10 +6926,19 @@ function App() {
       })
       return next
     }
+    const djTrackTypes = (djTracksRes.data ?? [])
+      .map((row) => {
+        const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : null
+        const value = metadata && typeof metadata.type === 'string' ? metadata.type.trim() : ''
+        return value
+      })
+      .filter(Boolean)
     const specialTypes = Array.from(
       new Set([
         ...DEFAULT_SPECIAL_TYPES,
         ...(specialReqRes.data ?? []).map((r) => r.request_type),
+        ...djTrackTypes,
+        ...((djTracksRes.data ?? []).length ? ['DJ Only'] : []),
       ]),
     )
     const reservedSetlistTagIdentities = new Set(
@@ -6661,6 +6954,7 @@ function App() {
       if (lower === 'special request' || lower === 'special requests') return false
       const identity = toTagIdentity(trimmed)
       if (!identity) return false
+      if (identity === 'djonly') return false
       if (reservedSetlistTagIdentities.has(identity)) return false
       return specialTypeIdentities.has(identity)
     }
@@ -6757,19 +7051,51 @@ function App() {
         venueAddress: row.venue_address ?? '',
       })) ?? []
 
-    const specialRequests: SpecialRequest[] =
-      specialReqRes.data?.map((row) => ({
-        id: row.id,
-        gigId: row.gig_id,
-        type: row.request_type,
-        songTitle: row.song_title,
-        songId: row.song_id ?? undefined,
-        singers: row.singers ?? [],
-        key: row.song_key ?? '',
-        note: row.note ?? undefined,
-        djOnly: row.dj_only ?? false,
-        externalAudioUrl: row.external_audio_url ?? undefined,
-      })) ?? []
+    const songsById = new Map(songs.map((song) => [song.id, song]))
+    const specialRequestsFromLegacy: SpecialRequest[] =
+      specialReqRes.data?.map((row) => {
+        const linkedSong = row.song_id ? songsById.get(row.song_id) : undefined
+        return {
+          id: row.id,
+          gigId: row.gig_id,
+          type: row.request_type,
+          songTitle: row.song_title,
+          artist: linkedSong?.artist ?? undefined,
+          songId: row.song_id ?? undefined,
+          singers: row.singers ?? [],
+          key: row.song_key ?? '',
+          note: row.note ?? undefined,
+          djOnly: row.dj_only ?? false,
+          externalAudioUrl: row.external_audio_url ?? undefined,
+          origin: 'special_request',
+        }
+      }) ?? []
+    const djTracksAsRequests: SpecialRequest[] = (djTracksRes.data ?? [])
+      .filter((row) => row.status !== 'archived')
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      .map((row) => {
+        const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : null
+        const customType = metadata && typeof metadata.type === 'string' ? metadata.type.trim() : ''
+        const metadataSongId =
+          metadata && typeof metadata.song_id === 'string' ? metadata.song_id.trim() : ''
+        const linkedSong = metadataSongId ? songsById.get(metadataSongId) : undefined
+        return {
+          id: row.id,
+          gigId: row.gig_id,
+          type: customType || 'DJ Only',
+          songTitle: row.title || linkedSong?.title || 'DJ Track',
+          artist: row.artist ?? linkedSong?.artist ?? undefined,
+          songId: metadataSongId || undefined,
+          singers: ['DJ'],
+          key: '',
+          note: row.notes ?? undefined,
+          djOnly: true,
+          externalAudioUrl: row.source_url ?? undefined,
+          sourceType: row.source_type ?? 'external',
+          origin: 'dj_track' as const,
+        }
+      })
+    const specialRequests: SpecialRequest[] = [...specialRequestsFromLegacy, ...djTracksAsRequests]
 
     const documents: Document[] =
       docsRes.data?.map((row) => ({
@@ -7410,7 +7736,7 @@ function App() {
     setSharedPlaylistLoading(true)
     setSharedPlaylistError(null)
     void (async () => {
-      const [gigRes, gigSongsRes, songsRes, specialReqRes] = await Promise.all([
+      const [gigRes, gigSongsRes, songsRes, specialReqRes, djTracksRes] = await Promise.all([
         supabase
           .from('SetlistGigs')
           .select('id, band_id, gig_name, gig_date, venue_address')
@@ -7427,12 +7753,17 @@ function App() {
           .is('deleted_at', null),
         supabase
           .from('SetlistSpecialRequests')
-          .select('id, song_id, song_title, singers, song_key, external_audio_url, dj_only')
+          .select('id, request_type, song_id, song_title, singers, song_key, external_audio_url, dj_only')
           .eq('gig_id', setlistId),
+        supabase
+          .from('SetlistGigDjTracks')
+          .select('id, title, artist, notes, source_type, source_url, sort_order, status, metadata')
+          .eq('gig_id', setlistId)
+          .order('sort_order', { ascending: true }),
       ])
       if (cancelled) return
       const firstError =
-        gigRes.error || gigSongsRes.error || songsRes.error || specialReqRes.error
+        gigRes.error || gigSongsRes.error || songsRes.error || specialReqRes.error || djTracksRes.error
       if (firstError) {
         if (parsedPayload) {
           setSharedPlaylistLoading(false)
@@ -7596,9 +7927,7 @@ function App() {
         byKey.set(normalized.key, normalized)
         entries.push(normalized)
       }
-      ;(specialReqRes.data ?? [])
-        .filter((request) => !request.dj_only)
-        .forEach((request) => {
+      ;(specialReqRes.data ?? []).forEach((request) => {
           const linkedSong = request.song_id ? songsById.get(request.song_id) : undefined
           const key = `special-request:${request.id}`
           addOrMerge({
@@ -7606,10 +7935,31 @@ function App() {
             title: linkedSong?.title || request.song_title || 'Special Request',
             artist: linkedSong?.artist || '',
             audioUrl: (request.external_audio_url || linkedSong?.audio_url || '').trim(),
-            tags: ['Special Request'],
+            tags: request.dj_only ? [request.request_type || 'DJ Only'] : ['Special Request'],
             songId: request.song_id ?? undefined,
-            assignmentSingers: request.singers ?? [],
-            assignmentKeys: request.song_key ? [request.song_key] : [],
+            assignmentSingers: request.dj_only ? ['DJ'] : (request.singers ?? []),
+            assignmentKeys: request.dj_only ? [] : request.song_key ? [request.song_key] : [],
+          })
+        })
+      ;(djTracksRes.data ?? [])
+        .filter((track) => track.status !== 'archived')
+        .forEach((track) => {
+          const metadata =
+            track.metadata && typeof track.metadata === 'object' ? (track.metadata as Record<string, unknown>) : null
+          const customType =
+            metadata && typeof metadata.type === 'string' ? metadata.type.trim() : ''
+          const metadataSongId =
+            metadata && typeof metadata.song_id === 'string' ? metadata.song_id.trim() : ''
+          const linkedSong = metadataSongId ? songsById.get(metadataSongId) : undefined
+          addOrMerge({
+            key: `dj-track:${track.id}`,
+            title: track.title || linkedSong?.title || 'DJ Track',
+            artist: track.artist || linkedSong?.artist || '',
+            audioUrl: (track.source_url || '').trim(),
+            tags: [customType || 'DJ Only'],
+            songId: metadataSongId || undefined,
+            assignmentSingers: ['DJ'],
+            assignmentKeys: [],
           })
         })
       orderedSongs.forEach((song) => {
@@ -7636,7 +7986,14 @@ function App() {
           assignmentKeys: uniqueList(assignments.map((entry) => entry.key)),
         })
       })
-      const playableEntries = entries.filter((entry) => Boolean(entry.audioUrl && entry.audioUrl.trim()))
+      const isSpecialRequestEntry = (entry: PlaylistEntry) =>
+        entry.tags.some((tag) => {
+          const normalized = tag.trim().toLowerCase()
+          return normalized === 'special request' || normalized === 'special requests'
+        })
+      const playableEntries = entries.filter(
+        (entry) => Boolean(entry.audioUrl && entry.audioUrl.trim()) || isSpecialRequestEntry(entry),
+      )
       setSharedWelcomeStep('welcome')
       setSharedPlaylistView({
         setlistId: gig.id,
@@ -8350,6 +8707,11 @@ function App() {
       )
       .on(
         'postgres_changes',
+        { event: '*', schema: 'public', table: 'SetlistGigDjTracks' },
+        () => void loadSupabaseData(),
+      )
+      .on(
+        'postgres_changes',
         { event: '*', schema: 'public', table: 'SetlistDocuments' },
         () => void loadSupabaseData(),
       )
@@ -8711,6 +9073,9 @@ function App() {
                               <div className="print-list">
                                 {group.items.map(({ entry: item }) => {
                                   const singerNames = Array.from(new Set(item.assignmentSingers ?? []))
+                                  const isDjOnly =
+                                    item.tags.some((tag) => tag.trim().toLowerCase() === 'dj only') ||
+                                    singerNames.some((name) => name.trim().toLowerCase() === 'dj')
                                   const assignmentKeys = item.assignmentKeys ?? []
                                   const keyLabel =
                                     assignmentKeys.length === 0
@@ -8760,8 +9125,18 @@ function App() {
                                       </div>
                                       <div className="print-row-subtitle print-song-meta">
                                         <span className="musical-key text-[0.72em]">{keyLabel}</span>
-                                        <span className="print-assignee-names text-[0.62em]">
-                                          {singerNames.length ? formatSingerAssignmentNames(singerNames) : 'No singers'}
+                                        <span
+                                          className={`print-assignee-names text-[0.62em] ${
+                                            isDjOnly
+                                              ? 'rounded-full border border-rose-300/35 bg-rose-900/45 px-2 py-0.5 text-rose-100'
+                                              : ''
+                                          }`}
+                                        >
+                                          {isDjOnly
+                                            ? 'DJ ONLY'
+                                            : singerNames.length
+                                              ? formatSingerAssignmentNames(singerNames)
+                                              : 'No singers'}
                                         </span>
                                       </div>
                                     </div>
@@ -10461,7 +10836,9 @@ function App() {
                         className="grid items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm md:grid-cols-[.9fr_1.4fr_1fr_.6fr_.4fr]"
                       >
                         <div className="text-xs text-teal-300">
-                          Special Request
+                          {request.djOnly || request.origin === 'dj_track'
+                            ? request.type || 'DJ Only'
+                            : 'Special Request'}
                         <div className="text-[10px] text-slate-400">{request.type}</div>
                         {request.djOnly && (
                           <div className="mt-1 inline-flex items-center rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-red-200">
@@ -10473,8 +10850,8 @@ function App() {
                           <div className="text-base font-semibold md:text-lg">
                             {request.songTitle}
                           </div>
-                          {song?.artist && (
-                            <div className="text-[10px] text-slate-400">{song.artist}</div>
+                          {(request.artist || song?.artist) && (
+                            <div className="text-[10px] text-slate-400">{request.artist || song?.artist}</div>
                           )}
                           <div className="mt-2 flex items-center gap-2 text-[10px]">
                           {(request.externalAudioUrl || song?.youtubeUrl) && (
@@ -10515,7 +10892,7 @@ function App() {
                               : 'text-slate-300'
                           }`}
                         >
-                          {request.djOnly ? 'DJ' : request.singers.join(', ')}
+                          {request.djOnly ? 'DJ ONLY' : request.singers.join(', ')}
                         </div>
                         <div className="text-xs text-slate-200">
                           {request.djOnly ? '—' : request.key}
@@ -10568,6 +10945,17 @@ function App() {
                     </div>
                     <div className="space-y-2">
                       <label className="text-[10px] uppercase tracking-wide text-slate-400">
+                        Artist
+                      </label>
+                      <input
+                        className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm text-slate-200"
+                        placeholder="Optional artist"
+                        value={pendingSpecialArtist}
+                        onChange={(event) => setPendingSpecialArtist(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase tracking-wide text-slate-400">
                         Singers
                       </label>
                     <div className="flex flex-wrap gap-2">
@@ -10589,7 +10977,7 @@ function App() {
                                     : [...current, singer],
                                 )
                               }
-                            disabled={pendingSpecialDjOnly}
+                            disabled={isPendingSpecialDjOnly}
                             >
                               {singer}
                             </button>
@@ -10606,7 +10994,7 @@ function App() {
                         placeholder="e.g. F#m"
                         value={pendingSpecialKey}
                         onChange={(event) => setPendingSpecialKey(event.target.value)}
-                      disabled={pendingSpecialDjOnly}
+                      disabled={isPendingSpecialDjOnly}
                       />
                       <label className="text-[10px] uppercase tracking-wide text-slate-400">
                         Info note
@@ -10623,10 +11011,13 @@ function App() {
                     <label className="flex items-center gap-2 text-xs text-slate-300">
                       <input
                         type="checkbox"
-                        checked={pendingSpecialDjOnly}
+                        checked={isPendingSpecialDjOnly}
+                        disabled={pendingSpecialForcesDjOnly}
                         onChange={(event) => setPendingSpecialDjOnly(event.target.checked)}
                       />
-                      Mark as DJ-only (band does not learn)
+                      {pendingSpecialForcesDjOnly
+                        ? 'This request type is DJ-only (band does not learn)'
+                        : 'Mark as DJ-only (band does not learn)'}
                     </label>
                     <label className="text-[10px] uppercase tracking-wide text-slate-400">
                       Audio link
@@ -12892,7 +13283,7 @@ function App() {
               </div>
             </div>
             <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4">
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-3 md:grid-cols-3">
                 <div className="space-y-2">
                   <label className="text-[10px] uppercase tracking-wide text-slate-400">
                     Request type
@@ -12932,6 +13323,17 @@ function App() {
                       <option key={song.id} value={song.title} />
                     ))}
                   </datalist>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-wide text-slate-400">
+                    Artist
+                  </label>
+                  <input
+                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                    placeholder="Optional artist"
+                    value={pendingSpecialArtist}
+                    onChange={(event) => setPendingSpecialArtist(event.target.value)}
+                  />
                 </div>
               </div>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
@@ -12975,7 +13377,7 @@ function App() {
                     placeholder="Song key"
                     value={pendingSpecialKey}
                     onChange={(event) => setPendingSpecialKey(event.target.value)}
-                    disabled={pendingSpecialDjOnly}
+                    disabled={isPendingSpecialDjOnly}
                   />
                 </div>
               </div>
@@ -12998,10 +13400,15 @@ function App() {
                   <div className="flex items-center gap-2">
                     <input
                       type="checkbox"
-                      checked={pendingSpecialDjOnly}
+                      checked={isPendingSpecialDjOnly}
+                      disabled={pendingSpecialForcesDjOnly}
                       onChange={(event) => setPendingSpecialDjOnly(event.target.checked)}
                     />
-                    <span className="text-xs text-slate-300">This request is DJ only</span>
+                    <span className="text-xs text-slate-300">
+                      {pendingSpecialForcesDjOnly
+                        ? 'This request type is DJ only'
+                        : 'This request is DJ only'}
+                    </span>
                   </div>
                   <input
                     className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
@@ -13048,9 +13455,10 @@ function App() {
             onClick={(event) => event.stopPropagation()}
           >
             <h3 className="text-lg font-semibold text-red-200">Delete setlist section?</h3>
-            {pendingDeleteSetlistSection?.toLowerCase().startsWith('special request') ? (
+            {pendingDeleteSetlistSection?.toLowerCase().startsWith('special request') ||
+            pendingDeleteSetlistSection?.trim().toLowerCase() === 'dj only' ? (
               <p className="mt-2 text-sm text-slate-300">
-                This hides <span className="font-semibold">Special Requests</span> for this gig.
+                This hides <span className="font-semibold">{pendingDeleteSetlistSection}</span> for this gig.
                 Existing special request entries stay saved.
               </p>
             ) : (
@@ -13091,7 +13499,7 @@ function App() {
               Choose a set type or create your own label. Admin can drag to reorder setlists.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
-              {['Special Requests', 'Dinner', 'Latin', 'Dance'].map((template) => (
+              {['Special Requests', 'DJ Only', 'Dinner', 'Latin', 'Dance'].map((template) => (
                 <button
                   key={template}
                   className="rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200"
@@ -13632,7 +14040,9 @@ function App() {
                           className="grid items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm md:grid-cols-[.9fr_1.4fr_1fr_.6fr_.4fr]"
                         >
                           <div className="text-xs text-teal-300">
-                            Special Request
+                            {request.djOnly || request.origin === 'dj_track'
+                              ? request.type || 'DJ Only'
+                              : 'Special Request'}
                             <div className="text-xs text-slate-400">{request.type}</div>
                             {request.djOnly && (
                               <div className="mt-1 inline-flex items-center rounded-full bg-red-500/20 px-2 py-0.5 text-xs uppercase tracking-wide text-red-200">
@@ -13644,8 +14054,8 @@ function App() {
                             <div className="text-base font-semibold md:text-lg">
                               {request.songTitle}
                             </div>
-                            {song?.artist && (
-                              <div className="text-xs text-slate-400">{song.artist}</div>
+                            {(request.artist || song?.artist) && (
+                              <div className="text-xs text-slate-400">{request.artist || song?.artist}</div>
                             )}
                             <div className="mt-2 flex items-center gap-2 text-xs">
                               {(request.externalAudioUrl || song?.youtubeUrl) && (
@@ -13688,7 +14098,7 @@ function App() {
                                 : 'text-slate-300'
                             }`}
                           >
-                            {request.djOnly ? 'DJ' : request.singers.join(', ')}
+                            {request.djOnly ? 'DJ ONLY' : request.singers.join(', ')}
                           </div>
                           <div className="text-xs text-slate-200">
                             {request.djOnly ? '—' : request.key}
@@ -15046,7 +15456,7 @@ function App() {
                     Setlist tags
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {setlistTypeTags.map((tag) => {
+                    {normalizeTagList(['DJ Only', ...setlistTypeTags]).map((tag) => {
                       const active = newSongTags.includes(tag)
                       return (
                         <button
@@ -15297,7 +15707,7 @@ function App() {
                 Setlist tags
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
-                {setlistTypeTags.map((tag) => {
+                {normalizeTagList(['DJ Only', ...setlistTypeTags]).map((tag) => {
                   const active = editingSongTags.some(
                     (item) => item.trim().toLowerCase() === tag.trim().toLowerCase(),
                   )
@@ -15621,7 +16031,7 @@ function App() {
                       onChange={(event) => setSongSearch(event.target.value)}
                     />
                     <div className="flex flex-wrap gap-2">
-                      {setlistTypeTags.map((tag) => (
+                      {normalizeTagList(['DJ Only', ...setlistTypeTags]).map((tag) => (
                         <button
                           key={tag}
                           className={`rounded-full border px-3 py-1 text-xs ${
@@ -15719,15 +16129,28 @@ function App() {
                       </p>
                     </div>
                     {!gigMode && (
-                      <button
-                        className="rounded-full border border-white/10 px-3 py-1 text-xs"
-                        onClick={() => {
-                          resetPendingSpecialRequest()
-                          setShowSpecialRequestModal(true)
-                        }}
-                      >
-                        Add request
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="rounded-full border border-white/10 px-3 py-1 text-xs"
+                          onClick={() => {
+                            resetPendingSpecialRequest()
+                            setShowSpecialRequestModal(true)
+                          }}
+                        >
+                          Add request
+                        </button>
+                        <button
+                          className="rounded-full border border-rose-300/35 bg-rose-900/30 px-3 py-1 text-xs text-rose-100"
+                          onClick={() => {
+                            resetPendingSpecialRequest()
+                            setPendingSpecialType('DJ Only')
+                            setPendingSpecialDjOnly(true)
+                            setShowSpecialRequestModal(true)
+                          }}
+                        >
+                          Add DJ track
+                        </button>
+                      </div>
                     )}
                   </div>
 
@@ -15814,7 +16237,9 @@ function App() {
                               }}
                             >
                             <div className="text-xs text-teal-300">
-                              Special Request
+                              {request.djOnly || request.origin === 'dj_track'
+                                ? request.type || 'DJ Only'
+                                : 'Special Request'}
                               <div className="text-[10px] text-slate-400">
                                 {request.type}
                               </div>
@@ -15828,9 +16253,9 @@ function App() {
                               <div className="text-base font-semibold md:text-lg">
                                 {request.songTitle}
                               </div>
-                              {song?.artist && (
+                              {(request.artist || song?.artist) && (
                                 <div className="text-[10px] text-slate-400">
-                                  {song.artist}
+                                  {request.artist || song?.artist}
                                 </div>
                               )}
                               <div className="mt-2 flex items-center gap-2 text-[10px]">
@@ -15884,7 +16309,7 @@ function App() {
                                   : 'text-slate-300'
                               }`}
                             >
-                              {request.djOnly ? 'DJ' : request.singers.join(', ')}
+                              {request.djOnly ? 'DJ ONLY' : request.singers.join(', ')}
                             </div>
                             <div className="text-xs text-slate-200">
                               {request.djOnly ? '—' : request.key}

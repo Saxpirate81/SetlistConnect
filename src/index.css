@@ -1018,6 +1018,11 @@ button[aria-label="Print chart or lyrics"] {
   border-color: #fecdd3;
 }
 
+.print-tone-dj {
+  background: linear-gradient(180deg, #ffe4e6 0%, #fecdd3 100%);
+  border-color: #f9a8d4;
+}
+
 .print-tone-default {
   background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
   border-color: #e2e8f0;

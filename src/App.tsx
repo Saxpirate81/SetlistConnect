@@ -2868,9 +2868,9 @@ function App() {
                   className="lyrics-tools-btn"
                   onClick={() => {
                     queueLyricsPrefsUndo()
-                    setLyricsGlobalFontScale((current) => Math.max(0.75, current - 0.08))
+                    setLyricsGlobalFontScale((current) => Math.min(1.8, current + 0.08))
                   }}
-                  aria-label="Decrease font size"
+                  aria-label="Increase font size"
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -2895,9 +2895,9 @@ function App() {
                   className="lyrics-tools-btn"
                   onClick={() => {
                     queueLyricsPrefsUndo()
-                    setLyricsGlobalFontScale((current) => Math.min(1.8, current + 0.08))
+                    setLyricsGlobalFontScale((current) => Math.max(0.75, current - 0.08))
                   }}
-                  aria-label="Increase font size"
+                  aria-label="Decrease font size"
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"

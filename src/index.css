@@ -647,6 +647,40 @@ button[aria-label="Print chart or lyrics"] {
   backface-visibility: hidden;
 }
 
+.shared-public-mode .shared-upnext-banner.liquid-button,
+.shared-public-mode .shared-upnext-banner.liquid-button::after {
+  animation: none !important;
+}
+
+.shared-public-mode .shared-upnext-banner.upnext-flash {
+  animation: upnext-flash 20s ease-in-out infinite !important;
+}
+
+.shared-public-mode .shared-upnext-banner.upnext-flash::before {
+  animation: upnext-highlight 24s ease-in-out infinite !important;
+  opacity: 0.6 !important;
+}
+
+.shared-public-mode .shared-upnext-banner {
+  position: fixed !important;
+  top: 0 !important;
+  bottom: auto !important;
+}
+
+.past-gig-locked-surface button,
+.past-gig-locked-surface input,
+.past-gig-locked-surface select,
+.past-gig-locked-surface textarea,
+.past-gig-locked-surface a,
+.past-gig-locked-surface [role="button"] {
+  pointer-events: none !important;
+}
+
+.past-gig-locked-surface {
+  user-select: none;
+  opacity: 0.86;
+}
+
 .fade-in {
   animation: fadeIn 0.35s ease;
 }

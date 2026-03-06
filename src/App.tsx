@@ -14,6 +14,10 @@ import openPlaylistIcon from './assets/open-playlist-icon.png'
 import setlistConnectLogo from './assets/setlist-connect-logo.png'
 
 type Role = 'admin' | 'user' | null
+const isAdminMembershipRole = (value?: string | null) => {
+  const normalized = (value ?? '').trim().toLowerCase()
+  return normalized === 'admin' || normalized === 'owner'
+}
 type Screen = 'setlists' | 'builder' | 'song' | 'musicians' | 'account'
 type BandTier = 'free' | 'pro' | 'agency'
 
@@ -126,6 +130,7 @@ type SharedPlaylistView = {
   venueAddress?: string
   musicians?: Musician[]
   entries: PlaylistEntry[]
+  allEntries?: PlaylistEntry[]
 }
 
 type DocumentSelectionItem = {
@@ -243,6 +248,7 @@ const ACTIVE_BAND_KEY = 'setlist:activeBandId'
 const FREE_TIER_MAX_SONGS = 50
 const FREE_TIER_MAX_MUSICIANS = 10
 const FREE_TIER_MAX_ACTIVE_GIGS = 2
+const PRO_PLAN_PRICE_LABEL = '$4.99/mo'
 const BAND_TIER_DETAILS: Record<
   BandTier,
   {
@@ -265,7 +271,7 @@ const BAND_TIER_DETAILS: Record<
   },
   pro: {
     name: 'Pro',
-    summary: 'Best for active working bands',
+    summary: `Best for active working bands (${PRO_PLAN_PRICE_LABEL})`,
     includes: [
       'Unlimited songs',
       'Unlimited musicians',
@@ -280,7 +286,7 @@ const BAND_TIER_DETAILS: Record<
   },
   agency: {
     name: 'Agency',
-    summary: 'Best for larger organizations',
+    summary: 'Coming soon for larger organizations',
     includes: [
       'Unlimited songs',
       'Unlimited musicians',
@@ -363,6 +369,21 @@ const chunkList = <T,>(items: T[], size: number): T[][] => {
   return chunks.length ? chunks : [[]]
 }
 
+const getOperationalDateISO = (date = new Date()) => {
+  const shifted = new Date(date.getTime() - 5 * 60 * 60 * 1000)
+  return shifted.toISOString().slice(0, 10)
+}
+
+const normalizeGigDateISO = (raw: string | null | undefined) => {
+  const value = String(raw ?? '').trim()
+  if (!value) return ''
+  const directIso = value.slice(0, 10)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(directIso)) return directIso
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return parsed.toISOString().slice(0, 10)
+}
+
 function App() {
   const [role, setRole] = useState<Role>(null)
   const [gigMode, setGigMode] = useState(false)
@@ -410,6 +431,9 @@ function App() {
   const [bandSubscriptionTierByBandId, setBandSubscriptionTierByBandId] = useState<Record<string, BandTier>>(
     {},
   )
+  const [bandPendingTierChangeByBandId, setBandPendingTierChangeByBandId] = useState<
+    Record<string, { pendingTier: BandTier; effectiveAt: string }>
+  >({})
   const [showTierLimitModal, setShowTierLimitModal] = useState<{
     resource: 'songs' | 'musicians' | 'gigs'
     message: string
@@ -421,6 +445,7 @@ function App() {
   const [inviteMusicianId, setInviteMusicianId] = useState('')
   const [inviteCreateResult, setInviteCreateResult] = useState<string | null>(null)
   const [screen, setScreen] = useState<Screen>('setlists')
+  const [pastGigUnlockedByGigId, setPastGigUnlockedByGigId] = useState<Record<string, boolean>>({})
   const [appState, setAppState] = useState<AppState>(
     isSupabaseEnabled ? emptyState : initialState,
   )
@@ -567,6 +592,14 @@ function App() {
   const [sharedDocsLoading, setSharedDocsLoading] = useState(false)
   const [sharedDocsError, setSharedDocsError] = useState<string | null>(null)
   const [sharedNowPlayingSongId, setSharedNowPlayingSongId] = useState<string | null>(null)
+  const [sharedSongDisplayByAnyId, setSharedSongDisplayByAnyId] = useState<
+    Record<string, { title: string; singers: string[]; keys: string[] }>
+  >({})
+  const [sharedNowPlayingFallback, setSharedNowPlayingFallback] = useState<{
+    title: string
+    singers: string[]
+    keys: string[]
+  } | null>(null)
   const [sharedDismissedUpNextId, setSharedDismissedUpNextId] = useState<string | null>(null)
   const [sharedBannerTouchStartX, setSharedBannerTouchStartX] = useState<number | null>(null)
   const [sharedLyricsTheme, setSharedLyricsTheme] = useState<'dark' | 'light'>(() => {
@@ -1212,6 +1245,18 @@ function App() {
     () => appState.setlists.find((setlist) => setlist.id === selectedSetlistId),
     [appState.setlists, selectedSetlistId],
   )
+  const operationalTodayISO = getOperationalDateISO()
+  const currentSetlistDateISO = normalizeGigDateISO(currentSetlist?.date)
+  const isCurrentSetlistPast = Boolean(
+    currentSetlistDateISO && currentSetlistDateISO < operationalTodayISO,
+  )
+  const isPastGigLockedForAdmin = Boolean(
+    isAdmin &&
+      screen === 'builder' &&
+      currentSetlist &&
+      isCurrentSetlistPast &&
+      !pastGigUnlockedByGigId[currentSetlist.id],
+  )
   const gigSheetQueuedSong = useMemo(
     () => appState.songs.find((song) => song.id === appState.currentSongId) ?? null,
     [appState.currentSongId, appState.songs],
@@ -1224,6 +1269,9 @@ function App() {
   const activeBandTier: BandTier = activeBandId
     ? (bandSubscriptionTierByBandId[activeBandId] ?? 'free')
     : 'free'
+  const activeBandPendingTierChange = activeBandId
+    ? (bandPendingTierChangeByBandId[activeBandId] ?? null)
+    : null
   const tierRank: Record<BandTier, number> = { free: 0, pro: 1, agency: 2 }
   const selectedTier = showTierDetailsModal
   const selectedTierDetails = selectedTier ? BAND_TIER_DETAILS[selectedTier] : null
@@ -1243,11 +1291,15 @@ function App() {
   const isFreeTier = activeBandTier === 'free'
   const canAccessBillingControls = isAdmin && Boolean(activeBandId) && Boolean(authUserId)
   const stripeProCheckoutUrl = String(import.meta.env.VITE_STRIPE_CHECKOUT_PRO_URL ?? '').trim()
-  const stripeAgencyCheckoutUrl = String(import.meta.env.VITE_STRIPE_CHECKOUT_AGENCY_URL ?? '').trim()
   const stripePortalUrl = String(import.meta.env.VITE_STRIPE_CUSTOMER_PORTAL_URL ?? '').trim()
   const supabaseFunctionsBaseUrl = String(import.meta.env.VITE_SUPABASE_URL ?? '').replace(/\/$/, '')
   const supabaseAnonPublicKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim()
-  const activeGigCount = appState.setlists.length
+  const todayIsoForLimits = operationalTodayISO
+  const activeGigCount = appState.setlists.filter((setlist) => {
+    const gigDate = normalizeGigDateISO(setlist.date)
+    if (!gigDate) return true
+    return gigDate >= todayIsoForLimits
+  }).length
   const songCount = appState.songs.length
   const musicianCount = appState.musicians.length
   const overFreeTierLimits = useMemo(() => {
@@ -1263,7 +1315,7 @@ function App() {
   }, [activeGigCount, musicianCount, songCount])
   const isOverFreeTierLimit = isFreeTier && overFreeTierLimits.length > 0
   const downgradeLockMessage = isOverFreeTierLimit
-    ? `Your band is currently over Free limits for ${overFreeTierLimits.join(', ')}. Upgrade to Pro or Agency to keep creating new items.`
+    ? `You are over the Free plan limits for ${overFreeTierLimits.join(', ')}. To protect fair use on Free, new creation is paused until limits are reduced or you upgrade to Pro (${PRO_PLAN_PRICE_LABEL}).`
     : ''
   const openTierLimitModal = useCallback((resource: 'songs' | 'musicians' | 'gigs', message: string) => {
     setShowTierLimitModal({ resource, message })
@@ -1278,7 +1330,7 @@ function App() {
       if (songCount + nextSongCount <= FREE_TIER_MAX_SONGS) return true
       openTierLimitModal(
         'songs',
-        `Free tier allows up to ${FREE_TIER_MAX_SONGS} songs. Upgrade to Pro to add more songs.`,
+        `Your Free plan includes up to ${FREE_TIER_MAX_SONGS} songs. You're at ${songCount}. Upgrade to Pro (${PRO_PLAN_PRICE_LABEL}) for unlimited songs.`,
       )
       return false
     },
@@ -1294,7 +1346,7 @@ function App() {
       if (musicianCount + nextMusicianCount <= FREE_TIER_MAX_MUSICIANS) return true
       openTierLimitModal(
         'musicians',
-        `Free tier allows up to ${FREE_TIER_MAX_MUSICIANS} musicians. Upgrade to Pro to add more musicians.`,
+        `Your Free plan includes up to ${FREE_TIER_MAX_MUSICIANS} musicians. You're at ${musicianCount}. Upgrade to Pro (${PRO_PLAN_PRICE_LABEL}) for unlimited musicians.`,
       )
       return false
     },
@@ -1310,7 +1362,7 @@ function App() {
       if (activeGigCount + nextGigCount <= FREE_TIER_MAX_ACTIVE_GIGS) return true
       openTierLimitModal(
         'gigs',
-        `Free tier allows up to ${FREE_TIER_MAX_ACTIVE_GIGS} active gigs. Upgrade to Pro to create more gigs.`,
+        `Your Free plan includes up to ${FREE_TIER_MAX_ACTIVE_GIGS} active gigs. You're at ${activeGigCount}. Upgrade to Pro (${PRO_PLAN_PRICE_LABEL}) for unlimited active gigs.`,
       )
       return false
     },
@@ -1340,6 +1392,10 @@ function App() {
     }
   }, [activeBandId])
   const openStripeCheckout = useCallback(async (targetTier: Extract<BandTier, 'pro' | 'agency'>) => {
+    if (targetTier === 'agency') {
+      setAccountSaveStatus('Agency plan is coming soon. Pro is available now for $4.99/mo.')
+      return
+    }
     if (!activeBandId) {
       setAccountSaveStatus('Select or create a band before managing billing.')
       return
@@ -1384,7 +1440,7 @@ function App() {
           setAccountSaveStatus('Popup blocked. Allow popups for this site and try again.')
           return
         }
-        setAccountSaveStatus(`Opening ${targetTier === 'agency' ? 'Agency' : 'Pro'} checkout...`)
+        setAccountSaveStatus('Opening Pro checkout...')
         return
       }
       setAccountSaveStatus(
@@ -1392,14 +1448,13 @@ function App() {
       )
       return
     }
-    openStripeUrl(targetTier === 'pro' ? stripeProCheckoutUrl : stripeAgencyCheckoutUrl, targetTier)
+    openStripeUrl(stripeProCheckoutUrl, 'pro')
   }, [
     activeBandId,
     canAccessBillingControls,
     openStripeUrl,
     supabaseAnonPublicKey,
     supabaseFunctionsBaseUrl,
-    stripeAgencyCheckoutUrl,
     stripeProCheckoutUrl,
   ])
   const openStripePortal = useCallback(async () => {
@@ -2026,14 +2081,36 @@ function App() {
   ])
 
   const activePlaylistEntries = sharedPlaylistView?.entries ?? playlistEntries
+  const sharedAllPlaylistEntries = sharedPlaylistView?.allEntries ?? sharedPlaylistView?.entries ?? []
+  const fallbackSharedUpNextEntry = useMemo(
+    () => sharedAllPlaylistEntries[playlistIndex] ?? activePlaylistEntries[playlistIndex] ?? null,
+    [activePlaylistEntries, playlistIndex, sharedAllPlaylistEntries],
+  )
   const sharedNowPlayingEntry = useMemo(
     () =>
       sharedNowPlayingSongId
-        ? activePlaylistEntries.find((entry) => entry.songId === sharedNowPlayingSongId) ?? null
+        ? (
+            sharedAllPlaylistEntries.find((entry) => entry.songId === sharedNowPlayingSongId) ??
+            activePlaylistEntries.find((entry) => entry.songId === sharedNowPlayingSongId) ??
+            null
+          )
         : null,
-    [activePlaylistEntries, sharedNowPlayingSongId],
+    [activePlaylistEntries, sharedAllPlaylistEntries, sharedNowPlayingSongId],
   )
-  const sharedNowPlayingTitle = sharedNowPlayingEntry?.title ?? 'Song selected'
+  const sharedResolvedUpNextEntry = sharedNowPlayingEntry ?? fallbackSharedUpNextEntry
+  const sharedNowPlayingSong = useMemo(
+    () =>
+      sharedNowPlayingSongId
+        ? appState.songs.find((song) => song.id === sharedNowPlayingSongId) ?? null
+        : null,
+    [appState.songs, sharedNowPlayingSongId],
+  )
+  const sharedNowPlayingTitle =
+    sharedResolvedUpNextEntry?.title ??
+    sharedNowPlayingSong?.title ??
+    sharedSongDisplayByAnyId[sharedNowPlayingSongId ?? '']?.title ??
+    sharedNowPlayingFallback?.title ??
+    'Song selected'
   const getPlaylistEntryAssignments = useCallback((entry: PlaylistEntry) => {
     const singers = normalizeTagList(entry.assignmentSingers ?? [])
     const keys = normalizeTagList(entry.assignmentKeys ?? [])
@@ -2059,6 +2136,52 @@ function App() {
     }
     return { singers, keys }
   }, [appState.songs, currentSetlist])
+  const sharedNowPlayingAssignments = useMemo(() => {
+    const display = sharedSongDisplayByAnyId[sharedNowPlayingSongId ?? '']
+    if (display) {
+      return { singers: display.singers, keys: display.keys }
+    }
+    if (sharedResolvedUpNextEntry) {
+      return getPlaylistEntryAssignments(sharedResolvedUpNextEntry)
+    }
+    if (!sharedNowPlayingSong || !sharedPlaylistView) {
+      if (sharedNowPlayingFallback) {
+        return { singers: sharedNowPlayingFallback.singers, keys: sharedNowPlayingFallback.keys }
+      }
+      return { singers: [], keys: [] }
+    }
+    const singers: string[] = []
+    const keys: string[] = []
+    sharedNowPlayingSong.keys
+      .map((item) => ({
+        singer: item.singer,
+        key: item.gigOverrides[sharedPlaylistView.setlistId] ?? '',
+      }))
+      .filter((item) => item.key)
+      .forEach((item) => {
+        if (item.singer && !singers.some((value) => value.toLowerCase() === item.singer.toLowerCase())) {
+          singers.push(item.singer)
+        }
+        if (item.key && !keys.some((value) => value.toLowerCase() === item.key.toLowerCase())) {
+          keys.push(item.key)
+        }
+      })
+    return { singers, keys }
+  }, [
+    getPlaylistEntryAssignments,
+    sharedSongDisplayByAnyId,
+    sharedNowPlayingFallback,
+    sharedNowPlayingSong,
+    sharedNowPlayingSongId,
+    sharedPlaylistView,
+    sharedResolvedUpNextEntry,
+  ])
+  const sharedNowPlayingKeyLabel = sharedNowPlayingAssignments.keys.length
+    ? sharedNowPlayingAssignments.keys.join(', ')
+    : '—'
+  const sharedNowPlayingSingerLabel = sharedNowPlayingAssignments.singers.length
+    ? sharedNowPlayingAssignments.singers.join(', ')
+    : 'Unassigned'
   const playlistSingerOptions = useMemo(() => {
     const seen = new Set<string>()
     const options: string[] = []
@@ -2722,6 +2845,23 @@ function App() {
               </button>
             </div>
             <div className="lyrics-floating-panel-body">
+              <div className="space-y-1">
+                <p className="text-[10px] uppercase tracking-wide text-slate-400">Font family</p>
+                <select
+                  className="w-full rounded-xl border border-white/15 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none"
+                  value={sharedLyricsFont}
+                  onChange={(event) => {
+                    const nextFont = event.target.value as 'sans' | 'serif' | 'mono'
+                    if (nextFont === sharedLyricsFont) return
+                    queueLyricsPrefsUndo()
+                    setSharedLyricsFont(nextFont)
+                  }}
+                >
+                  <option value="sans">Sans</option>
+                  <option value="serif">Serif</option>
+                  <option value="mono">Mono</option>
+                </select>
+              </div>
               <div className="lyrics-tools-row">
                 <button
                   type="button"
@@ -3761,6 +3901,7 @@ function App() {
     if (bandIds.length === 0) {
       setBands([])
       setBandSubscriptionTierByBandId({})
+      setBandPendingTierChangeByBandId({})
       setActiveBandId('')
       setRole(null)
       return 0
@@ -3781,10 +3922,11 @@ function App() {
     setBands(mappedBands)
     const { data: subscriptionsData, error: subscriptionsError } = await supabase
       .from('SetlistBandSubscriptions')
-      .select('band_id,tier,status')
+      .select('band_id,tier,status,current_period_end,metadata')
       .in('band_id', bandIds)
     if (!subscriptionsError) {
       const nextSubscriptionTiers: Record<string, BandTier> = {}
+      const nextPendingTierChanges: Record<string, { pendingTier: BandTier; effectiveAt: string }> = {}
       ;(subscriptionsData ?? []).forEach((row) => {
         const bandId = String(row.band_id ?? '')
         const rawTier = String(row.tier ?? '').toLowerCase()
@@ -3797,9 +3939,36 @@ function App() {
         if (!bandId) return
         const normalizedStatus = String(row.status ?? 'active').toLowerCase()
         if (normalizedStatus !== 'active' && normalizedStatus !== 'trialing') return
-        nextSubscriptionTiers[bandId] = normalizedTier
+        const pendingTierRaw = String((row.metadata as { pending_tier?: string } | null)?.pending_tier ?? '')
+          .toLowerCase()
+          .trim()
+        const pendingTier: BandTier =
+          pendingTierRaw === 'pro'
+            ? 'pro'
+            : pendingTierRaw === 'agency' || pendingTierRaw === 'business'
+              ? 'agency'
+              : 'free'
+        const periodEndIso = String(row.current_period_end ?? '').trim()
+        const periodEndMs = periodEndIso ? new Date(periodEndIso).getTime() : 0
+        const shouldApplyPendingTier =
+          Boolean(pendingTierRaw) &&
+          pendingTier !== normalizedTier &&
+          Boolean(periodEndMs && periodEndMs <= Date.now())
+        nextSubscriptionTiers[bandId] = shouldApplyPendingTier ? pendingTier : normalizedTier
+        const hasFuturePendingTier =
+          Boolean(pendingTierRaw) &&
+          pendingTier !== normalizedTier &&
+          Boolean(periodEndMs && periodEndMs > Date.now()) &&
+          Boolean(periodEndIso)
+        if (hasFuturePendingTier && periodEndIso) {
+          nextPendingTierChanges[bandId] = {
+            pendingTier,
+            effectiveAt: periodEndIso,
+          }
+        }
       })
       setBandSubscriptionTierByBandId(nextSubscriptionTiers)
+      setBandPendingTierChangeByBandId(nextPendingTierChanges)
     }
     const storedBandId = localStorage.getItem(ACTIVE_BAND_KEY) ?? ''
     const resolvedBandId = mappedBands.some((band) => band.id === storedBandId)
@@ -3807,7 +3976,7 @@ function App() {
       : mappedBands[0]?.id ?? ''
     setActiveBandId(resolvedBandId)
     const membership = mappedMemberships.find((item) => item.bandId === resolvedBandId)
-    setRole(membership?.role === 'admin' ? 'admin' : 'user')
+    setRole(isAdminMembershipRole(membership?.role) ? 'admin' : 'user')
     return mappedBands.length
   }, [])
 
@@ -3901,7 +4070,9 @@ function App() {
     const membership = memberships.find(
       (item) => item.bandId === activeBandId && item.musicianId === musician.id,
     )
-    const inviteRoleForMusician: 'member' | 'admin' = membership?.role === 'admin' ? 'admin' : 'member'
+    const inviteRoleForMusician: 'member' | 'admin' = isAdminMembershipRole(membership?.role)
+      ? 'admin'
+      : 'member'
     const { data, error } = await supabase.rpc('create_band_invite', {
       p_band_id: activeBandId,
       p_email: email,
@@ -4103,6 +4274,7 @@ function App() {
     if (!source) return
     if (!canCreateGigs()) return
     const uniqueSourceSongIds = Array.from(new Set(source.songIds))
+    const sourceGigSectionOverrides = gigSongSectionOverrides[source.id] ?? {}
     const newId = createId()
     commitChange('Duplicate gig', (prev) => {
       const duplicate: Setlist = {
@@ -4201,7 +4373,27 @@ function App() {
           )
           reportSupabaseError(gigSingerKeysInsertError)
         }
+
+        const sectionOverrideTagRows = Object.entries(sourceGigSectionOverrides)
+          .map(([songId, section]) => ({
+            id: createId(),
+            song_id: songId,
+            tag: makeGigSectionTag(newId, section),
+          }))
+          .filter((row) => row.song_id && row.tag)
+        if (sectionOverrideTagRows.length) {
+          const { error: sectionTagInsertError } = await supabase.from('SetlistSongTags').insert(
+            sectionOverrideTagRows.map((row) => withBandId(row)),
+          )
+          reportSupabaseError(sectionTagInsertError)
+        }
       })()
+    }
+    if (Object.keys(sourceGigSectionOverrides).length > 0) {
+      setGigSongSectionOverrides((prev) => ({
+        ...prev,
+        [newId]: { ...sourceGigSectionOverrides },
+      }))
     }
     setGigHiddenSpecialSection((prev) => ({ ...prev, [newId]: false }))
   }
@@ -6325,6 +6517,15 @@ function App() {
     },
     [getSharedDocumentSelectionItems],
   )
+  const hasSharedChartsForSong = useCallback(
+    (songId?: string) => {
+      if (!songId) return false
+      return getSharedDocumentSelectionItems(songId).some(
+        (doc) => doc.type === 'Chart' || doc.type === 'Lead Sheet',
+      )
+    },
+    [getSharedDocumentSelectionItems],
+  )
   const openSharedLyricsForSong = useCallback(
     (songId?: string) => {
       if (!songId) return
@@ -6335,6 +6536,19 @@ function App() {
       setDocModalSongId(songId)
       setDocModalPageIndex(0)
       setDocModalContent(lyricsDoc)
+    },
+    [getSharedDocumentSelectionItems],
+  )
+  const openSharedDocsForSong = useCallback(
+    (songId?: string) => {
+      if (!songId) return
+      const matchingDocs = getSharedDocumentSelectionItems(songId)
+      if (matchingDocs.length === 0) return
+      setShowInstrumentPrompt(false)
+      setPendingDocSongId(null)
+      setDocModalSongId(songId)
+      setDocModalPageIndex(0)
+      setDocModalContent(null)
     },
     [getSharedDocumentSelectionItems],
   )
@@ -6789,7 +7003,7 @@ function App() {
   const screenHeader = (
     <div className="fixed top-0 left-0 right-0 z-[70]">
       <header className="border-b border-white/10 bg-slate-950/90 backdrop-blur-md">
-        <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-4">
+        <div className="relative mx-auto flex max-w-3xl items-center justify-between px-4 py-4">
           <div className="flex items-center gap-3">
             <img
               src={setlistConnectLogo}
@@ -6825,7 +7039,30 @@ function App() {
                 Install App
               </button>
             )}
-            {screen === 'builder' && (
+            {role && (
+              <>
+                {activeBandTier === 'pro' && (
+                  <span className="rounded-full border border-emerald-300/45 bg-emerald-400/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-100">
+                    Pro · {PRO_PLAN_PRICE_LABEL}
+                  </span>
+                )}
+                {activeBandTier === 'agency' && (
+                  <span className="rounded-full border border-cyan-300/45 bg-cyan-400/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-cyan-100">
+                    Agency
+                  </span>
+                )}
+                {authUserEmail && <span className="hidden sm:inline">{authUserEmail}</span>}
+                <button
+                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  onClick={() => void handleLogout()}
+                >
+                  Log out
+                </button>
+              </>
+            )}
+          </div>
+          {screen === 'builder' && (
+            <div className="absolute left-1/2 -translate-x-1/2">
               <button
                 className={`liquid-button whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold ${
                   gigMode
@@ -6844,19 +7081,8 @@ function App() {
               >
                 <span>{gigMode ? 'Gig Mode On' : 'Gig Mode'}</span>
               </button>
-            )}
-            {role && (
-              <>
-                {authUserEmail && <span className="hidden sm:inline">{authUserEmail}</span>}
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => void handleLogout()}
-                >
-                  Log out
-                </button>
-              </>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </header>
       {appState.currentSongId && appState.currentSongId !== dismissedUpNextId && (
@@ -6931,10 +7157,17 @@ function App() {
     </div>
   )
 
-  const todayISO = new Date().toISOString().slice(0, 10)
-  const hasTodayGig = appState.setlists.some((setlist) => setlist.date === todayISO)
-  const upcomingGigs = appState.setlists.filter((setlist) => setlist.date >= todayISO)
-  const pastGigs = appState.setlists.filter((setlist) => setlist.date < todayISO)
+  const hasTodayGig = appState.setlists.some(
+    (setlist) => normalizeGigDateISO(setlist.date) === operationalTodayISO,
+  )
+  const upcomingGigs = appState.setlists.filter((setlist) => {
+    const gigDate = normalizeGigDateISO(setlist.date)
+    return gigDate ? gigDate >= operationalTodayISO : true
+  })
+  const pastGigs = appState.setlists.filter((setlist) => {
+    const gigDate = normalizeGigDateISO(setlist.date)
+    return gigDate ? gigDate < operationalTodayISO : false
+  })
 
   useEffect(() => {
     if (!role) return
@@ -6979,7 +7212,7 @@ function App() {
     const membership = memberships.find(
       (item) => item.bandId === activeBandId && item.status === 'active',
     )
-    setRole(membership?.role === 'admin' ? 'admin' : membership ? 'user' : null)
+    setRole(isAdminMembershipRole(membership?.role) ? 'admin' : membership ? 'user' : null)
   }, [activeBandId, memberships])
 
   useEffect(() => {
@@ -7120,25 +7353,34 @@ function App() {
     const sharedBandNameParam = safeDecodeURIComponent(params.get('band') ?? '').trim()
     const sharedMusiciansParam = parseSharedMusiciansPayload(params.get('musicians'))
     const payloadEncoded = params.get('data')
-    if (payloadEncoded) {
-      const parsed = parseSharedPlaylistPayload(payloadEncoded)
-      if (parsed) {
-        setSharedWelcomeStep('welcome')
-        setSharedPlaylistView({
-          setlistId: parsed.setlistId || setlistId,
-          bandName: parsed.bandName ?? sharedBandNameParam ?? activeBandName ?? 'Band',
-          gigName: parsed.gigName || 'Shared Gig',
-          date: parsed.date || '',
-          venueAddress: parsed.venueAddress ?? '',
-          musicians: parsed.musicians ?? sharedMusiciansParam,
-          entries: parsed.entries,
-        })
-        setSharedPlaylistError(null)
-        setSharedPlaylistLoading(false)
-        setPlaylistIndex(Math.min(requestedIndex, Math.max(0, parsed.entries.length - 1)))
-        setPlaylistAutoAdvance(true)
-        return
-      }
+    const parsedPayload = payloadEncoded ? parseSharedPlaylistPayload(payloadEncoded) : null
+    if (parsedPayload) {
+      const payloadDisplayMap: Record<string, { title: string; singers: string[]; keys: string[] }> = {}
+      parsedPayload.entries.forEach((entry) => {
+        const id = (entry.songId ?? '').trim()
+        if (!id) return
+        payloadDisplayMap[id] = {
+          title: entry.title?.trim?.() || 'Song selected',
+          singers: normalizeTagList(entry.assignmentSingers ?? []),
+          keys: normalizeTagList(entry.assignmentKeys ?? []),
+        }
+      })
+      setSharedSongDisplayByAnyId(payloadDisplayMap)
+      setSharedWelcomeStep('welcome')
+      setSharedPlaylistView({
+        setlistId: parsedPayload.setlistId || setlistId,
+        bandName: parsedPayload.bandName ?? sharedBandNameParam ?? activeBandName ?? 'Band',
+        gigName: parsedPayload.gigName || 'Shared Gig',
+        date: parsedPayload.date || '',
+        venueAddress: parsedPayload.venueAddress ?? '',
+        musicians: parsedPayload.musicians ?? sharedMusiciansParam,
+        entries: parsedPayload.entries,
+        allEntries: parsedPayload.entries,
+      })
+      setSharedPlaylistError(null)
+      setSharedPlaylistLoading(false)
+      setPlaylistIndex(Math.min(requestedIndex, Math.max(0, parsedPayload.entries.length - 1)))
+      setPlaylistAutoAdvance(true)
     }
     const targetSetlist = appState.setlists.find((setlist) => setlist.id === setlistId)
     if (targetSetlist) {
@@ -7159,6 +7401,7 @@ function App() {
       return
     }
     if (!supabase) {
+      if (parsedPayload) return
       setSharedPlaylistError('Shared playlist is unavailable right now.')
       setSharedPlaylistLoading(false)
       return
@@ -7175,7 +7418,7 @@ function App() {
           .single(),
         supabase
           .from('SetlistGigSongs')
-          .select('song_id, sort_order')
+          .select('id, song_id, sort_order')
           .eq('gig_id', setlistId)
           .order('sort_order', { ascending: true }),
         supabase
@@ -7191,6 +7434,10 @@ function App() {
       const firstError =
         gigRes.error || gigSongsRes.error || songsRes.error || specialReqRes.error
       if (firstError) {
+        if (parsedPayload) {
+          setSharedPlaylistLoading(false)
+          return
+        }
         setSharedPlaylistError(firstError.message ?? 'Shared playlist failed to load.')
         setSharedPlaylistView(null)
         setSharedPlaylistLoading(false)
@@ -7206,7 +7453,7 @@ function App() {
       let sharedBandName = activeBandName || 'Band'
       if (gig.band_id) {
         const { data: bandRow } = await supabase
-          .from('SetlistBands')
+          .from('bands')
           .select('name')
           .eq('id', gig.band_id)
           .single()
@@ -7227,6 +7474,10 @@ function App() {
         : { data: [], error: null as { message?: string } | null }
       if (cancelled) return
       if (tagsRes.error) {
+        if (parsedPayload) {
+          setSharedPlaylistLoading(false)
+          return
+        }
         setSharedPlaylistError(tagsRes.error.message ?? 'Shared playlist failed to load.')
         setSharedPlaylistView(null)
         setSharedPlaylistLoading(false)
@@ -7259,6 +7510,27 @@ function App() {
           gigSingerKeyAssignments.set(row.song_id, list)
         })
       }
+      const sharedDisplayMap: Record<string, { title: string; singers: string[]; keys: string[] }> = {}
+      ;(gigSongsRes.data ?? []).forEach((row) => {
+        const baseSongId = (row.song_id ?? '').trim()
+        if (!baseSongId) return
+        const song = songsById.get(baseSongId)
+        const title = (song?.title ?? '').trim()
+        const assignments = gigSingerKeyAssignments.get(baseSongId) ?? []
+        const singers = Array.from(
+          new Set(assignments.map((item) => item.singer?.trim()).filter(Boolean) as string[]),
+        )
+        const keys = Array.from(
+          new Set(assignments.map((item) => item.key?.trim()).filter(Boolean) as string[]),
+        )
+        const payload = { title: title || 'Song selected', singers, keys }
+        sharedDisplayMap[baseSongId] = payload
+        const gigSongId = (row.id ?? '').trim()
+        if (gigSongId) {
+          sharedDisplayMap[gigSongId] = payload
+        }
+      })
+      setSharedSongDisplayByAnyId(sharedDisplayMap)
       const orderedSongs = orderedSongIds
         .map((songId) => songsById.get(songId))
         .filter((song): song is NonNullable<(typeof songsRes.data)[number]> => Boolean(song))
@@ -7374,6 +7646,7 @@ function App() {
         venueAddress: gig.venue_address ?? '',
         musicians: sharedMusiciansParam,
         entries: playableEntries,
+        allEntries: entries,
       })
       setPlaylistIndex(Math.min(requestedIndex, Math.max(0, playableEntries.length - 1)))
       setPlaylistAutoAdvance(true)
@@ -7420,7 +7693,7 @@ function App() {
       return
     }
     const songIds = Array.from(
-      new Set(sharedPlaylistView.entries.map((entry) => entry.songId).filter(Boolean)),
+      new Set((sharedPlaylistView.allEntries ?? sharedPlaylistView.entries).map((entry) => entry.songId).filter(Boolean)),
     )
     if (songIds.length === 0) {
       setSharedDocuments([])
@@ -7531,6 +7804,90 @@ function App() {
   }, [normalizeSharedMusicians, sharedPlaylistView, supabase])
 
   useEffect(() => {
+    if (!sharedPlaylistView || !sharedNowPlayingSongId || !supabase) {
+      if (sharedPlaylistView && !sharedNowPlayingSongId) {
+        console.log('[Shared Up Next] No now playing song id yet.')
+      }
+      setSharedNowPlayingFallback(null)
+      return
+    }
+    console.log('[Shared Up Next] Starting fallback lookup', {
+      sharedNowPlayingSongId,
+      setlistId: sharedPlaylistView.setlistId,
+    })
+    let cancelled = false
+    void (async () => {
+      let resolvedSongId = sharedNowPlayingSongId
+      let songRes = await supabase
+        .from('SetlistSongs')
+        .select('title')
+        .eq('id', resolvedSongId)
+        .maybeSingle()
+      if (!songRes.data?.title) {
+        const gigSongLookup = await supabase
+          .from('SetlistGigSongs')
+          .select('song_id')
+          .eq('gig_id', sharedPlaylistView.setlistId)
+          .eq('id', sharedNowPlayingSongId)
+          .maybeSingle()
+        const mappedSongId = (gigSongLookup.data?.song_id ?? '').trim()
+        console.log('[Shared Up Next] Direct song lookup missed, gig-song mapping result', {
+          sourceId: sharedNowPlayingSongId,
+          mappedSongId,
+        })
+        if (mappedSongId) {
+          resolvedSongId = mappedSongId
+          songRes = await supabase
+            .from('SetlistSongs')
+            .select('title')
+            .eq('id', resolvedSongId)
+            .maybeSingle()
+        }
+      }
+      const keysRes = await supabase
+        .from('SetlistGigSingerKeys')
+        .select('singer_name, gig_key')
+        .eq('gig_id', sharedPlaylistView.setlistId)
+        .eq('song_id', resolvedSongId)
+      if (cancelled) return
+      const title = (songRes.data?.title ?? '').trim()
+      const singers = Array.from(
+        new Set(
+          (keysRes.data ?? [])
+            .map((row) => (row.singer_name ?? '').trim())
+            .filter(Boolean),
+        ),
+      )
+      const keys = Array.from(
+        new Set(
+          (keysRes.data ?? [])
+            .map((row) => (row.gig_key ?? '').trim())
+            .filter(Boolean),
+        ),
+      )
+      if (!title && singers.length === 0 && keys.length === 0) {
+        console.log('[Shared Up Next] Fallback lookup returned no metadata', {
+          requestedSongId: sharedNowPlayingSongId,
+          resolvedSongId,
+        })
+        setSharedNowPlayingFallback(null)
+        return
+      }
+      console.log('[Shared Up Next] Fallback lookup resolved metadata', {
+        requestedSongId: sharedNowPlayingSongId,
+        resolvedSongId,
+        title,
+        singers,
+        keys,
+      })
+      setSharedNowPlayingFallback({ title, singers, keys })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [sharedNowPlayingSongId, sharedPlaylistView, supabase])
+
+  useEffect(() => {
     if (lastAppliedLyricsViewerIdRef.current === lyricsViewerId) return
     lastAppliedLyricsViewerIdRef.current = lyricsViewerId
     const prefs = lyricsUserPrefsByViewer[lyricsViewerId] ?? DEFAULT_LYRICS_USER_PREFS
@@ -7593,6 +7950,7 @@ function App() {
     const client = supabase
     const gigId = sharedPlaylistView.setlistId
     const applySharedNowPlaying = (songId: string | null) => {
+      console.log('[Shared Up Next] applySharedNowPlaying received', { songId, gigId })
       if (!songId) {
         sharedNowPlayingSongIdRef.current = null
         setSharedNowPlayingSongId(null)
@@ -7606,7 +7964,7 @@ function App() {
         if (visibleIndex >= 0) {
           setPlaylistIndex(visibleIndex)
         } else {
-          const activeIndex = activePlaylistEntries.findIndex((entry) => entry.songId === songId)
+          const activeIndex = sharedAllPlaylistEntries.findIndex((entry) => entry.songId === songId)
           if (activeIndex >= 0) {
             if (playlistSingerFilter !== '__all__') {
               setPlaylistSingerFilter('__all__')
@@ -7626,9 +7984,34 @@ function App() {
         .eq('gig_id', gigId)
         .order('updated_at', { ascending: false })
         .limit(1)
-      if (cancelled || error) return
+      if (cancelled) return
+      if (error) {
+        console.log('[Shared Up Next] fetchLatestNowPlaying error', error)
+        return
+      }
       const row = (data?.[0] ?? null) as { song_id?: string | null } | null
-      applySharedNowPlaying(row?.song_id ?? null)
+      console.log('[Shared Up Next] fetchLatestNowPlaying row', row)
+      const directSongId = (row?.song_id ?? '').trim() || null
+      if (directSongId) {
+        applySharedNowPlaying(directSongId)
+        return
+      }
+      const { data: playedRows, error: playedError } = await client
+        .from('SetlistPlayedSongs')
+        .select('song_id, played_at')
+        .eq('gig_id', gigId)
+        .order('played_at', { ascending: false })
+        .limit(1)
+      if (cancelled) return
+      if (playedError) {
+        console.log('[Shared Up Next] played songs fallback error', playedError)
+        applySharedNowPlaying(null)
+        return
+      }
+      const playedRow = (playedRows?.[0] ?? null) as { song_id?: string | null } | null
+      const playedSongId = (playedRow?.song_id ?? '').trim() || null
+      console.log('[Shared Up Next] played songs fallback row', playedRow)
+      applySharedNowPlaying(playedSongId)
     }
     void fetchLatestNowPlaying()
 
@@ -7638,10 +8021,15 @@ function App() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'SetlistGigNowPlaying', filter: `gig_id=eq.${gigId}` },
         (payload) => {
+          console.log('[Shared Up Next] realtime payload', payload)
           const nextSongId =
             payload.eventType === 'DELETE'
               ? null
-              : ((payload.new as { song_id?: string | null } | null)?.song_id ?? null)
+              : (
+                  ((payload.new as { song_id?: string | null } | null)?.song_id ??
+                    (payload.new as { current_song_id?: string | null } | null)?.current_song_id ??
+                    null)
+                )
           applySharedNowPlaying(nextSongId)
         },
       )
@@ -7667,9 +8055,30 @@ function App() {
   }, [
     activePlaylistEntries,
     playlistSingerFilter,
+    sharedAllPlaylistEntries,
     sharedPlaylistView,
     supabase,
     visiblePlaylistEntries,
+  ])
+
+  useEffect(() => {
+    if (!sharedPlaylistView) return
+    console.log('[Shared Up Next] Banner computed values', {
+      sharedNowPlayingSongId,
+      title: sharedNowPlayingTitle,
+      key: sharedNowPlayingKeyLabel,
+      singer: sharedNowPlayingSingerLabel,
+      fallback: sharedNowPlayingFallback,
+      resolvedEntry: sharedResolvedUpNextEntry,
+    })
+  }, [
+    sharedNowPlayingFallback,
+    sharedNowPlayingKeyLabel,
+    sharedNowPlayingSingerLabel,
+    sharedNowPlayingSongId,
+    sharedNowPlayingTitle,
+    sharedPlaylistView,
+    sharedResolvedUpNextEntry,
   ])
 
   useEffect(() => {
@@ -8154,13 +8563,13 @@ function App() {
                           ? 'border-teal-300 bg-teal-400/10 text-teal-100'
                           : 'border-white/10 bg-white/5'
                       }`}
-                      onClick={() =>
-                        setInstrumentSelectionDraft((current) =>
-                          current.includes(instrument)
-                            ? current.filter((item) => item !== instrument)
-                            : [...current, instrument],
-                        )
-                      }
+                      onClick={() => {
+                        setInstrumentSelectionDraft([instrument])
+                        setAppState((prev) => ({
+                          ...prev,
+                          instrument: [instrument],
+                        }))
+                      }}
                     >
                       {instrument}
                     </button>
@@ -8168,14 +8577,15 @@ function App() {
                 </div>
                 <button
                   className="mt-4 w-full rounded-xl bg-teal-400/90 px-3 py-2 text-sm font-semibold text-slate-950"
-                  onClick={() =>
+                  onClick={() => {
+                    setInstrumentSelectionDraft(['All'])
                     setAppState((prev) => ({
                       ...prev,
-                      instrument: instrumentSelectionDraft.length ? instrumentSelectionDraft : ['All'],
+                      instrument: ['All'],
                     }))
-                  }
+                  }}
                 >
-                  Continue
+                  Continue without Selecting Instrument
                 </button>
               </div>
             </div>
@@ -8579,8 +8989,8 @@ function App() {
             )}
           </div>
         </div>
-        {sharedPlaylistView && (
-          <nav className="fixed bottom-0 left-0 right-0 z-[90] border-t border-white/10 bg-slate-950/95 backdrop-blur">
+        {(sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && (
+          <nav className="fixed bottom-0 left-0 right-0 z-[320] border-t border-white/10 bg-slate-950/95 backdrop-blur">
             <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-2 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
               <button
                 type="button"
@@ -8589,6 +8999,7 @@ function App() {
                     ? 'border-teal-300/70 bg-teal-400/10 text-teal-100'
                     : 'border-white/10 text-slate-300'
                 }`}
+                disabled={!sharedPlaylistView}
                 onClick={() => setSharedPublicTab('setlist')}
               >
                 <img src={downloadPdfIcon} alt="" className="h-5 w-5 object-contain" />
@@ -8601,6 +9012,7 @@ function App() {
                     ? 'border-teal-300/70 bg-teal-400/10 text-teal-100'
                     : 'border-white/10 text-slate-300'
                 }`}
+                disabled={!sharedPlaylistView}
                 onClick={() => setSharedPublicTab('playlist')}
               >
                 <img src={openPlaylistIcon} alt="" className="h-5 w-5 object-contain" />
@@ -8611,7 +9023,8 @@ function App() {
         )}
         {sharedNowPlayingSongId && sharedNowPlayingSongId !== sharedDismissedUpNextId && (
           <div
-            className="shared-upnext-banner-pulse fixed inset-x-0 top-0 z-[260] border-b border-lime-300/80 bg-black px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] text-lime-100 shadow-[0_0_28px_rgba(190,242,100,0.55)] transition-all duration-300"
+            className="shared-upnext-banner shared-upnext-banner-pulse liquid-button upnext-flash fixed inset-x-0 top-0 z-[260] border-y border-emerald-300/45 bg-black px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] text-emerald-100 shadow-[0_0_18px_rgba(74,222,128,0.45)] transition-all duration-300"
+            style={{ position: 'fixed', top: 0, right: 0, left: 0, bottom: 'auto' }}
             onTouchStart={(event) => setSharedBannerTouchStartX(event.touches[0]?.clientX ?? null)}
             onTouchEnd={(event) => {
               if (sharedBannerTouchStartX === null) return
@@ -8622,31 +9035,43 @@ function App() {
               setSharedBannerTouchStartX(null)
             }}
           >
-            <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-200/90">
-                  Up Next
+            <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5 px-1 pb-1">
+              <div className="flex items-center justify-between gap-3 text-base font-semibold">
+                <div className="pointer-events-none flex min-w-0 flex-1 items-center justify-between gap-3">
+                  <span className="whitespace-nowrap text-base">Up next</span>
+                  <span className="min-w-0 flex-1 truncate text-center text-lg font-semibold">
+                    {sharedNowPlayingTitle}
+                  </span>
+                  <span className="whitespace-nowrap text-sm">Key: {sharedNowPlayingKeyLabel}</span>
                 </div>
-                <button
-                  type="button"
-                  className="mt-0.5 max-w-full truncate text-left text-sm font-semibold text-emerald-100 underline decoration-emerald-300/45 underline-offset-2"
-                  onClick={() => openSharedLyricsForSong(sharedNowPlayingSongId)}
-                  title="Open up next lyrics"
-                >
-                  {sharedNowPlayingTitle}
-                </button>
+                <div className="flex items-center gap-2">
+                  {hasSharedLyricsForSong(sharedNowPlayingSongId) && (
+                    <button
+                      type="button"
+                      className="inline-flex h-8 items-center justify-center rounded-lg border border-emerald-300/40 bg-emerald-400/15 px-3 text-xs font-semibold text-emerald-100"
+                      onClick={() => openSharedLyricsForSong(sharedNowPlayingSongId)}
+                      title="Open lyrics"
+                      aria-label="Open lyrics"
+                    >
+                      📜
+                    </button>
+                  )}
+                  {hasSharedChartsForSong(sharedNowPlayingSongId) && (
+                    <button
+                      type="button"
+                      className="inline-flex h-8 items-center justify-center rounded-lg border border-emerald-300/40 bg-emerald-400/15 px-3 text-xs font-semibold text-emerald-100"
+                      onClick={() => openSharedDocsForSong(sharedNowPlayingSongId)}
+                      title="Open charts"
+                      aria-label="Open charts"
+                    >
+                      📄
+                    </button>
+                  )}
+                </div>
               </div>
-              {hasSharedLyricsForSong(sharedNowPlayingSongId) && (
-                <button
-                  type="button"
-                  className="inline-flex h-8 items-center justify-center rounded-lg border border-lime-300/50 bg-lime-300/20 px-3 text-xs font-semibold text-lime-100"
-                  onClick={() => openSharedLyricsForSong(sharedNowPlayingSongId)}
-                  title="Open up next lyrics"
-                  aria-label="Open up next lyrics"
-                >
-                  📜 Lyrics
-                </button>
-              )}
+              <div className="min-w-0 truncate text-center text-xs font-semibold text-emerald-200/90">
+                Singer: {sharedNowPlayingSingerLabel}
+              </div>
             </div>
           </div>
         )}
@@ -9284,13 +9709,13 @@ function App() {
                         ? 'border-teal-300 bg-teal-400/10 text-teal-100'
                         : 'border-white/10 bg-white/5'
                     }`}
-                    onClick={() =>
-                      setInstrumentSelectionDraft((current) =>
-                        current.includes(instrument)
-                          ? current.filter((item) => item !== instrument)
-                          : [...current, instrument],
-                      )
-                    }
+                    onClick={() => {
+                      setInstrumentSelectionDraft([instrument])
+                      setAppState((prev) => ({
+                        ...prev,
+                        instrument: [instrument],
+                      }))
+                    }}
                   >
                     {instrument}
                   </button>
@@ -9298,27 +9723,61 @@ function App() {
               </div>
               <button
                 className="mt-4 w-full rounded-xl bg-teal-400/90 px-3 py-2 text-sm font-semibold text-slate-950"
-                onClick={() =>
+                onClick={() => {
+                  setInstrumentSelectionDraft(['All'])
                   setAppState((prev) => ({
                     ...prev,
-                    instrument: instrumentSelectionDraft.length ? instrumentSelectionDraft : ['All'],
+                    instrument: ['All'],
                   }))
-                }
+                }}
               >
-                Continue
-              </button>
-              <button
-                className="mt-4 w-full rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
-                onClick={() => setAppState((prev) => ({ ...prev, instrument: ['All'] }))}
-              >
-                Skip for now
+                Continue without Selecting Instrument
               </button>
             </div>
           </div>
         </div>
       )}
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 pb-24 pt-6">
+      <main
+        className={`mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 pb-24 pt-6 ${
+          isAdmin && screen === 'builder' && currentSetlist && isCurrentSetlistPast
+            ? 'rounded-2xl border border-[#5a1f2a]/50 bg-[#16070b]'
+            : ''
+        }`}
+      >
+        {isAdmin && screen === 'builder' && currentSetlist && isCurrentSetlistPast && (
+          <div className="sticky top-[74px] z-[66] rounded-2xl border border-[#7a2a3a]/65 bg-[#22090f]/95 px-4 py-3 text-xs text-rose-100 shadow-[0_0_20px_rgba(127,29,29,0.35)] backdrop-blur">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] sm:text-xs">
+                This is a past gig. Editing is locked to prevent accidental changes. Toggle to unlock if you need
+                to make updates.
+              </p>
+              <button
+                type="button"
+                className={`relative inline-flex h-7 w-14 shrink-0 items-center rounded-full border px-1 transition ${
+                  isPastGigLockedForAdmin
+                    ? 'border-rose-300/40 bg-[#3a121b]'
+                    : 'border-emerald-300/40 bg-emerald-500/30'
+                }`}
+                onClick={() => {
+                  if (!currentSetlist) return
+                  setPastGigUnlockedByGigId((prev) => ({
+                    ...prev,
+                    [currentSetlist.id]: Boolean(isPastGigLockedForAdmin),
+                  }))
+                }}
+                aria-label={isPastGigLockedForAdmin ? 'Unlock past gig editing' : 'Lock past gig editing'}
+                title={isPastGigLockedForAdmin ? 'Unlock past gig editing' : 'Lock past gig editing'}
+              >
+                <span
+                  className={`inline-block h-5 w-5 rounded-full bg-white transition-transform ${
+                    isPastGigLockedForAdmin ? 'translate-x-0' : 'translate-x-7'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+        )}
         {screen === 'setlists' && (
           <section className="flex flex-col gap-5">
             <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 via-white/5 to-white/0 p-5">
@@ -9330,7 +9789,7 @@ function App() {
               </p>
               <div className="mt-4 flex flex-col gap-3">
                 {upcomingGigs.map((setlist) => {
-                  const isToday = setlist.date === todayISO
+                  const isToday = normalizeGigDateISO(setlist.date) === operationalTodayISO
                   return (
                   <div
                     key={setlist.id}
@@ -9454,28 +9913,12 @@ function App() {
                     : 'border-white/10 bg-slate-900/50'
                 }`}
               >
-                <h3 className="font-semibold">Tonight at a glance</h3>
+                <h3 className="font-semibold">Library + gig totals</h3>
                 <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                  <Stat label="Upcoming gigs" value={upcomingGigs.length} />
+                  <Stat label="Past gigs" value={pastGigs.length} />
                   <Stat label="Songs in library" value={appState.songs.length} />
-                  <Stat label="Special requests" value={appState.specialRequests.length} />
-                  <Stat
-                    label="Charts for you"
-                    value={
-                      appState.charts.filter((chart) =>
-                        documentMatchesActiveInstruments({
-                          id: chart.id,
-                          songId: chart.songId,
-                          type: 'Chart',
-                          instrument: chart.instrument,
-                          title: chart.title,
-                        }),
-                      ).length
-                    }
-                  />
-                  <Stat
-                    label="Tags"
-                    value={appState.tagsCatalog.length}
-                  />
+                  <Stat label="Musicians" value={appState.musicians.length} />
                 </div>
               </div>
             )}
@@ -9621,10 +10064,12 @@ function App() {
         )}
 
         {screen === 'builder' && currentSetlist && (
-          <section className="flex flex-col gap-6">
+          <section className={`flex flex-col gap-6 ${isPastGigLockedForAdmin ? 'past-gig-locked-surface' : ''}`}>
             <div
-              className={`sticky top-[72px] z-20 rounded-3xl border p-5 backdrop-blur transition-all ${
-                currentSetlist.date === new Date().toISOString().slice(0, 10)
+              className={`sticky ${
+                isAdmin && isCurrentSetlistPast ? 'top-[130px]' : 'top-[72px]'
+              } z-20 rounded-3xl border p-5 backdrop-blur transition-all ${
+                currentSetlistDateISO === operationalTodayISO
                   ? 'border-teal-300/60 bg-teal-400/10 shadow-[0_0_24px_rgba(45,212,191,0.25)]'
                   : 'border-white/10 bg-slate-950/90'
               } ${
@@ -10788,12 +11233,12 @@ function App() {
                       {
                         id: 'pro',
                         name: 'Pro',
-                        detail: 'Higher limits and collaboration',
+                        detail: `${PRO_PLAN_PRICE_LABEL} · Unlimited songs, musicians, and active gigs`,
                       },
                       {
                         id: 'agency',
                         name: 'Agency',
-                        detail: 'Multi-team scale and account controls',
+                        detail: 'Coming soon',
                       },
                     ] as const).map((tier) => (
                       <button
@@ -10814,20 +11259,31 @@ function App() {
                   <div className="mt-3 text-xs text-slate-400">
                     Active tier for this band: <span className="font-semibold text-slate-200">{activeBandTier.toUpperCase()}</span>. Subscription status syncs from Supabase table `SetlistBandSubscriptions`.
                   </div>
+                  {activeBandPendingTierChange && (
+                    <div className="mt-2 rounded-xl border border-amber-300/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+                      Downgrade scheduled to{' '}
+                      <span className="font-semibold">{activeBandPendingTierChange.pendingTier.toUpperCase()}</span>{' '}
+                      on{' '}
+                      <span className="font-semibold">
+                        {new Date(activeBandPendingTierChange.effectiveAt).toLocaleDateString()}
+                      </span>
+                      . Your current tier stays active until then.
+                    </div>
+                  )}
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => void openStripeCheckout('pro')}
                       disabled={!canAccessBillingControls}
                     >
-                      Upgrade to Pro
+                      Upgrade to Pro ({PRO_PLAN_PRICE_LABEL})
                     </button>
                     <button
                       className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => void openStripeCheckout('agency')}
-                      disabled={!canAccessBillingControls}
+                      onClick={() => setAccountSaveStatus('Agency plan is coming soon. Pro is available now for $4.99/mo.')}
+                      disabled
                     >
-                      Upgrade to Agency
+                      Agency (Coming soon)
                     </button>
                     <button
                       className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
@@ -11938,20 +12394,24 @@ function App() {
             className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900 p-5"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold">Upgrade required</h3>
+            <h3 className="text-lg font-semibold">Free plan limit reached</h3>
             <p className="mt-2 text-sm text-slate-300">{showTierLimitModal.message}</p>
+            <p className="mt-2 text-xs text-slate-400">
+              Free is great to get started, but once your band grows, we pause new creation to keep the free tier sustainable. Upgrade to Pro ({PRO_PLAN_PRICE_LABEL}) to remove these limits and keep planning without interruptions.
+            </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                 onClick={() => void openStripeCheckout('pro')}
               >
-                Upgrade to Pro
+                Upgrade to Pro ({PRO_PLAN_PRICE_LABEL})
               </button>
               <button
-                className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-100"
-                onClick={() => void openStripeCheckout('agency')}
+                className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-400"
+                onClick={() => setAccountSaveStatus('Agency plan is coming soon. Pro is available now for $4.99/mo.')}
+                disabled
               >
-                Upgrade to Agency
+                Agency (Coming soon)
               </button>
               <button
                 className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
@@ -15599,8 +16059,11 @@ function App() {
                         </h3>
                         {!buildCompletion[completionKey] && !gigMode && (
                           <div className="flex shrink-0 items-center gap-2">
+                            <span className="whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-teal-200/90">
+                              ↻ Import from gig
+                            </span>
                             <select
-                              className="w-[170px] shrink-0 rounded-xl border border-white/10 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-200"
+                              className="w-[240px] shrink-0 rounded-xl border border-teal-300/30 bg-slate-950/80 px-3 py-2 text-xs font-semibold text-slate-100"
                               onChange={(event) => {
                                 if (event.target.value) {
                                   importSectionFromGig(section, event.target.value)
@@ -15608,7 +16071,7 @@ function App() {
                                 }
                               }}
                             >
-                              <option value="">Import Previous Gig</option>
+                              <option value="">Select previous gig to import</option>
                               {recentGigs.map((gig) => (
                                 <option key={gig.id} value={gig.id}>
                                   {gig.gigName} · {gig.date}

@@ -10,6 +10,12 @@ type StripeStatus =
   | 'incomplete'
   | 'incomplete_expired'
   | 'unpaid'
+type PendingTierMetadata = {
+  pending_tier?: Tier
+  pending_tier_effective_at?: string | null
+  source?: string
+  [key: string]: unknown
+}
 
 const STRIPE_SECRET_KEY = Deno.env.get('STRIPE_SECRET_KEY') ?? ''
 const STRIPE_WEBHOOK_SECRET = Deno.env.get('STRIPE_WEBHOOK_SECRET') ?? ''
@@ -70,14 +76,47 @@ const resolveTierFromSubscription = (subscription: Stripe.Subscription): Tier =>
   return normalizeTier(subscription.items.data[0]?.price?.lookup_key)
 }
 
+const tierRank: Record<Tier, number> = { free: 0, pro: 1, agency: 2 }
+
 const upsertSubscription = async (
   subscription: Stripe.Subscription,
   bandId: string,
   metadata: Record<string, unknown> = {},
 ) => {
-  const tier = resolveTierFromSubscription(subscription)
+  const stripeTier = resolveTierFromSubscription(subscription)
   const status = toSubStatus(subscription.status)
   const priceId = subscription.items.data[0]?.price?.id ?? null
+  const periodEndIso = periodEndToIso(subscription.current_period_end)
+  const periodEndMs = periodEndIso ? new Date(periodEndIso).getTime() : 0
+  const nowMs = Date.now()
+
+  const { data: existing, error: existingError } = await supabase
+    .from('SetlistBandSubscriptions')
+    .select('tier,metadata')
+    .eq('band_id', bandId)
+    .maybeSingle()
+  if (existingError) throw new Error(`Supabase lookup failed: ${existingError.message}`)
+
+  const existingTier = normalizeTier(existing?.tier)
+  const canDeferDowngrade = status === 'active' || status === 'trialing'
+  const isDowngrade = tierRank[stripeTier] < tierRank[existingTier]
+  const shouldKeepCurrentTierUntilPeriodEnd =
+    canDeferDowngrade && isDowngrade && Boolean(periodEndMs && periodEndMs > nowMs)
+
+  const nextMetadata: PendingTierMetadata = {
+    ...(existing?.metadata as PendingTierMetadata | null ?? {}),
+    ...metadata,
+  }
+  let tier: Tier = stripeTier
+  if (shouldKeepCurrentTierUntilPeriodEnd) {
+    tier = existingTier
+    nextMetadata.pending_tier = stripeTier
+    nextMetadata.pending_tier_effective_at = periodEndIso
+  } else {
+    delete nextMetadata.pending_tier
+    delete nextMetadata.pending_tier_effective_at
+  }
+
   const row = {
     band_id: bandId,
     tier,
@@ -85,9 +124,9 @@ const upsertSubscription = async (
     stripe_customer_id: typeof subscription.customer === 'string' ? subscription.customer : subscription.customer?.id,
     stripe_subscription_id: subscription.id,
     stripe_price_id: priceId,
-    current_period_end: periodEndToIso(subscription.current_period_end),
+    current_period_end: periodEndIso,
     cancel_at_period_end: Boolean(subscription.cancel_at_period_end),
-    metadata,
+    metadata: nextMetadata,
   }
 
   const { error } = await supabase

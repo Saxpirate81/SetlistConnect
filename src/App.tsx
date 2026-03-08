@@ -2970,7 +2970,7 @@ function App() {
               <div className="lyrics-tools-row">
                 <button
                   type="button"
-                  className="lyrics-tools-btn"
+                  className="lyrics-tools-btn text-red-200"
                   onClick={() => {
                     queueLyricsPrefsUndo()
                     setLyricsGlobalFontScale((current) => Math.min(1.8, current + 0.08))
@@ -10484,14 +10484,14 @@ function App() {
               }`}
             >
               <div className="flex items-start justify-between gap-3">
-                <div>
+                <div className="flex-1 text-left">
                   <p className="text-xs uppercase tracking-[0.3em] text-slate-400">
                     {isAdmin ? 'Setlist' : 'Gig Info'}
                   </p>
                   {isAdmin ? (
-                    <div className="mt-3 flex flex-col gap-1">
+                    <div className="mt-3 flex flex-col gap-1 text-left">
                       <input
-                        className="w-full border-b border-white/10 bg-transparent py-1 text-2xl font-semibold text-white outline-none focus:border-teal-300"
+                        className="w-full border-b border-white/10 bg-transparent py-1 text-left text-2xl font-semibold text-white outline-none focus:border-teal-300"
                         value={currentSetlist.gigName}
                         onChange={(event) => {
                           const value = event.target.value
@@ -10515,7 +10515,7 @@ function App() {
                           }
                         }}
                       />
-                      <div className="flex flex-col gap-1 md:flex-row md:items-center">
+                      <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-2 md:w-[200px]">
                           <button
                             type="button"
@@ -10561,9 +10561,9 @@ function App() {
                             }}
                           />
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex w-full items-center gap-2">
                           <input
-                            className="w-full border-b border-white/10 bg-transparent py-1 text-sm text-slate-200 outline-none focus:border-teal-300"
+                            className="w-full border-b border-white/10 bg-transparent py-1 text-left text-sm text-slate-200 outline-none focus:border-teal-300"
                             placeholder="Venue address"
                             value={currentSetlist.venueAddress ?? ''}
                             onChange={(event) => {
@@ -10588,32 +10588,18 @@ function App() {
                               }
                             }}
                           />
-                          {currentSetlist.venueAddress && (
-                            <a
-                              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
-                              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-                                currentSetlist.venueAddress,
-                              )}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              title="Open address"
-                              onClick={(event) => event.stopPropagation()}
-                            >
-                              📍
-                            </a>
-                          )}
                         </div>
                       </div>
                     </div>
                   ) : (
-                    <>
+                    <div className="mt-3 flex w-full flex-col items-start gap-1 text-left">
                       <h2 className="text-xl font-semibold">{currentSetlist.gigName}</h2>
                       <p className="text-xs text-slate-400">
                         {formatGigDate(currentSetlist.date)}
                       </p>
                       {currentSetlist.venueAddress && (
                         <a
-                          className="mt-2 inline-flex rounded-full border border-white/10 px-3 py-1 text-xs text-slate-200"
+                          className="mt-1 inline-flex rounded-full border border-white/10 px-3 py-1 text-left text-xs text-slate-200"
                           href={`https://maps.apple.com/?q=${encodeURIComponent(
                             currentSetlist.venueAddress,
                           )}`}
@@ -10623,34 +10609,51 @@ function App() {
                           {currentSetlist.venueAddress}
                         </a>
                       )}
-                    </>
+                    </div>
                   )}
                   <p className="mt-2 text-xs text-slate-400">
                     Tap a song in Gig mode to flash it at the top for the band.
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col items-end gap-2">
                   <button
-                    className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-teal-300/40 bg-slate-800/95 text-xl font-semibold text-slate-100 shadow-[0_0_18px_rgba(20,184,166,0.2)]"
-                    onClick={handlePrintSetlist}
-                    title="Download setlist PDF"
-                    aria-label="Download setlist PDF"
-                  >
-                    <img src={downloadPdfIcon} alt="" className="h-6 w-6 object-contain" />
-                  </button>
-                  <button
-                    className="inline-flex h-11 min-w-[44px] items-center justify-center gap-1 rounded-full border border-indigo-300/60 bg-indigo-500/20 px-3 text-sm font-semibold text-indigo-100 shadow-[0_0_18px_rgba(99,102,241,0.28)]"
+                    className="inline-flex h-11 min-w-[160px] items-center justify-center gap-2 rounded-full border border-indigo-300/60 bg-indigo-500/20 px-4 text-sm font-semibold text-indigo-100 shadow-[0_0_18px_rgba(99,102,241,0.28)]"
                     onClick={() => {
                       setPlaylistIndex(0)
                       setPlaylistAutoAdvance(true)
                       setShowPlaylistModal(true)
                     }}
-                    title="Open setlist playlist"
-                    aria-label="Open setlist playlist"
+                    title="Open Setlist"
+                    aria-label="Open Setlist"
                   >
                     <span aria-hidden>🎵</span>
+                    <span>Active Setlist</span>
                     <img src={openPlaylistIcon} alt="" className="h-5 w-5 object-contain" />
                   </button>
+                  <div className="flex items-center gap-2">
+                    {currentSetlist.venueAddress && (
+                      <a
+                        className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                          currentSetlist.venueAddress,
+                        )}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Open address"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        📍
+                      </a>
+                    )}
+                    <button
+                      className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-teal-300/40 bg-slate-800/95 text-xl font-semibold text-slate-100 shadow-[0_0_18px_rgba(20,184,166,0.2)]"
+                      onClick={handlePrintSetlist}
+                      title="Setlist PDF preview"
+                      aria-label="Setlist PDF preview"
+                    >
+                      📄
+                    </button>
+                  </div>
                 </div>
               </div>
               {isAdmin && (
@@ -11068,10 +11071,10 @@ function App() {
                       Save to library
                     </button>
                     <button
-                      className="rounded-xl bg-teal-400/90 px-3 py-2 text-xs font-semibold text-slate-950"
+                      className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                       onClick={addSpecialRequest}
                     >
-                      Add request
+                      Add Request
                     </button>
                   </div>
                 </div>
@@ -11266,10 +11269,10 @@ function App() {
                       </select>
                     )}
                     <button
-                      className="rounded-lg bg-teal-400/90 px-3 py-2 text-sm font-semibold text-slate-950"
+                      className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                       onClick={addSubAndAssign}
                     >
-                      Add + assign
+                      Add New Sub
                     </button>
                   </div>
                 </div>
@@ -11455,7 +11458,7 @@ function App() {
               <div className="mt-4 space-y-4">
                 {isAdmin && (
                   <button
-                    className="w-full rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm font-semibold text-slate-100"
+                    className="w-full rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                     onClick={() => setShowAddMusicianModal(true)}
                   >
                     Add musician
@@ -11585,7 +11588,7 @@ function App() {
                   </p>
                 </div>
                 <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                  className="min-w-[92px] rounded-xl border border-red-400/40 px-4 py-2 text-sm font-semibold text-red-200"
                   onClick={() => void handleLogout()}
                 >
                   Log out
@@ -12662,7 +12665,7 @@ function App() {
                   Cancel
                 </button>
                 <button
-                  className="flex-1 rounded-xl bg-red-500/80 px-3 py-2 text-sm font-semibold text-white"
+                  className="flex-1 rounded-xl bg-red-500/80 px-3 py-2 text-sm font-semibold text-red-100"
                   onClick={confirmDeleteGig}
                 >
                   Delete gig
@@ -13442,7 +13445,7 @@ function App() {
                 Cancel
               </button>
               <button
-                className="min-w-[120px] rounded-xl bg-red-500/90 px-4 py-2 text-sm font-semibold text-white"
+                className="min-w-[120px] rounded-xl bg-red-500/90 px-4 py-2 text-sm font-semibold text-red-100"
                 onClick={confirmDeleteSetlistSection}
               >
                 Delete
@@ -13936,8 +13939,8 @@ function App() {
                     setPlaylistAutoAdvance(true)
                     setShowPlaylistModal(true)
                   }}
-                  title="Open setlist playlist"
-                  aria-label="Open setlist playlist"
+                  title="Open Setlist"
+                  aria-label="Open Setlist"
                 >
                   <img src={openPlaylistIcon} alt="" className="h-6 w-6 object-contain" />
                 </button>
@@ -14461,7 +14464,7 @@ function App() {
                               Add
                             </button>
                             <button
-                              className="rounded-lg border border-white/20 px-2 py-1 text-[10px]"
+                              className="rounded-lg border border-red-400/40 px-2 py-1 text-[10px] text-red-200"
                               onClick={() => requestDeleteSetlistSection(section)}
                             >
                               Delete
@@ -14618,10 +14621,11 @@ function App() {
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h3 className="text-lg font-semibold">
+                  <h3 className="text-lg font-semibold">Active Setlist</h3>
+                  <p className="text-xs text-slate-400">
                     {activeBandName || 'Band'} · {currentSetlist.gigName} ·{' '}
                     {formatGigDate(currentSetlist.date)}
-                  </h3>
+                  </p>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-slate-400">
@@ -14891,10 +14895,6 @@ function App() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <CloseButton
-                      className="min-w-[100px] text-slate-300 hover:bg-white/5 transition-colors"
-                      onClick={() => setShowPrintPreview(false)}
-                    />
                     <button
                       className="min-w-[120px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-white/5 transition-colors"
                       onClick={handlePrintSetlistPDF}
@@ -14907,6 +14907,10 @@ function App() {
                     >
                       Download PDF
                     </button>
+                    <CloseButton
+                      className="text-slate-300 hover:bg-white/5 transition-colors"
+                      onClick={() => setShowPrintPreview(false)}
+                    />
                   </div>
                 </div>
               </div>
@@ -15438,7 +15442,7 @@ function App() {
                     }
                   }}
                 >
-                  Add + assign
+                  Add New Sub
                 </button>
                 <CloseButton
                   onClick={() => {
@@ -16034,16 +16038,16 @@ function App() {
                     {!gigMode && (
                       <div className="flex items-center gap-2">
                         <button
-                          className="rounded-full border border-white/10 px-3 py-1 text-xs"
+                          className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                           onClick={() => {
                             resetPendingSpecialRequest()
                             setShowSpecialRequestModal(true)
                           }}
                         >
-                          Add request
+                          Add Request
                         </button>
                         <button
-                          className="rounded-full border border-rose-300/35 bg-rose-900/30 px-3 py-1 text-xs text-rose-100"
+                          className="min-w-[92px] rounded-xl border border-rose-300/35 bg-rose-900/30 px-4 py-2 text-sm font-semibold text-rose-100"
                           onClick={() => {
                             resetPendingSpecialRequest()
                             setPendingSpecialType('DJ Only')
@@ -16051,7 +16055,7 @@ function App() {
                             setShowSpecialRequestModal(true)
                           }}
                         >
-                          Add DJ track
+                          Add DJ Track
                         </button>
                       </div>
                     )}

@@ -34,6 +34,28 @@
   }
 }
 
+button[class*='border-']:not([class*='bg-']) {
+  background-color: rgba(15, 23, 42, 0.32);
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+button[class*='border-']:not([class*='bg-']):hover {
+  background-color: rgba(51, 65, 85, 0.48);
+}
+
+button[class*='bg-teal-400/90'] {
+  min-width: 92px;
+  border-radius: 0.75rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: rgb(15 23 42);
+}
+
 body {
   margin: 0;
   min-width: 320px;

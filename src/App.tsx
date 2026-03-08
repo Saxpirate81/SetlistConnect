@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent,
   type PointerEvent,
   type ReactNode,
   type TouchEvent,
@@ -19,6 +20,10 @@ const isAdminMembershipRole = (value?: string | null) => {
   return normalized === 'admin' || normalized === 'owner'
 }
 type Screen = 'setlists' | 'builder' | 'song' | 'musicians' | 'account'
+const isMainNavScreen = (
+  value: string,
+): value is Extract<Screen, 'setlists' | 'song' | 'musicians' | 'account'> =>
+  value === 'setlists' || value === 'song' || value === 'musicians' || value === 'account'
 type BandTier = 'free' | 'pro' | 'agency'
 
 type SongKey = {
@@ -221,10 +226,45 @@ type HistoryEntry = {
   timestamp: string
 }
 
+type CloseButtonProps = {
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void
+  onPointerDown?: (event: PointerEvent<HTMLButtonElement>) => void
+  ariaLabel?: string
+  title?: string
+  className?: string
+  alignRight?: boolean
+}
+
+const CloseButton = ({
+  onClick,
+  onPointerDown,
+  ariaLabel = 'Close',
+  title = 'Close',
+  className = '',
+  alignRight = true,
+}: CloseButtonProps) => {
+  const baseClasses =
+    'icon-header-btn rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200'
+  const alignmentClasses = alignRight ? 'ml-auto shrink-0' : ''
+  return (
+    <button
+      type="button"
+      className={`${baseClasses} ${alignmentClasses} ${className}`.trim()}
+      onClick={onClick}
+      onPointerDown={onPointerDown}
+      aria-label={ariaLabel}
+      title={title}
+    >
+      ✕
+    </button>
+  )
+}
+
 const ADMIN_PASSWORD = 'Signature'
 const USER_PASSWORD = 'Signature2026'
 const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000
 const LAST_ACTIVE_KEY = 'setlist:lastActive'
+const LAST_MAIN_SCREEN_KEY = 'setlist:lastMainScreen'
 
 const INSTRUMENTS = ['Vocals', 'Guitar', 'Keys', 'Bass', 'Drums', 'Sax', 'Trumpet']
 const INSTRUMENTAL_LABEL = 'Instrumental'
@@ -447,7 +487,10 @@ function App() {
   const [inviteRole, setInviteRole] = useState<'member' | 'admin'>('member')
   const [inviteMusicianId, setInviteMusicianId] = useState('')
   const [inviteCreateResult, setInviteCreateResult] = useState<string | null>(null)
-  const [screen, setScreen] = useState<Screen>('setlists')
+  const [screen, setScreen] = useState<Screen>(() => {
+    const saved = localStorage.getItem(LAST_MAIN_SCREEN_KEY)
+    return saved && isMainNavScreen(saved) ? saved : 'setlists'
+  })
   const [pastGigUnlockedByGigId, setPastGigUnlockedByGigId] = useState<Record<string, boolean>>({})
   const [appState, setAppState] = useState<AppState>(
     isSupabaseEnabled ? emptyState : initialState,
@@ -1811,7 +1854,7 @@ function App() {
     const byTag =
       activeTags.length === 0
         ? bySearch
-        : bySearch.filter((song) => activeTags.every((tag) => hasSongTag(song, tag)))
+        : bySearch.filter((song) => activeTags.some((tag) => hasSongTag(song, tag)))
     return byTag.filter((song) => !setlistSongIds.has(song.id))
   }, [appState.songs, currentSetlist?.songIds, songSearch, activeTags])
 
@@ -1941,7 +1984,7 @@ function App() {
         if (!haystack.includes(searchTerm)) return false
       }
       if (songLibraryTags.length === 0) return true
-      return songLibraryTags.every((tag) => hasSongTag(song, tag))
+      return songLibraryTags.some((tag) => hasSongTag(song, tag))
     })
     return [...base].sort((a, b) => a.title.localeCompare(b.title))
   }, [appState.songs, songLibrarySearch, songLibraryTags])
@@ -2892,8 +2935,7 @@ function App() {
           >
             <div className="lyrics-floating-panel-handle" onPointerDown={(event) => beginLyricsPanelDrag('font', event)}>
               Font
-              <button
-                type="button"
+              <CloseButton
                 className="lyrics-floating-panel-close"
                 onPointerDown={(event) => {
                   event.preventDefault()
@@ -2903,11 +2945,9 @@ function App() {
                   event.stopPropagation()
                   setShowFontTools(false)
                 }}
-                aria-label="Close font tools"
-                title="Close"
-              >
-                ✕
-              </button>
+                ariaLabel="Close font tools"
+                alignRight={false}
+              />
             </div>
             <div className="lyrics-floating-panel-body">
               <div className="space-y-1">
@@ -3048,8 +3088,7 @@ function App() {
           >
             <div className="lyrics-floating-panel-handle" onPointerDown={(event) => beginLyricsPanelDrag('edit', event)}>
               Edit
-              <button
-                type="button"
+              <CloseButton
                 className="lyrics-floating-panel-close"
                 onPointerDown={(event) => {
                   event.preventDefault()
@@ -3059,11 +3098,9 @@ function App() {
                   event.stopPropagation()
                   setShowEditTools(false)
                 }}
-                aria-label="Close edit tools"
-                title="Close"
-              >
-                ✕
-              </button>
+                ariaLabel="Close edit tools"
+                alignRight={false}
+              />
             </div>
             <div className="lyrics-floating-panel-body">
               <div className="lyrics-color-swatches">
@@ -3165,8 +3202,7 @@ function App() {
           >
             <div className="lyrics-floating-panel-handle" onPointerDown={(event) => beginLyricsPanelDrag('draw', event)}>
               Draw
-              <button
-                type="button"
+              <CloseButton
                 className="lyrics-floating-panel-close"
                 onPointerDown={(event) => {
                   event.preventDefault()
@@ -3177,11 +3213,9 @@ function App() {
                   setShowDrawTools(false)
                   setLyricsDrawMode(false)
                 }}
-                aria-label="Close draw tools"
-                title="Close"
-              >
-                ✕
-              </button>
+                ariaLabel="Close draw tools"
+                alignRight={false}
+              />
             </div>
             <div className="lyrics-floating-panel-body">
               <div className="lyrics-color-swatches">
@@ -3218,19 +3252,16 @@ function App() {
           <div className="lyrics-floating-panel lyrics-floating-panel--ink" style={{ left: '16px', bottom: '16px' }}>
             <div className="lyrics-floating-panel-body">
               <div className="lyrics-tools-row">
-                <button
-                  type="button"
+                <CloseButton
                   className="lyrics-floating-panel-close inline-close"
                   onPointerDown={(event) => {
                     event.preventDefault()
                     event.stopPropagation()
                   }}
                   onClick={() => setSelectedLyricsStrokeId(null)}
-                  aria-label="Close ink actions"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                  ariaLabel="Close ink actions"
+                  alignRight={false}
+                />
               </div>
               <div className="lyrics-tools-row">
                 <button
@@ -7330,19 +7361,25 @@ function App() {
     <div className="fixed top-0 left-0 right-0 z-[70]">
       <header className="border-b border-white/10 bg-slate-950/90 backdrop-blur-md">
         <div className="relative mx-auto flex max-w-3xl items-center justify-between px-4 py-4">
-          <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="flex items-center gap-3 rounded-xl transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-300/70"
+            aria-label="Refresh Setlist Connect"
+            title="Refresh app"
+          >
             <img
               src={setlistConnectLogo}
               alt="Setlist Connect logo"
               className="h-10 w-10 rounded-xl object-contain"
             />
-            <div>
+            <div className="text-left">
               <p className="text-xs uppercase tracking-[0.3em] text-teal-300/80">
                 Setlist Connect
               </p>
               <h1 className="text-lg font-semibold text-white">Gig Center</h1>
             </div>
-          </div>
+          </button>
           <div className="flex items-center gap-2 text-xs text-slate-300">
             {bands.length > 1 && (
               <select
@@ -7378,37 +7415,29 @@ function App() {
                   </span>
                 )}
                 {authUserEmail && <span className="hidden sm:inline">{authUserEmail}</span>}
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => void handleLogout()}
-                >
-                  Log out
-                </button>
+                {screen === 'builder' && (
+                  <button
+                    className={`liquid-button whitespace-nowrap rounded-xl px-4 py-2 text-sm font-semibold ${
+                      gigMode
+                        ? 'bg-gradient-to-r from-cyan-300 via-sky-300 to-blue-300 text-slate-950 shadow-[0_0_18px_rgba(56,189,248,0.45)]'
+                        : 'bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950 shadow-[0_0_18px_rgba(74,222,128,0.45)]'
+                    }`}
+                    onClick={() => {
+                      if (gigMode) {
+                        setGigMode(false)
+                        setShowGigSetlistSheet(false)
+                        setShowGigModeLaunchModal(false)
+                        return
+                      }
+                      setShowGigModeLaunchModal(true)
+                    }}
+                  >
+                    <span>{gigMode ? 'Gig Mode On' : 'Gig Mode'}</span>
+                  </button>
+                )}
               </>
             )}
           </div>
-          {screen === 'builder' && (
-            <div className="absolute left-1/2 -translate-x-1/2">
-              <button
-                className={`liquid-button whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold ${
-                  gigMode
-                    ? 'bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 text-slate-950'
-                    : 'border border-white/10 text-slate-200'
-                }`}
-                onClick={() => {
-                  if (gigMode) {
-                    setGigMode(false)
-                    setShowGigSetlistSheet(false)
-                    setShowGigModeLaunchModal(false)
-                    return
-                  }
-                  setShowGigModeLaunchModal(true)
-                }}
-              >
-                <span>{gigMode ? 'Gig Mode On' : 'Gig Mode'}</span>
-              </button>
-            </div>
-          )}
         </div>
       </header>
       {appState.currentSongId && appState.currentSongId !== dismissedUpNextId && (
@@ -7540,6 +7569,12 @@ function App() {
     )
     setRole(isAdminMembershipRole(membership?.role) ? 'admin' : membership ? 'user' : null)
   }, [activeBandId, memberships])
+
+  useEffect(() => {
+    if (!authUserId) return
+    if (!isMainNavScreen(screen)) return
+    localStorage.setItem(LAST_MAIN_SCREEN_KEY, screen)
+  }, [authUserId, screen])
 
   useEffect(() => {
     setAccountBandNameDraft(activeBandName)
@@ -9492,18 +9527,13 @@ function App() {
                         ←
                       </button>
                     )}
-                    <button
-                      className="icon-header-btn rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
+                    <CloseButton
                       onClick={() => {
                         setDocModalSongId(null)
                         setDocModalContent(null)
                         setDocModalPageIndex(0)
                       }}
-                      aria-label="Close"
-                      title="Close"
-                    >
-                      ✕
-                    </button>
+                    />
                   </div>
                 </div>
               </div>
@@ -10599,40 +10629,40 @@ function App() {
                     Tap a song in Gig mode to flash it at the top for the band.
                   </p>
                 </div>
-                <div className="flex flex-col items-end gap-2">
-                  <div className="flex items-center gap-2">
-                    <button
-                      className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-teal-300/40 bg-slate-800/95 text-xl font-semibold text-slate-100 shadow-[0_0_18px_rgba(20,184,166,0.2)]"
-                      onClick={handlePrintSetlist}
-                      title="Download setlist PDF"
-                      aria-label="Download setlist PDF"
-                    >
-                      <img src={downloadPdfIcon} alt="" className="h-6 w-6 object-contain" />
-                    </button>
-                    <button
-                      className="inline-flex h-11 min-w-[44px] items-center justify-center gap-1 rounded-full border border-indigo-300/60 bg-indigo-500/20 px-3 text-sm font-semibold text-indigo-100 shadow-[0_0_18px_rgba(99,102,241,0.28)]"
-                      onClick={() => {
-                        setPlaylistIndex(0)
-                        setPlaylistAutoAdvance(true)
-                        setShowPlaylistModal(true)
-                      }}
-                      title="Open setlist playlist"
-                      aria-label="Open setlist playlist"
-                    >
-                      <span aria-hidden>🎵</span>
-                      <img src={openPlaylistIcon} alt="" className="h-5 w-5 object-contain" />
-                    </button>
-                  </div>
-                  {isAdmin && (
-                    <button
-                      className="whitespace-nowrap rounded-full border border-red-400/40 px-3 py-1 text-xs text-red-200"
-                      onClick={() => deleteGig(currentSetlist.id)}
-                    >
-                      Delete gig
-                    </button>
-                  )}
+                <div className="flex items-center gap-2">
+                  <button
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-teal-300/40 bg-slate-800/95 text-xl font-semibold text-slate-100 shadow-[0_0_18px_rgba(20,184,166,0.2)]"
+                    onClick={handlePrintSetlist}
+                    title="Download setlist PDF"
+                    aria-label="Download setlist PDF"
+                  >
+                    <img src={downloadPdfIcon} alt="" className="h-6 w-6 object-contain" />
+                  </button>
+                  <button
+                    className="inline-flex h-11 min-w-[44px] items-center justify-center gap-1 rounded-full border border-indigo-300/60 bg-indigo-500/20 px-3 text-sm font-semibold text-indigo-100 shadow-[0_0_18px_rgba(99,102,241,0.28)]"
+                    onClick={() => {
+                      setPlaylistIndex(0)
+                      setPlaylistAutoAdvance(true)
+                      setShowPlaylistModal(true)
+                    }}
+                    title="Open setlist playlist"
+                    aria-label="Open setlist playlist"
+                  >
+                    <span aria-hidden>🎵</span>
+                    <img src={openPlaylistIcon} alt="" className="h-5 w-5 object-contain" />
+                  </button>
                 </div>
               </div>
+              {isAdmin && (
+                <div className="mt-3 flex justify-end">
+                  <button
+                    className="min-w-[92px] rounded-xl border border-red-400/40 px-4 py-2 text-sm text-red-200"
+                    onClick={() => deleteGig(currentSetlist.id)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              )}
             </div>
 
             {isAdmin && (
@@ -11252,7 +11282,7 @@ function App() {
         {screen === 'song' && (
           <section className="flex flex-col gap-6">
             <div className="sticky top-[72px] z-20 rounded-3xl border border-white/10 bg-slate-900/90 p-5 backdrop-blur">
-              <div className="flex items-start justify-between">
+              <div className="flex items-start">
                 <div>
                   <p className="text-xs uppercase tracking-[0.3em] text-slate-400">
                     Songs
@@ -11281,14 +11311,6 @@ function App() {
                     </button>
                   )}
                 </div>
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setScreen('builder')}
-                  aria-label="Back"
-                  title="Back"
-                >
-                  ←
-                </button>
               </div>
             </div>
 
@@ -11419,24 +11441,16 @@ function App() {
         {screen === 'musicians' && (
           <section className="flex flex-col gap-6">
             <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-5">
-              <div className="flex items-start justify-between">
+              <div className="flex items-start">
                 <div>
                   <p className="text-xs uppercase tracking-[0.3em] text-slate-400">
                     Musicians
                   </p>
                   <h2 className="text-xl font-semibold">Band roster</h2>
                   <p className="text-xs text-slate-400">
-                    Add, edit, and manage your core roster and subs.
+                    Add, edit, and manage your musician contacts.
                   </p>
                 </div>
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setScreen('setlists')}
-                  aria-label="Back"
-                  title="Back"
-                >
-                  ←
-                </button>
               </div>
               <div className="mt-4 space-y-4">
                 {isAdmin && (
@@ -11475,14 +11489,14 @@ function App() {
                         }
                       }}
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
+                      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between md:gap-3">
+                        <div className="w-full min-w-0 md:pr-2">
                           <div className="flex items-center gap-2">
-                            <div className="text-sm font-semibold text-teal-100">
+                            <div className="min-w-0 whitespace-nowrap overflow-hidden text-ellipsis text-sm font-semibold text-teal-100">
                               {musician.name}
                             </div>
                             <span
-                              className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                              className={`inline-flex w-fit rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
                                 musician.roster === 'core'
                                   ? 'bg-emerald-400/20 text-emerald-200'
                                   : 'bg-white/10 text-slate-300'
@@ -11495,10 +11509,11 @@ function App() {
                             {musician.instruments.join(', ') || 'No instruments'}
                           </div>
                         </div>
-                        <div className="flex items-center gap-2 text-sm">
+                        <div className="mt-0.5 flex w-full justify-end md:mt-0 md:w-auto">
+                          <div className="flex flex-wrap items-center justify-end gap-2 text-sm md:flex-nowrap">
                           {isAdmin && (
                             <button
-                              className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${
+                              className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold sm:px-3 sm:text-[11px] ${
                                 musician.email?.trim()
                                   ? 'border-indigo-300/50 text-indigo-100'
                                   : 'border-white/10 text-slate-500'
@@ -11547,6 +11562,7 @@ function App() {
                               </a>
                             </>
                           )}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -11560,7 +11576,7 @@ function App() {
         {screen === 'account' && (
           <section className="flex flex-col gap-6">
             <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-5">
-              <div className="flex items-start justify-between">
+              <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Account</p>
                   <h2 className="text-xl font-semibold">Band leader settings</h2>
@@ -11570,11 +11586,9 @@ function App() {
                 </div>
                 <button
                   className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setScreen('setlists')}
-                  aria-label="Back"
-                  title="Back"
+                  onClick={() => void handleLogout()}
                 >
-                  ←
+                  Log out
                 </button>
               </div>
 
@@ -11662,13 +11676,6 @@ function App() {
                     </div>
                   )}
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => void openStripeCheckout('pro')}
-                      disabled={!canAccessBillingControls}
-                    >
-                      Upgrade to Pro ({PRO_PLAN_PRICE_LABEL})
-                    </button>
                     <button
                       className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => setAccountSaveStatus('Agency plan is coming soon. Pro is available now for $4.99/mo.')}
@@ -12101,18 +12108,13 @@ function App() {
                       ←
                     </button>
                   )}
-                <button
-                  className="icon-header-btn rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
+                <CloseButton
                   onClick={() => {
                     setDocModalSongId(null)
                     setDocModalContent(null)
                     setDocModalPageIndex(0)
                   }}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                />
                 </div>
               </div>
             </div>
@@ -12291,14 +12293,7 @@ function App() {
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
               <h3 className="text-lg font-semibold">{audioModalLabel}</h3>
               <div className="mt-3 flex items-center gap-2">
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setAudioModalUrl(null)}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                <CloseButton onClick={() => setAudioModalUrl(null)} />
               </div>
             </div>
             <div className="max-h-[calc(80vh-72px)] overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))] pt-4">
@@ -12398,9 +12393,12 @@ function App() {
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Musician</p>
-                <h3 className="text-lg font-semibold">Edit musician</h3>
+              <div className="flex items-start gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Musician</p>
+                  <h3 className="text-lg font-semibold">Edit musician</h3>
+                </div>
+                <CloseButton onClick={cancelEditMusician} />
               </div>
               <div className="mt-3 flex items-center gap-2">
                 <button
@@ -12414,14 +12412,6 @@ function App() {
                   onClick={() => deleteMusician(editingMusicianId)}
                 >
                   Delete
-                </button>
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={cancelEditMusician}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
                 </button>
               </div>
             </div>
@@ -12544,14 +12534,7 @@ function App() {
                 Invite members and manage band roles.
               </div>
               <div className="mt-3 flex items-center gap-2">
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setShowTeamModal(false)}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                <CloseButton onClick={() => setShowTeamModal(false)} />
               </div>
             </div>
             <div
@@ -12793,7 +12776,10 @@ function App() {
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                onClick={() => void openStripeCheckout('pro')}
+                onClick={() => {
+                  setShowTierLimitModal(null)
+                  setShowTierDetailsModal('pro')
+                }}
               >
                 Upgrade to Pro ({PRO_PLAN_PRICE_LABEL})
               </button>
@@ -12982,14 +12968,7 @@ function App() {
                 Add songs not already in this gig. Default setlist: {sectionAddSongsSource}
               </p>
               <div className="mt-3 flex items-center gap-2">
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setShowSectionAddSongsModal(false)}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                <CloseButton onClick={() => setShowSectionAddSongsModal(false)} />
                 <button
                   className="min-w-[120px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                   onClick={addSelectedSongsToTargetSetlists}
@@ -13165,14 +13144,7 @@ function App() {
                 current order.
               </p>
               <div className="mt-3 flex items-center gap-2">
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={closeManualSectionOrderModal}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                <CloseButton onClick={closeManualSectionOrderModal} />
                 <button
                   className="min-w-[140px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                   onClick={applyManualSectionOrder}
@@ -13263,17 +13235,12 @@ function App() {
                   : 'Enter request details. New songs are automatically saved to the song library.'}
               </p>
               <div className="mt-3 flex items-center gap-2">
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                <CloseButton
                   onClick={() => {
                     resetPendingSpecialRequest()
                     setShowSpecialRequestModal(false)
                   }}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                />
                 <button
                   className="min-w-[120px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                   onClick={saveSpecialRequest}
@@ -13531,14 +13498,7 @@ function App() {
               />
             </div>
             <div className="mt-4 flex items-center gap-2">
-              <button
-                className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                onClick={() => setShowAddSetlistModal(false)}
-                aria-label="Close"
-                title="Close"
-              >
-                ✕
-              </button>
+              <CloseButton onClick={() => setShowAddSetlistModal(false)} />
               <button
                 className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                 onClick={() => {
@@ -13572,14 +13532,7 @@ function App() {
                 {singerModalSong.artist ? ` · ${singerModalSong.artist}` : ''}
               </div>
               <div className="mt-3 flex items-center gap-2">
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setSingerModalSongId(null)}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                <CloseButton onClick={() => setSingerModalSongId(null)} />
               </div>
             </div>
             <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))] pt-4">
@@ -13864,14 +13817,7 @@ function App() {
                 {currentSetlist.gigName} • {formatGigDate(currentSetlist.date)}
               </p>
               <div className="mt-3 flex items-center gap-2">
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setShowGigMusiciansModal(false)}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                <CloseButton onClick={() => setShowGigMusiciansModal(false)} />
               </div>
             </div>
             <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))] pt-4">
@@ -13974,14 +13920,7 @@ function App() {
                 </a>
               )}
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setShowSetlistModal(false)}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                <CloseButton onClick={() => setShowSetlistModal(false)} />
                 <button
                   className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-teal-300/40 bg-slate-800/95 text-xl text-slate-100 shadow-[0_0_18px_rgba(20,184,166,0.2)]"
                   onClick={handlePrintSetlist}
@@ -14253,10 +14192,18 @@ function App() {
             className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900 p-5"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold">Choose Gig Mode View</h3>
-            <p className="mt-1 text-sm text-slate-300">
-              Start gig mode in your current builder layout or open the Setlist Sheet view.
-            </p>
+            <div className="flex items-start gap-3">
+              <div>
+                <h3 className="text-lg font-semibold">Choose Gig Mode View</h3>
+                <p className="mt-1 text-sm text-slate-300">
+                  Start gig mode in your current builder layout or open the Setlist Sheet view.
+                </p>
+              </div>
+              <CloseButton
+                className="text-slate-300"
+                onClick={() => setShowGigModeLaunchModal(false)}
+              />
+            </div>
             <div className="mt-4 grid grid-cols-1 gap-2">
               <button
                 className="rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-slate-100"
@@ -14277,16 +14224,6 @@ function App() {
                 }}
               >
                 Open Setlist Sheet
-              </button>
-            </div>
-            <div className="mt-3 flex justify-end">
-              <button
-                className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300"
-                onClick={() => setShowGigModeLaunchModal(false)}
-                aria-label="Close"
-                title="Close"
-              >
-                ✕
               </button>
             </div>
           </div>
@@ -14365,14 +14302,10 @@ function App() {
                       Add Setlist Type
                     </button>
                   )}
-                  <button
-                    className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-300"
+                  <CloseButton
+                    className="text-slate-300"
                     onClick={closeGigSetlistSheet}
-                    aria-label="Close"
-                    title="Close"
-                  >
-                    ✕
-                  </button>
+                  />
                 </div>
               </div>
             </div>
@@ -14696,15 +14629,10 @@ function App() {
                       ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
                       : 'No playable songs'}
                   </span>
-                  <button
-                    type="button"
-                    className="rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-300"
+                  <CloseButton
+                    className="text-slate-300"
                     onClick={() => setShowPlaylistModal(false)}
-                    aria-label="Close"
-                    title="Close"
-                  >
-                    ✕
-                  </button>
+                  />
                 </div>
               </div>
               <div className="mt-4 space-y-2">
@@ -14963,14 +14891,10 @@ function App() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <button
-                      className="min-w-[100px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-white/5 transition-colors"
+                    <CloseButton
+                      className="min-w-[100px] text-slate-300 hover:bg-white/5 transition-colors"
                       onClick={() => setShowPrintPreview(false)}
-                      aria-label="Close"
-                      title="Close"
-                    >
-                      ✕
-                    </button>
+                    />
                     <button
                       className="min-w-[120px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-white/5 transition-colors"
                       onClick={handlePrintSetlistPDF}
@@ -15229,19 +15153,14 @@ function App() {
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
-              <h3 className="text-lg font-semibold">Add musician</h3>
-              <p className="mt-1 text-sm text-slate-300">
-                Mark core members or subs. Add contact info and instruments.
-              </p>
-              <div className="mt-3 flex items-center gap-2">
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setShowAddMusicianModal(false)}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+              <div className="flex items-start gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold">Add musician</h3>
+                  <p className="mt-1 text-sm text-slate-300">
+                    Mark core members or subs. Add contact info and instruments.
+                  </p>
+                </div>
+                <CloseButton onClick={() => setShowAddMusicianModal(false)} />
               </div>
             </div>
             <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4">
@@ -15372,16 +15291,9 @@ function App() {
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
-              <h3 className="text-lg font-semibold">Add new song</h3>
-              <div className="mt-3 flex items-center gap-2">
-                <button
-                  className="min-w-[92px] justify-center rounded-xl bg-teal-400/90 px-4 py-2 text-center text-sm font-semibold text-slate-950"
-                  onClick={() => addSongFromAdmin(false)}
-                >
-                  Add song
-                </button>
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+              <div className="flex items-start gap-3">
+                <h3 className="text-lg font-semibold">Add new song</h3>
+                <CloseButton
                   onClick={() => {
                     setNewSongTitle('')
                     setNewSongArtist('')
@@ -15394,10 +15306,14 @@ function App() {
                     setShowDuplicateSongConfirm(false)
                     setShowAddSongModal(false)
                   }}
-                  aria-label="Close"
-                  title="Close"
+                />
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="min-w-[92px] justify-center rounded-xl bg-teal-400/90 px-4 py-2 text-center text-sm font-semibold text-slate-950"
+                  onClick={() => addSongFromAdmin(false)}
                 >
-                  ✕
+                  Add song
                 </button>
               </div>
             </div>
@@ -15524,8 +15440,7 @@ function App() {
                 >
                   Add + assign
                 </button>
-                <button
-                  className="min-w-[92px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
+                <CloseButton
                   onClick={() => {
                     setNewSubName('')
                     setNewSubEmail('')
@@ -15536,11 +15451,7 @@ function App() {
                     setNewInstrumentInput('')
                     setShowSubModal(false)
                   }}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                />
               </div>
             </div>
             <div className="max-h-[calc(85vh-72px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))] pt-4">
@@ -15646,25 +15557,24 @@ function App() {
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Song</p>
-                <h3 className="text-lg font-semibold">Edit song</h3>
-                <p className="mt-1 truncate text-sm text-teal-200">
-                  {editingSongTitle.trim() || 'Untitled song'}
-                </p>
+              <div className="flex items-start gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Song</p>
+                  <h3 className="text-lg font-semibold">Edit song</h3>
+                  <p className="mt-1 truncate text-sm text-teal-200">
+                    {editingSongTitle.trim() || 'Untitled song'}
+                  </p>
+                </div>
+                <CloseButton onClick={cancelEditSong} />
               </div>
               <div className="mt-3 flex items-center gap-2">
                 <button
                   className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                  onClick={
-                    isEditSongDirty || hasPendingDocDraft
-                      ? () => {
-                          void handleSaveSongEditor()
-                        }
-                      : cancelEditSong
-                  }
+                  onClick={() => {
+                    void handleSaveSongEditor()
+                  }}
                 >
-                  {isEditSongDirty || hasPendingDocDraft ? 'Save' : '✕'}
+                  Save
                 </button>
                 <button
                   className="min-w-[92px] rounded-xl border border-red-400/40 px-4 py-2 text-sm text-red-200"
@@ -15946,14 +15856,7 @@ function App() {
                         ? 'Special Requests'
                         : getSectionFromPanel(activeBuildPanel) ?? 'Setlist'}
                 </h3>
-                <button
-                  className="icon-header-btn rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
-                  onClick={() => setActiveBuildPanel(null)}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ✕
-                </button>
+                <CloseButton onClick={() => setActiveBuildPanel(null)} />
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
@@ -16504,19 +16407,14 @@ function App() {
                               ))}
                             </select>
                             {starterPasteOpen[section] && (
-                              <button
-                                className="icon-header-btn rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200"
+                              <CloseButton
                                 onClick={() =>
                                   setStarterPasteOpen((prev) => ({
                                     ...prev,
                                     [section]: false,
                                   }))
                                 }
-                                aria-label="Close"
-                                title="Close"
-                              >
-                                ✕
-                              </button>
+                              />
                             )}
                           </div>
                         )}

@@ -25,6 +25,15 @@
   --gig-sheet-row-height: 44px;
 }
 
+@media (max-width: 767px) {
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea {
+    font-size: 1rem;
+    padding: 0.75rem 1rem;
+  }
+}
+
 body {
   margin: 0;
   min-width: 320px;

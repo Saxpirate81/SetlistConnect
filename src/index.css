@@ -32,6 +32,10 @@
     font-size: 1rem;
     padding: 0.75rem 1rem;
   }
+
+  button:not(.icon-header-btn):not(.lyrics-floating-panel-close) {
+    min-height: 44px;
+  }
 }
 
 button[class*='border-']:not([class*='bg-']) {
@@ -93,25 +97,6 @@ button:hover,
 [role="button"]:hover,
 a:hover {
   box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.2), 0 8px 20px rgba(0, 0, 0, 0.25);
-}
-
-button.icon-header-btn {
-  min-width: 30px !important;
-  min-height: 30px !important;
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 0;
-  color: transparent !important;
-  font-size: 24px;
-}
-
-button.icon-header-btn {
-  width: auto !important;
-  height: auto !important;
-  min-height: 0 !important;
-  padding: inherit;
 }
 
 .lyrics-floating-panel-close {

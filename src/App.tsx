@@ -618,6 +618,7 @@ function App() {
   const [showGigMusiciansModal, setShowGigMusiciansModal] = useState(false)
   const [showSetlistModal, setShowSetlistModal] = useState(false)
   const [showPlaylistModal, setShowPlaylistModal] = useState(false)
+  const [playlistModalTab, setPlaylistModalTab] = useState<'setlist' | 'playlist'>('setlist')
   const [playlistIndex, setPlaylistIndex] = useState(0)
   const [playlistAutoAdvance, setPlaylistAutoAdvance] = useState(true)
   const [playlistPlayNonce, setPlaylistPlayNonce] = useState(0)
@@ -814,6 +815,9 @@ function App() {
   const sharedPlaylistDrawerTouchStartYRef = useRef<number | null>(null)
   const playlistDrawerAutoCloseTimerRef = useRef<number | null>(null)
   const sharedPlaylistDrawerAutoCloseTimerRef = useRef<number | null>(null)
+  const [widePlaylistUi, setWidePlaylistUi] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 768px)').matches : false,
+  )
   const sharedNowPlayingSongIdRef = useRef<string | null>(null)
   const [showAddMusicianModal, setShowAddMusicianModal] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
@@ -3353,6 +3357,16 @@ function App() {
       setPlaylistPlayNonce((current) => current + 1)
     }
   }
+  const playPlaylistFromStart = () => {
+    if (!visiblePlaylistEntries.length) return
+    const firstPlayable = findNextPlayableIndex(0, 1)
+    if (firstPlayable >= 0) {
+      setPlaylistIndex(firstPlayable)
+    } else {
+      setPlaylistIndex(0)
+    }
+    setPlaylistPlayNonce((current) => current + 1)
+  }
   const handlePlaylistDrawerTouchStart = (event: TouchEvent<HTMLDivElement>) => {
     if (playlistDrawerOverlay) {
       if (playlistDrawerAutoCloseTimerRef.current) {
@@ -3386,6 +3400,10 @@ function App() {
     }, 6000)
   }
   const handlePlaylistDrawerTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    if (!widePlaylistUi) {
+      playlistDrawerTouchStartYRef.current = null
+      return
+    }
     const startY = playlistDrawerTouchStartYRef.current
     playlistDrawerTouchStartYRef.current = null
     if (startY === null) return
@@ -3432,6 +3450,10 @@ function App() {
     }, 6000)
   }
   const handleSharedPlaylistDrawerTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    if (!widePlaylistUi) {
+      sharedPlaylistDrawerTouchStartYRef.current = null
+      return
+    }
     const startY = sharedPlaylistDrawerTouchStartYRef.current
     sharedPlaylistDrawerTouchStartYRef.current = null
     if (startY === null) return
@@ -3455,15 +3477,19 @@ function App() {
     setPlaylistIndex(next)
     setPlaylistPlayNonce((current) => current + 1)
   }
-  const copyPlaylistShareLink = async () => {
+  const copyPlaylistShareLink = async (options?: { fromFirstSong?: boolean }) => {
     if (!currentSetlist) return
-    const currentShareEntry = visiblePlaylistEntries[playlistIndex]
-    const shareStartIndex = currentShareEntry
-      ? Math.max(
-          0,
-          activePlaylistEntries.findIndex((entry) => entry.key === currentShareEntry.key),
-        )
-      : 0
+    const shareStartIndex = options?.fromFirstSong
+      ? 0
+      : (() => {
+          const currentShareEntry = visiblePlaylistEntries[playlistIndex]
+          return currentShareEntry
+            ? Math.max(
+                0,
+                activePlaylistEntries.findIndex((entry) => entry.key === currentShareEntry.key),
+              )
+            : 0
+        })()
     const sharedMusicians = normalizeSharedMusicians(
       appState.gigMusicians
         .filter((row) => row.gigId === currentSetlist.id && row.status !== 'out')
@@ -3503,9 +3529,40 @@ function App() {
         document.execCommand('copy')
         document.body.removeChild(textArea)
       }
-      setStatus('Playlist link copied.')
+      setStatus(options?.fromFirstSong ? 'Guest link copied (starts at first song).' : 'Link copied.')
     } catch {
       setStatus('Could not copy link. Copy from browser URL bar.')
+    }
+  }
+  const copyPublicSharePageUrl = async () => {
+    const setStatus = (value: string) => {
+      setPlaylistShareStatus(value)
+      if (playlistShareTimerRef.current) {
+        window.clearTimeout(playlistShareTimerRef.current)
+      }
+      playlistShareTimerRef.current = window.setTimeout(() => {
+        setPlaylistShareStatus('')
+        playlistShareTimerRef.current = null
+      }, 2200)
+    }
+    const url = window.location.href
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url)
+      } else {
+        const textArea = document.createElement('textarea')
+        textArea.value = url
+        textArea.style.position = 'fixed'
+        textArea.style.left = '-9999px'
+        document.body.appendChild(textArea)
+        textArea.focus()
+        textArea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textArea)
+      }
+      setStatus('Link copied.')
+    } catch {
+      setStatus('Could not copy. Copy from the address bar.')
     }
   }
   const moveDocPageBy = (delta: number) => {
@@ -7752,6 +7809,7 @@ function App() {
       setScreen('builder')
       setPlaylistIndex(requestedIndex)
       setPlaylistAutoAdvance(true)
+      setPlaylistModalTab('playlist')
       setShowPlaylistModal(true)
       params.delete('playlist')
       params.delete('setlist')
@@ -8525,6 +8583,20 @@ function App() {
   }, [sharedPlaylistView])
 
   useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)')
+    const apply = () => setWidePlaylistUi(mq.matches)
+    apply()
+    mq.addEventListener('change', apply)
+    return () => mq.removeEventListener('change', apply)
+  }, [])
+
+  useEffect(() => {
+    if (widePlaylistUi) return
+    setPlaylistDrawerOverlay(false)
+    setSharedPlaylistDrawerOverlay(false)
+  }, [widePlaylistUi])
+
+  useEffect(() => {
     if (!playlistDrawerOverlay) {
       if (playlistDrawerAutoCloseTimerRef.current) {
         window.clearTimeout(playlistDrawerAutoCloseTimerRef.current)
@@ -8937,20 +9009,20 @@ function App() {
       <div className="shared-public-mode h-screen overflow-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-4 pb-24 pt-6 text-white">
         {appState.instrument === null && (
           <div
-            className="fixed inset-0 z-[110] flex items-center bg-slate-950/80 py-6"
+            className="fixed inset-0 z-[110] flex items-end justify-center bg-slate-950/80 pb-[env(safe-area-inset-bottom)] pt-6 sm:items-center sm:pb-6"
             onClick={() => setAppState((prev) => ({ ...prev, instrument: ['All'] }))}
           >
             <div
-              className="mx-auto w-full max-w-md max-h-[85vh] overflow-hidden rounded-t-3xl bg-slate-900 sm:rounded-3xl"
+              className="mx-auto flex max-h-[min(88dvh,720px)] w-full max-w-md flex-col overflow-hidden rounded-t-3xl bg-slate-900 shadow-2xl sm:max-h-[85vh] sm:rounded-3xl"
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
+              <div className="shrink-0 border-b border-white/10 bg-slate-900/95 px-6 py-4 backdrop-blur">
                 <h2 className="text-lg font-semibold">Select your instrument</h2>
                 <p className="mt-1 text-sm text-slate-300">
                   Pick one or more instruments to view matching charts and lyrics.
                 </p>
               </div>
-              <div className="max-h-[calc(85vh-92px)] overflow-auto px-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-2">
                 <div className="mt-4 grid grid-cols-2 gap-2">
                   {INSTRUMENTS.map((instrument) => (
                     <button
@@ -8991,8 +9063,8 @@ function App() {
         <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col">
           <div className="flex h-full min-h-0 flex-col p-3 sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4">
             <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold">Shared Gig Playlist</h2>
+              <div className="min-w-0 pr-2">
+                <h2 className="text-lg font-semibold">Active Setlist</h2>
                 {sharedPlaylistView && (
                   <>
                     <p className="mt-1 text-xs text-slate-300">
@@ -9001,25 +9073,40 @@ function App() {
                     {sharedPlaylistView.venueAddress ? (
                       <p className="mt-0.5 text-[11px] text-slate-400">{sharedPlaylistView.venueAddress}</p>
                     ) : null}
+                    <p className="mt-2 text-[11px] leading-snug text-slate-500">
+                      Setlist is the printable sheet. Audio plays rehearsal tracks.
+                    </p>
                   </>
                 )}
               </div>
-              <div className="flex flex-col items-end gap-1 text-right">
+              <div className="flex min-w-0 flex-col items-end gap-2 text-right">
                 <div className="text-xs text-slate-400">
                   {visiblePlaylistEntries.length
                     ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
                     : 'No playable songs'}
                 </div>
-                <button
-                  type="button"
-                  className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-slate-300"
-                  onClick={() => {
-                    setInstrumentSelectionDraft(appState.instrument ?? [])
-                    setAppState((prev) => ({ ...prev, instrument: null }))
-                  }}
-                >
-                  Instrument Filter
-                </button>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    className="min-h-[36px] rounded-lg border border-indigo-300/50 bg-indigo-500/15 px-3 py-1.5 text-[11px] font-semibold text-indigo-100"
+                    onClick={() => void copyPublicSharePageUrl()}
+                  >
+                    Copy link
+                  </button>
+                  <button
+                    type="button"
+                    className="min-h-[36px] rounded-lg border border-white/10 px-3 py-1.5 text-[11px] text-slate-300"
+                    onClick={() => {
+                      setInstrumentSelectionDraft(appState.instrument ?? [])
+                      setAppState((prev) => ({ ...prev, instrument: null }))
+                    }}
+                  >
+                    Instrument
+                  </button>
+                </div>
+                {playlistShareStatus ? (
+                  <span className="max-w-[220px] text-[11px] text-teal-200">{playlistShareStatus}</span>
+                ) : null}
               </div>
             </div>
             {sharedPlaylistLoading && (
@@ -9232,15 +9319,41 @@ function App() {
                         </select>
                       </div>
                     </div>
-                    <div className="order-1 mt-3 min-h-0 flex-1 overflow-hidden md:order-2 md:mt-4">
-                      <div className="relative h-full min-h-0">
-                        <div
-                          ref={sharedPlaylistPlayerBlockRef}
-                          className={`relative z-10 transition-opacity duration-200 ${
-                            sharedPlaylistDrawerOverlay ? 'pointer-events-none opacity-0' : 'opacity-100'
-                          }`}
-                        >
+                    <div className="order-1 mt-3 flex min-h-0 flex-1 flex-col gap-3 overflow-hidden md:order-2 md:mt-4 md:flex-row md:gap-4">
+                      <div
+                        ref={sharedPlaylistPlayerBlockRef}
+                        className={`relative z-10 flex min-h-0 w-full flex-col md:min-h-0 md:flex-1 ${
+                          widePlaylistUi && sharedPlaylistDrawerOverlay
+                            ? 'pointer-events-none opacity-0 md:pointer-events-auto md:opacity-100'
+                            : 'opacity-100'
+                        }`}
+                      >
+                        {visiblePlaylistEntries.length > 0 && (
+                          <div className="mb-1 shrink-0 rounded-2xl border border-teal-400/25 bg-gradient-to-br from-slate-800/90 to-slate-950 p-3 ring-1 ring-white/10 sm:mb-2 sm:p-4">
+                            <div className="flex items-center justify-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                              <span className="text-lg" aria-hidden>
+                                🎵
+                              </span>
+                              Music player
+                            </div>
+                            <div className="mt-2 flex flex-col items-center gap-2 sm:mt-3">
+                              <button
+                                type="button"
+                                className="flex h-14 w-14 items-center justify-center rounded-full bg-teal-400 text-slate-950 shadow-lg ring-2 ring-teal-300/35 disabled:opacity-40"
+                                disabled={visiblePlaylistEntries.length === 0}
+                                onClick={playPlaylistFromStart}
+                                aria-label="Play from the first song in the playlist"
+                              >
+                                <span className="text-2xl leading-none">▶</span>
+                              </button>
+                              <p className="px-2 text-center text-[11px] text-slate-500">
+                                Starts at the first song in the list
+                              </p>
+                            </div>
+                          </div>
+                        )}
                           {currentPlaylistEntry ? (
+                            <div className="min-h-0 max-h-[min(50vh,440px)] w-full shrink-0 overflow-y-auto overflow-x-hidden md:max-h-none">
                             <div
                               className="rounded-none border-0 bg-transparent p-0 transition-all duration-300 sm:rounded-2xl sm:border sm:border-white/10 sm:bg-slate-950/40 sm:p-4"
                             >
@@ -9287,7 +9400,7 @@ function App() {
                                 ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
                                   <iframe
                                     key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared`}
-                                    className="h-[145px] w-full rounded-xl border-0 sm:h-[170px] sm:border sm:border-white/10"
+                                    className="aspect-video w-full max-h-[min(52vh,320px)] rounded-xl border-0 sm:max-h-[min(58vh,420px)] sm:border sm:border-white/10"
                                     src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
                                     title="YouTube playlist item"
                                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -9310,27 +9423,36 @@ function App() {
                                 )}
                               </div>
                             </div>
+                            </div>
                           ) : (
-                            <div className="rounded-xl border-0 bg-slate-900/40 p-3 text-sm text-slate-300 sm:rounded-2xl sm:border sm:border-white/10 sm:bg-slate-950/40 sm:p-4">
+                            <div className="shrink-0 rounded-xl border-0 bg-slate-900/40 p-3 text-sm text-slate-300 sm:rounded-2xl sm:border sm:border-white/10 sm:bg-slate-950/40 sm:p-4">
                               No playlist songs found for this gig yet.
                             </div>
                           )}
-                        </div>
+                      </div>
 
                         <div
-                          className="absolute inset-x-0 bottom-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl transition-all duration-300"
-                          style={{
-                            top: sharedPlaylistDrawerOverlay ? 0 : sharedPlaylistDrawerDockTop,
-                          }}
+                          className={`z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-xl transition-all duration-300 md:h-full md:w-[300px] md:shrink-0 ${
+                            widePlaylistUi
+                              ? 'absolute inset-x-0 bottom-0 shadow-2xl md:static md:inset-auto'
+                              : 'flex min-h-[36vh] flex-1 flex-col'
+                          }`}
+                          style={
+                            widePlaylistUi
+                              ? { top: sharedPlaylistDrawerOverlay ? 0 : sharedPlaylistDrawerDockTop }
+                              : undefined
+                          }
                           onTouchStart={handleSharedPlaylistDrawerTouchStart}
                           onTouchMove={handleSharedPlaylistDrawerTouchMove}
                           onTouchEnd={handleSharedPlaylistDrawerTouchEnd}
                         >
-                          <div className="flex items-center justify-center py-2">
+                          <div className={`flex items-center justify-center py-2 ${widePlaylistUi ? 'md:hidden' : 'hidden'}`}>
                             <div className="h-1 w-12 rounded-full bg-white/25" />
                           </div>
                           <div
-                            className="max-h-full overflow-y-auto px-2 pb-2"
+                            className={`min-h-0 overflow-y-auto px-2 pb-2 md:h-full md:max-h-none ${
+                              widePlaylistUi ? 'max-h-full' : 'flex-1'
+                            }`}
                             onScroll={handleSharedPlaylistDrawerScroll}
                           >
                             <div className="space-y-3 pb-2">
@@ -9391,7 +9513,6 @@ function App() {
                             </div>
                           </div>
                         </div>
-                      </div>
                     </div>
                   </>
                 )}
@@ -9426,7 +9547,7 @@ function App() {
                 onClick={() => setSharedPublicTab('playlist')}
               >
                 <img src={openPlaylistIcon} alt="" className="h-5 w-5 object-contain" />
-                Audio Playlist
+                Audio
               </button>
             </div>
           </nav>
@@ -10469,7 +10590,7 @@ function App() {
         )}
 
         {screen === 'builder' && currentSetlist && (
-          <section className={`flex flex-col gap-6 ${isPastGigLockedForAdmin ? 'past-gig-locked-surface' : ''}`}>
+          <section className="flex flex-col gap-6">
             <div
               className={`sticky ${
                 isAdmin && isCurrentSetlistPast ? 'top-[130px]' : 'top-[72px]'
@@ -10483,15 +10604,20 @@ function App() {
                   : 'translate-y-0 opacity-100'
               }`}
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 text-left">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+                <div className="min-w-0 flex-1 text-left">
                   <p className="text-xs uppercase tracking-[0.3em] text-slate-400">
                     {isAdmin ? 'Setlist' : 'Gig Info'}
                   </p>
                   {isAdmin ? (
                     <div className="mt-3 flex flex-col gap-1 text-left">
                       <input
-                        className="w-full border-b border-white/10 bg-transparent py-1 text-left text-2xl font-semibold text-white outline-none focus:border-teal-300"
+                        readOnly={isPastGigLockedForAdmin}
+                        className={`w-full border-b border-white/10 bg-transparent px-0 py-1 text-left text-2xl font-semibold outline-none focus:border-teal-300 ${
+                          isPastGigLockedForAdmin
+                            ? 'cursor-default text-slate-200'
+                            : 'text-white'
+                        }`}
                         value={currentSetlist.gigName}
                         onChange={(event) => {
                           const value = event.target.value
@@ -10516,54 +10642,67 @@ function App() {
                         }}
                       />
                       <div className="flex flex-col gap-1">
-                        <div className="flex items-center gap-2 md:w-[200px]">
-                          <button
-                            type="button"
-                            className="w-full border-b border-white/10 bg-transparent py-1 text-left text-sm text-slate-200 outline-none focus:border-teal-300"
-                            onClick={() => {
-                              const input = dateInputRef.current
-                              if (!input) return
-                              if (typeof input.showPicker === 'function') {
-                                input.showPicker()
-                              } else {
-                                input.focus()
-                              }
-                            }}
-                          >
-                            {formatGigDate(currentSetlist.date)}
-                          </button>
-                          <input
-                            ref={dateInputRef}
-                            className="sr-only"
-                            type="date"
-                            value={currentSetlist.date}
-                            onChange={(event) => {
-                              const value = event.target.value
-                              if (!value) return
-                              commitChange('Update gig date', (prev) => ({
-                                ...prev,
-                                setlists: prev.setlists.map((setlist) =>
-                                  setlist.id === currentSetlist.id
-                                    ? { ...setlist, date: value }
-                                    : setlist,
-                                ),
-                              }))
-                              if (supabase) {
-                                runSupabase(
-                                  supabase
-                                    .from('SetlistGigs')
-                                    .update({ gig_date: value })
-                                    .eq('id', currentSetlist.id),
-                                )
-                              }
-                              // Close the native date picker right after a date is chosen.
-                              event.currentTarget.blur()
-                            }}
-                          />
+                        <div className="flex w-full items-center gap-2 md:w-[200px]">
+                          {isPastGigLockedForAdmin ? (
+                            <p className="w-full border-b border-white/10 py-1 text-left text-sm text-slate-300">
+                              {formatGigDate(currentSetlist.date)}
+                            </p>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                className="w-full border-b border-white/10 bg-transparent px-0 py-1 text-left text-sm text-slate-200 outline-none focus:border-teal-300"
+                                onClick={() => {
+                                  const input = dateInputRef.current
+                                  if (!input) return
+                                  if (typeof input.showPicker === 'function') {
+                                    input.showPicker()
+                                  } else {
+                                    input.focus()
+                                  }
+                                }}
+                              >
+                                {formatGigDate(currentSetlist.date)}
+                              </button>
+                              <input
+                                ref={dateInputRef}
+                                className="sr-only"
+                                type="date"
+                                value={currentSetlist.date}
+                                onChange={(event) => {
+                                  const value = event.target.value
+                                  if (!value) return
+                                  commitChange('Update gig date', (prev) => ({
+                                    ...prev,
+                                    setlists: prev.setlists.map((setlist) =>
+                                      setlist.id === currentSetlist.id
+                                        ? { ...setlist, date: value }
+                                        : setlist,
+                                    ),
+                                  }))
+                                  if (supabase) {
+                                    runSupabase(
+                                      supabase
+                                        .from('SetlistGigs')
+                                        .update({ gig_date: value })
+                                        .eq('id', currentSetlist.id),
+                                    )
+                                  }
+                                  // Close the native date picker right after a date is chosen.
+                                  event.currentTarget.blur()
+                                }}
+                              />
+                            </>
+                          )}
                         </div>
                         <div className="flex w-full items-center gap-2">
                           <input
-                            className="w-full border-b border-white/10 bg-transparent py-1 text-left text-sm text-slate-200 outline-none focus:border-teal-300"
+                            readOnly={isPastGigLockedForAdmin}
+                            className={`w-full border-b border-white/10 bg-transparent px-0 py-1 text-left text-sm outline-none focus:border-teal-300 ${
+                              isPastGigLockedForAdmin
+                                ? 'cursor-default text-slate-300 placeholder:text-slate-500'
+                                : 'text-slate-200'
+                            }`}
                             placeholder="Venue address"
                             value={currentSetlist.venueAddress ?? ''}
                             onChange={(event) => {
@@ -10615,40 +10754,44 @@ function App() {
                     Tap a song in Gig mode to flash it at the top for the band.
                   </p>
                 </div>
-                <div className="flex flex-col items-end gap-2">
+                <div className="flex w-full min-w-0 flex-col gap-2 sm:max-w-[min(100%,280px)] sm:items-end">
                   <button
-                    className="inline-flex h-11 min-w-[160px] items-center justify-center gap-2 rounded-full border border-indigo-300/60 bg-indigo-500/20 px-4 text-sm font-semibold text-indigo-100 shadow-[0_0_18px_rgba(99,102,241,0.28)]"
+                    type="button"
+                    className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl border border-indigo-300/60 bg-indigo-500/20 px-4 text-sm font-semibold text-indigo-100 shadow-[0_0_18px_rgba(99,102,241,0.28)] sm:rounded-full"
                     onClick={() => {
                       setPlaylistIndex(0)
                       setPlaylistAutoAdvance(true)
+                      setPlaylistModalTab('setlist')
                       setShowPlaylistModal(true)
                     }}
-                    title="Open Setlist"
-                    aria-label="Open Setlist"
+                    title="Open Active Setlist"
+                    aria-label="Open Active Setlist"
                   >
                     <span aria-hidden>🎵</span>
                     <span>Active Setlist</span>
-                    <img src={openPlaylistIcon} alt="" className="h-5 w-5 object-contain" />
+                    <img src={openPlaylistIcon} alt="" className="h-5 w-5 object-contain opacity-90" />
                   </button>
-                  <div className="flex items-center gap-2">
+                  <div className="flex w-full items-center justify-end gap-2 sm:justify-end">
                     {currentSetlist.venueAddress && (
                       <a
-                        className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
+                        className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full border border-white/10 text-base text-slate-200"
                         href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
                           currentSetlist.venueAddress,
                         )}`}
                         target="_blank"
                         rel="noreferrer"
-                        title="Open address"
+                        title="Maps"
+                        aria-label="Open venue in maps"
                         onClick={(event) => event.stopPropagation()}
                       >
                         📍
                       </a>
                     )}
                     <button
-                      className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-teal-300/40 bg-slate-800/95 text-xl font-semibold text-slate-100 shadow-[0_0_18px_rgba(20,184,166,0.2)]"
+                      type="button"
+                      className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full border border-teal-300/40 bg-slate-800/95 text-xl font-semibold text-slate-100 shadow-[0_0_18px_rgba(20,184,166,0.2)]"
                       onClick={handlePrintSetlist}
-                      title="Setlist PDF preview"
+                      title="PDF preview"
                       aria-label="Setlist PDF preview"
                     >
                       📄
@@ -10659,7 +10802,9 @@ function App() {
               {isAdmin && (
                 <div className="mt-3 flex justify-end">
                   <button
-                    className="min-w-[92px] rounded-xl border border-red-400/40 px-4 py-2 text-sm text-red-200"
+                    type="button"
+                    disabled={isPastGigLockedForAdmin}
+                    className="min-h-[44px] min-w-[92px] rounded-xl border border-red-400/40 px-4 py-2 text-sm text-red-200 disabled:cursor-not-allowed disabled:opacity-40"
                     onClick={() => deleteGig(currentSetlist.id)}
                   >
                     Delete
@@ -10668,6 +10813,9 @@ function App() {
               )}
             </div>
 
+            <div
+              className={`flex flex-col gap-6 ${isPastGigLockedForAdmin ? 'past-gig-locked-surface' : ''}`}
+            >
             {isAdmin && (
               <div className="grid gap-3 sm:grid-cols-2">
                 {[
@@ -11279,6 +11427,7 @@ function App() {
               </div>
             ) : null}
 
+            </div>
           </section>
         )}
 
@@ -13937,10 +14086,11 @@ function App() {
                   onClick={() => {
                     setPlaylistIndex(0)
                     setPlaylistAutoAdvance(true)
+                    setPlaylistModalTab('setlist')
                     setShowPlaylistModal(true)
                   }}
-                  title="Open Setlist"
-                  aria-label="Open Setlist"
+                  title="Open Active Setlist"
+                  aria-label="Open Active Setlist"
                 >
                   <img src={openPlaylistIcon} alt="" className="h-6 w-6 object-contain" />
                 </button>
@@ -14199,7 +14349,7 @@ function App() {
               <div>
                 <h3 className="text-lg font-semibold">Choose Gig Mode View</h3>
                 <p className="mt-1 text-sm text-slate-300">
-                  Start gig mode in your current builder layout or open the Setlist Sheet view.
+                  Start gig mode in your current builder layout or open the Active Setlist view.
                 </p>
               </div>
               <CloseButton
@@ -14226,7 +14376,7 @@ function App() {
                   setShowGigModeLaunchModal(false)
                 }}
               >
-                Open Setlist Sheet
+                Open Active Setlist
               </button>
             </div>
           </div>
@@ -14239,7 +14389,7 @@ function App() {
             <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-3 backdrop-blur">
               <div className="grid grid-cols-1 items-start gap-2 md:grid-cols-[1fr_minmax(260px,1.3fr)_1fr] md:items-center">
                 <div className="min-w-0">
-                  <h3 className="text-lg font-semibold">Setlist Sheet</h3>
+                  <h3 className="text-lg font-semibold">Active Setlist</h3>
                   <div className="text-xs text-slate-400">
                     {currentSetlist.gigName} · {formatGigDate(currentSetlist.date)}
                   </div>
@@ -14618,95 +14768,306 @@ function App() {
             className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
+            <div className="sticky top-0 z-10 shrink-0 border-b border-white/10 bg-slate-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
               <div className="flex items-start justify-between gap-3">
-                <div>
+                <div className="min-w-0 pr-2">
                   <h3 className="text-lg font-semibold">Active Setlist</h3>
                   <p className="text-xs text-slate-400">
-                    {activeBandName || 'Band'} · {currentSetlist.gigName} ·{' '}
-                    {formatGigDate(currentSetlist.date)}
+                    {currentSetlist.gigName} · {formatGigDate(currentSetlist.date)}
+                  </p>
+                  {currentSetlist.venueAddress ? (
+                    <p className="mt-0.5 text-[11px] text-slate-500">{currentSetlist.venueAddress}</p>
+                  ) : null}
+                  <p className="mt-2 text-[11px] leading-snug text-slate-500">
+                    {playlistModalTab === 'setlist'
+                      ? 'Same view guests see from a share link. Switch to Audio for playback.'
+                      : 'Prev / Next move the queue. Share link matches this layout.'}
                   </p>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-slate-400">
-                    {visiblePlaylistEntries.length
-                      ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
-                      : 'No playable songs'}
-                  </span>
+                <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+                  {playlistModalTab === 'playlist' ? (
+                    <span className="hidden text-xs text-slate-400 sm:inline">
+                      {visiblePlaylistEntries.length
+                        ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
+                        : 'No playable songs'}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="min-h-[40px] rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold text-slate-200"
+                      onClick={() => void copyPlaylistShareLink({ fromFirstSong: true })}
+                    >
+                      Copy link
+                    </button>
+                  )}
                   <CloseButton
                     className="text-slate-300"
                     onClick={() => setShowPlaylistModal(false)}
                   />
                 </div>
               </div>
-              <div className="mt-4 space-y-2">
-                <div className="grid grid-cols-2 gap-2 md:hidden">
-                <button
-                  type="button"
-                  className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
-                  disabled={visiblePlaylistEntries.length === 0}
-                  onClick={() => movePlaylistBy(-1)}
-                >
-                  ⏮ Prev
-                </button>
-                <button
-                  type="button"
-                  className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
-                  disabled={visiblePlaylistEntries.length === 0}
-                  onClick={() => movePlaylistBy(1)}
-                >
-                  ⏭ Next
-                </button>
+              {playlistModalTab === 'playlist' ? (
+                <div className="mt-3 space-y-2">
+                  <div className="flex justify-end sm:hidden">
+                    <span className="text-xs text-slate-400">
+                      {visiblePlaylistEntries.length
+                        ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
+                        : 'No playable songs'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 md:hidden">
+                    <button
+                      type="button"
+                      className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
+                      disabled={visiblePlaylistEntries.length === 0}
+                      onClick={() => movePlaylistBy(-1)}
+                    >
+                      ⏮ Prev
+                    </button>
+                    <button
+                      type="button"
+                      className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
+                      disabled={visiblePlaylistEntries.length === 0}
+                      onClick={() => movePlaylistBy(1)}
+                    >
+                      ⏭ Next
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <button
+                      type="button"
+                      className={`min-h-[44px] rounded-xl border px-2 py-2 text-xs ${
+                        playlistAutoAdvance
+                          ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
+                          : 'border-white/10 text-slate-300'
+                      }`}
+                      onClick={() => setPlaylistAutoAdvance((current) => !current)}
+                    >
+                      Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
+                    </button>
+                    <button
+                      type="button"
+                      className="min-h-[44px] rounded-xl border border-indigo-300/60 bg-indigo-500/20 px-2 py-2 text-xs text-indigo-100"
+                      onClick={() => void copyPlaylistShareLink()}
+                    >
+                      Copy link
+                    </button>
+                    <select
+                      className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-2 py-2 text-xs text-slate-100 outline-none focus:border-teal-300 sm:col-span-2"
+                      value={playlistSingerFilter}
+                      onChange={(event) => setPlaylistSingerFilter(event.target.value)}
+                    >
+                      <option value="__all__">All singers</option>
+                      {playlistSingerOptions.map((singer) => (
+                        <option key={`playlist-singer-${singer}`} value={singer}>
+                          {singer}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {playlistShareStatus ? (
+                    <span className="text-xs text-teal-200">{playlistShareStatus}</span>
+                  ) : null}
                 </div>
-                <div className="grid grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  className={`min-h-[44px] rounded-xl border px-2 py-2 text-xs ${
-                    playlistAutoAdvance
-                      ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
-                      : 'border-white/10 text-slate-300'
-                  }`}
-                  onClick={() => setPlaylistAutoAdvance((current) => !current)}
-                >
-                  Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
-                </button>
-                <button
-                  type="button"
-                  className="min-h-[44px] rounded-xl border border-indigo-300/60 bg-indigo-500/20 px-2 py-2 text-xs text-indigo-100"
-                  onClick={() => void copyPlaylistShareLink()}
-                >
-                  Share Link
-                </button>
-                <select
-                  className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-2 py-2 text-xs text-slate-100 outline-none focus:border-teal-300"
-                  value={playlistSingerFilter}
-                  onChange={(event) => setPlaylistSingerFilter(event.target.value)}
-                >
-                  <option value="__all__">All singers</option>
-                  {playlistSingerOptions.map((singer) => (
-                    <option key={`playlist-singer-${singer}`} value={singer}>
-                      {singer}
-                    </option>
-                  ))}
-                </select>
-                </div>
-                {playlistShareStatus && (
-                  <span className="text-xs text-teal-200">{playlistShareStatus}</span>
-                )}
-              </div>
+              ) : null}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-hidden px-5 pb-6 pt-4">
-              <div className="relative h-full min-h-0 md:flex md:gap-4">
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {playlistModalTab === 'setlist' ? (
+                <div className="h-full min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-4 pt-2 sm:px-5 sm:pb-5 sm:pt-3">
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="min-h-[44px] rounded-xl border border-indigo-300/60 bg-indigo-500/20 px-4 text-sm font-semibold text-indigo-100"
+                      onClick={() => void copyPlaylistShareLink({ fromFirstSong: true })}
+                    >
+                      Copy guest link
+                    </button>
+                    {playlistShareStatus ? (
+                      <span className="text-xs text-teal-200">{playlistShareStatus}</span>
+                    ) : null}
+                  </div>
+                  <div className="w-full bg-white shared-setlist-shell sm:rounded-2xl sm:p-6">
+                    <div className="print-container shared-setlist-container">
+                      <div className="print-header">
+                        <div className="print-band-name">
+                          {activeBandName?.trim() || currentSetlist.gigName || 'Band'}
+                        </div>
+                        <div className="print-header-details">
+                          <div className="print-title">{currentSetlist.gigName}</div>
+                          <div className="print-subtitle">{formatGigDate(currentSetlist.date)}</div>
+                          {currentSetlist.venueAddress ? (
+                            <div className="print-subtitle">{currentSetlist.venueAddress}</div>
+                          ) : null}
+                        </div>
+                        <div className="print-badge">Setlist</div>
+                      </div>
+                      <div className="print-layout">
+                        <div
+                          className={`print-section-box ${getPrintToneClass('musicians')} ${getPrintLayoutClass('musicians')}`}
+                        >
+                          <div className="print-section-title">Musicians</div>
+                          <div className="print-grid">
+                            {printableGigMusicians.map((musician) => (
+                              <div key={`modal-sheet-musician-${musician.id}`} className="print-card">
+                                <div className="print-musician-row">
+                                  <div className="print-musician-name">{musician.name}</div>
+                                  <div className="print-musician-instruments">
+                                    {(musician.instruments ?? []).join(', ') || 'No instruments'}
+                                  </div>
+                                  <div className="print-contact-row">
+                                    {musician.email && (
+                                      <a href={`mailto:${musician.email}`} className="print-icon-link" title="Email">
+                                        ✉️
+                                      </a>
+                                    )}
+                                    {musician.phone && (
+                                      <>
+                                        <a href={`tel:${musician.phone}`} className="print-icon-link" title="Call">
+                                          📞
+                                        </a>
+                                        <a href={`sms:${musician.phone}`} className="print-icon-link" title="Text">
+                                          💬
+                                        </a>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                            {printableGigMusicians.length === 0 && (
+                              <div className="print-empty">No musicians assigned.</div>
+                            )}
+                          </div>
+                        </div>
+                        {groupedPlaylistSections.map((group) => (
+                          <div
+                            key={`modal-sheet-section-${group.section}`}
+                            className={`print-section-box ${getPrintToneClass(group.section)} ${getPrintLayoutClass(group.section)}`}
+                          >
+                            <div className="print-section-title">{group.section}</div>
+                            <div className="print-list">
+                              {group.items.map(({ entry: item }) => {
+                                const singerNames = Array.from(new Set(item.assignmentSingers ?? []))
+                                const isDjOnly =
+                                  item.tags.some((tag) => tag.trim().toLowerCase() === 'dj only') ||
+                                  singerNames.some((name) => name.trim().toLowerCase() === 'dj')
+                                const assignmentKeys = item.assignmentKeys ?? []
+                                const keyLabel =
+                                  assignmentKeys.length === 0
+                                    ? 'No key'
+                                    : assignmentKeys.length === 1
+                                      ? assignmentKeys[0]
+                                      : 'Multi'
+                                const highlightId =
+                                  visiblePlaylistEntries[playlistIndex]?.songId ?? null
+                                const rowHighlight =
+                                  (highlightId && highlightId === item.songId) ||
+                                  (sharedNowPlayingSongId && sharedNowPlayingSongId === item.songId)
+                                return (
+                                  <div
+                                    key={`modal-sheet-row-${item.key}`}
+                                    className={`print-row song-row ${
+                                      rowHighlight ? 'ring-2 ring-emerald-300/80' : ''
+                                    }`}
+                                  >
+                                    <div className="print-row-title">
+                                      <div className="song-title-stack">
+                                        {item.audioUrl ? (
+                                          <a
+                                            className="print-link song-name text-[0.95em]"
+                                            href={item.audioUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                          >
+                                            {item.title}
+                                          </a>
+                                        ) : (
+                                          <span className="song-name text-[0.95em]">{item.title}</span>
+                                        )}
+                                        <span className="artist-name">{item.artist || 'Unknown'}</span>
+                                      </div>
+                                      {item.songId &&
+                                        getDocumentSelectionItems(item.songId).some(
+                                          (doc) => doc.type === 'Lyrics',
+                                        ) && (
+                                        <button
+                                          type="button"
+                                          className="ml-2 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-300/70 bg-white text-[13px] text-slate-700"
+                                          title="Open lyrics"
+                                          aria-label="Open lyrics"
+                                          onClick={(event) => {
+                                            event.stopPropagation()
+                                            openLyricsForSong(item.songId)
+                                          }}
+                                        >
+                                          📜
+                                        </button>
+                                      )}
+                                    </div>
+                                    <div className="print-row-subtitle print-song-meta">
+                                      <span className="musical-key text-[0.72em]">{keyLabel}</span>
+                                      <span
+                                        className={`print-assignee-names text-[0.62em] ${
+                                          isDjOnly
+                                            ? 'rounded-full border border-rose-300/35 bg-rose-900/45 px-2 py-0.5 text-rose-100'
+                                            : ''
+                                        }`}
+                                      >
+                                        {isDjOnly
+                                          ? 'DJ ONLY'
+                                          : singerNames.length
+                                            ? formatSingerAssignmentNames(singerNames)
+                                            : 'No singers'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                              {group.items.length === 0 && <div className="print-empty">No songs.</div>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-4 pb-2 pt-3 sm:px-5 sm:pb-4 sm:pt-4 md:flex-row md:gap-4">
               <div
                 ref={playlistPlayerBlockRef}
-                className={`relative z-10 transition-opacity duration-200 md:flex-1 ${
-                  playlistDrawerOverlay
+                className={`relative z-10 flex min-h-0 w-full flex-col md:min-h-0 md:flex-1 ${
+                  widePlaylistUi && playlistDrawerOverlay
                     ? 'pointer-events-none opacity-0 md:pointer-events-auto md:opacity-100'
                     : 'opacity-100'
                 }`}
               >
+              {visiblePlaylistEntries.length > 0 && (
+                <div className="mb-2 shrink-0 rounded-2xl border border-teal-400/25 bg-gradient-to-br from-slate-800/90 to-slate-950 p-4 ring-1 ring-white/10">
+                  <div className="flex items-center justify-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                    <span className="text-xl" aria-hidden>
+                      🎵
+                    </span>
+                    Music player
+                  </div>
+                  <div className="mt-3 flex flex-col items-center gap-2">
+                    <button
+                      type="button"
+                      className="flex h-14 w-14 items-center justify-center rounded-full bg-teal-400 text-slate-950 shadow-lg ring-2 ring-teal-300/35 disabled:opacity-40"
+                      disabled={visiblePlaylistEntries.length === 0}
+                      onClick={playPlaylistFromStart}
+                      aria-label="Play from the first song in the playlist"
+                    >
+                      <span className="text-2xl leading-none">▶</span>
+                    </button>
+                    <p className="px-2 text-center text-[11px] text-slate-500">
+                      Starts at the first song (after your singer filter)
+                    </p>
+                  </div>
+                </div>
+              )}
               {currentPlaylistEntry ? (
+                <div className="min-h-0 max-h-[min(50vh,440px)] w-full shrink-0 overflow-y-auto overflow-x-hidden md:max-h-none md:shrink">
                 <div className="rounded-2xl bg-gradient-to-b from-slate-900/70 to-slate-950/60 p-4 shadow-[0_12px_36px_rgba(2,6,23,0.45)] ring-1 ring-white/10 transition-all duration-300">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -14762,7 +15123,7 @@ function App() {
                     ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
                       <iframe
                         key={`${currentPlaylistEntry.key}-${playlistPlayNonce}`}
-                        className="h-[180px] w-full rounded-xl ring-1 ring-white/10 md:h-[min(58vh,520px)]"
+                        className="aspect-video w-full max-h-[min(52vh,320px)] rounded-xl ring-1 ring-white/10 md:max-h-[min(58vh,520px)]"
                         src={getYouTubeEmbedUrl(currentPlaylistEntry.audioUrl)}
                         title="YouTube playlist item"
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -14785,8 +15146,9 @@ function App() {
                     )}
                   </div>
                 </div>
+                </div>
               ) : (
-                <div className="rounded-2xl bg-gradient-to-b from-slate-900/70 to-slate-950/60 p-4 text-sm text-slate-300 shadow-[0_12px_36px_rgba(2,6,23,0.45)] ring-1 ring-white/10">
+                <div className="shrink-0 rounded-2xl bg-gradient-to-b from-slate-900/70 to-slate-950/60 p-4 text-sm text-slate-300 shadow-[0_12px_36px_rgba(2,6,23,0.45)] ring-1 ring-white/10">
                   No playlist songs found for this gig yet.
                 </div>
               )}
@@ -14811,19 +15173,27 @@ function App() {
               </div>
 
               <div
-                className="absolute inset-x-0 bottom-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl transition-all duration-300 md:static md:inset-auto md:bottom-auto md:h-full md:w-[300px] md:shrink-0"
-                style={{
-                  top: playlistDrawerOverlay ? 0 : playlistDrawerDockTop,
-                }}
+                className={`z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-xl transition-all duration-300 md:h-full md:w-[300px] md:shrink-0 ${
+                  widePlaylistUi
+                    ? 'absolute inset-x-0 bottom-0 shadow-2xl md:static md:inset-auto'
+                    : 'flex min-h-[36vh] flex-1 flex-col'
+                }`}
+                style={
+                  widePlaylistUi
+                    ? { top: playlistDrawerOverlay ? 0 : playlistDrawerDockTop }
+                    : undefined
+                }
                 onTouchStart={handlePlaylistDrawerTouchStart}
                 onTouchMove={handlePlaylistDrawerTouchMove}
                 onTouchEnd={handlePlaylistDrawerTouchEnd}
               >
-                <div className="flex items-center justify-center py-2 md:hidden">
+                <div className={`flex items-center justify-center py-2 ${widePlaylistUi ? 'md:hidden' : 'hidden'}`}>
                   <div className="h-1 w-12 rounded-full bg-white/25" />
                 </div>
                 <div
-                  className="max-h-full overflow-y-auto px-2 pb-2 md:h-full md:max-h-none"
+                  className={`min-h-0 overflow-y-auto px-2 pb-2 md:h-full md:max-h-none ${
+                    widePlaylistUi ? 'max-h-full' : 'flex-1'
+                  }`}
                   onScroll={handlePlaylistDrawerScroll}
                 >
                   <div className="space-y-3 pb-2">
@@ -14871,7 +15241,39 @@ function App() {
                 </div>
               </div>
             </div>
+              )}
             </div>
+            <nav
+              className="shrink-0 border-t border-white/10 bg-slate-950/95 backdrop-blur"
+              aria-label="Active Setlist views"
+            >
+              <div className="mx-auto flex w-full max-w-3xl items-stretch justify-between gap-2 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
+                <button
+                  type="button"
+                  className={`flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-2 rounded-xl border px-2 py-2 text-sm font-semibold transition ${
+                    playlistModalTab === 'setlist'
+                      ? 'border-teal-300/70 bg-teal-400/10 text-teal-100'
+                      : 'border-white/10 text-slate-300'
+                  }`}
+                  onClick={() => setPlaylistModalTab('setlist')}
+                >
+                  <img src={downloadPdfIcon} alt="" className="h-5 w-5 shrink-0 object-contain" />
+                  Setlist
+                </button>
+                <button
+                  type="button"
+                  className={`flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-2 rounded-xl border px-2 py-2 text-sm font-semibold transition ${
+                    playlistModalTab === 'playlist'
+                      ? 'border-teal-300/70 bg-teal-400/10 text-teal-100'
+                      : 'border-white/10 text-slate-300'
+                  }`}
+                  onClick={() => setPlaylistModalTab('playlist')}
+                >
+                  <img src={openPlaylistIcon} alt="" className="h-5 w-5 shrink-0 object-contain" />
+                  Audio
+                </button>
+              </div>
+            </nav>
           </div>
         </div>
       )}

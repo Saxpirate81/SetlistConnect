@@ -10211,7 +10211,7 @@ function App() {
                                 className="flex h-14 w-14 items-center justify-center rounded-full bg-teal-400 text-slate-950 shadow-lg ring-2 ring-teal-300/35 disabled:opacity-40"
                                 disabled={visiblePlaylistEntries.length === 0}
                                 onClick={playPlaylistFromFirstYoutube}
-                                aria-label="Play from the first YouTube song, then auto-advance YouTube tracks"
+                                aria-label="Play from the first YouTube song"
                               >
                                 <span className="text-2xl leading-none">▶</span>
                               </button>
@@ -15847,20 +15847,9 @@ function App() {
                       ⏭ Next
                     </button>
                   </div>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                    <button
-                      type="button"
-                      className={`min-h-[44px] rounded-xl border px-2 py-2 text-xs ${
-                        playlistAutoAdvance
-                          ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
-                          : 'border-white/10 text-slate-300'
-                      }`}
-                      onClick={() => setPlaylistAutoAdvance((current) => !current)}
-                    >
-                      Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
-                    </button>
+                  <div className="grid grid-cols-1 gap-2">
                     <select
-                      className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-2 py-2 text-xs text-slate-100 outline-none focus:border-teal-300 sm:col-span-2"
+                      className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-2 py-2 text-xs text-slate-100 outline-none focus:border-teal-300"
                       value={playlistSingerFilter}
                       onChange={(event) => setPlaylistSingerFilter(event.target.value)}
                     >
@@ -16085,12 +16074,12 @@ function App() {
                       className="flex h-14 w-14 items-center justify-center rounded-full bg-teal-400 text-slate-950 shadow-lg ring-2 ring-teal-300/35 disabled:opacity-40"
                       disabled={visiblePlaylistEntries.length === 0}
                       onClick={playPlaylistFromFirstYoutube}
-                      aria-label="Play from the first YouTube song, then auto-advance YouTube tracks"
+                      aria-label="Play from the first YouTube song"
                     >
                       <span className="text-2xl leading-none">▶</span>
                     </button>
                     <p className="px-2 text-center text-[11px] text-slate-500">
-                      First YouTube (after singer filter); with Auto-next, goes to the next YouTube
+                      Tap play to start the first YouTube track.
                     </p>
                   </div>
                 </div>
@@ -16178,13 +16167,12 @@ function App() {
                               className="flex h-16 w-16 items-center justify-center rounded-full bg-teal-400 text-slate-950 shadow-lg ring-2 ring-teal-300/40 disabled:opacity-40"
                               disabled={visiblePlaylistEntries.length === 0}
                               onClick={handleModalYoutubeOverlayPlay}
-                              aria-label="Play from the first YouTube song, then auto-advance YouTube tracks"
+                              aria-label="Play from the first YouTube song"
                             >
                               <span className="text-3xl leading-none">▶</span>
                             </button>
                             <p className="max-w-[260px] text-center text-[11px] leading-snug text-slate-400">
-                              Tap play to start. First YouTube (after singer filter); Auto-next goes to the next
-                              YouTube.
+                              Tap play to start the first YouTube track.
                             </p>
                           </div>
                         ) : null}

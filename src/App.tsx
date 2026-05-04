@@ -3615,10 +3615,6 @@ function App() {
     }, 6000)
   }
   const handleSharedPlaylistDrawerTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
-    if (!widePlaylistUi) {
-      sharedPlaylistDrawerTouchStartYRef.current = null
-      return
-    }
     const startY = sharedPlaylistDrawerTouchStartYRef.current
     sharedPlaylistDrawerTouchStartYRef.current = null
     if (startY === null) return
@@ -3641,6 +3637,10 @@ function App() {
     if (next < 0) return
     setPlaylistIndex(next)
     setPlaylistPlayNonce((current) => current + 1)
+  }
+  const jumpToSharedPlaylistIndex = (index: number) => {
+    jumpToPlaylistIndex(index)
+    setSharedPlaylistDrawerOverlay(false)
   }
   const copyPlaylistShareLink = async (options?: { fromFirstSong?: boolean }) => {
     if (!currentSetlist) return
@@ -10197,7 +10197,7 @@ function App() {
                         </select>
                       </div>
                     </div>
-                    <div className="order-1 mt-3 flex min-h-0 flex-1 flex-col gap-3 overflow-visible md:order-2 md:mt-4 md:flex-row md:gap-4 md:overflow-hidden">
+                    <div className="relative order-1 mt-3 min-h-[calc(100dvh-19rem)] overflow-hidden md:order-2 md:mt-4 md:flex md:min-h-0 md:flex-1 md:flex-row md:gap-4 md:overflow-hidden">
                       <div
                         ref={sharedPlaylistPlayerBlockRef}
                         className={`relative z-10 flex min-h-0 w-full flex-col md:min-h-0 md:flex-1 ${
@@ -10337,10 +10337,14 @@ function App() {
                       </div>
 
                         <div
-                          className={`z-20 overflow-visible rounded-none border-0 bg-transparent shadow-none transition-all duration-150 md:h-full md:w-[320px] md:shrink-0 md:overflow-hidden md:rounded-2xl md:border md:border-teal-300/30 md:bg-slate-900 md:shadow-xl lg:w-[340px] ${
+                          className={`absolute inset-x-0 bottom-0 z-20 flex flex-col overflow-hidden rounded-t-3xl border border-teal-300/30 bg-slate-900 shadow-2xl transition-all duration-200 md:h-full md:w-[320px] md:shrink-0 md:rounded-2xl md:shadow-xl lg:w-[340px] ${
+                            sharedPlaylistDrawerOverlay
+                              ? 'top-0 md:top-auto'
+                              : 'max-h-[185px] md:max-h-none'
+                          } ${
                             widePlaylistUi
                               ? 'absolute inset-x-0 bottom-0 shadow-2xl md:static md:inset-auto'
-                              : 'flex min-h-[36vh] flex-1 flex-col md:min-h-0'
+                              : 'md:min-h-0'
                           }`}
                           style={
                             widePlaylistUi
@@ -10351,13 +10355,11 @@ function App() {
                           onTouchMove={handleSharedPlaylistDrawerTouchMove}
                           onTouchEnd={handleSharedPlaylistDrawerTouchEnd}
                         >
-                          <div className={`flex items-center justify-center py-2 ${widePlaylistUi ? 'md:hidden' : 'hidden'}`}>
+                          <div className="flex shrink-0 items-center justify-center py-2 md:hidden">
                             <div className="h-1 w-12 rounded-full bg-white/25" />
                           </div>
                           <div
-                            className={`min-h-0 overscroll-contain overflow-visible p-0 md:h-full md:max-h-none md:overflow-y-auto md:px-2 md:pb-2 ${
-                              widePlaylistUi ? 'max-h-full' : 'flex-1'
-                            }`}
+                            className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 pb-2 md:h-full md:max-h-none"
                             onScroll={handleSharedPlaylistDrawerScroll}
                           >
                             <div className="space-y-3 pb-2">
@@ -10375,7 +10377,7 @@ function App() {
                                         type="button"
                                         key={`${item.key}-shared-list`}
                                         className={getPlaylistQueueItemButtonClasses(index === playlistIndex)}
-                                        onClick={() => jumpToPlaylistIndex(index)}
+                                        onClick={() => jumpToSharedPlaylistIndex(index)}
                                       >
                                         <div className="flex items-center justify-between gap-3">
                                           <div className="min-w-0 flex-1">

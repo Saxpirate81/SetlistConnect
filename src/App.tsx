@@ -10171,20 +10171,9 @@ function App() {
                           ⏭ Next
                         </button>
                       </div>
-                      <div className="hidden grid-cols-1 gap-2 md:grid md:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_minmax(260px,2fr)]">
-                        <button
-                          type="button"
-                          className={`min-h-[44px] rounded-xl border px-3 py-2 text-sm ${
-                            playlistAutoAdvance
-                              ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
-                              : 'border-white/10 text-slate-300'
-                          }`}
-                          onClick={() => setPlaylistAutoAdvance((current) => !current)}
-                        >
-                          Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
-                        </button>
+                      <div className="hidden md:block">
                         <select
-                          className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-300 md:col-span-2"
+                          className="min-h-[44px] w-full rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-300"
                           value={playlistSingerFilter}
                           onChange={(event) => setPlaylistSingerFilter(event.target.value)}
                         >
@@ -10197,10 +10186,10 @@ function App() {
                         </select>
                       </div>
                     </div>
-                    <div className="relative order-1 mt-3 min-h-[calc(100dvh-19rem)] overflow-hidden md:order-2 md:mt-4 md:flex md:min-h-0 md:flex-1 md:flex-row md:gap-4 md:overflow-hidden">
+                    <div className="relative order-1 mt-3 min-h-[calc(100dvh-19rem)] overflow-visible md:order-2 md:mt-4 md:flex md:min-h-0 md:flex-1 md:flex-row md:gap-4 md:overflow-hidden">
                       <div
                         ref={sharedPlaylistPlayerBlockRef}
-                        className={`relative z-10 flex min-h-0 w-full flex-col md:min-h-0 md:flex-1 ${
+                        className={`sticky top-3 z-10 flex min-h-0 w-full flex-col md:relative md:top-auto md:min-h-0 md:flex-1 ${
                           widePlaylistUi && sharedPlaylistDrawerOverlay
                             ? 'pointer-events-none opacity-0 md:pointer-events-auto md:opacity-100'
                             : 'opacity-100'
@@ -10227,7 +10216,7 @@ function App() {
                                 <span className="text-2xl leading-none">▶</span>
                               </button>
                               <p className="px-2 text-center text-[11px] text-slate-500">
-                                First YouTube in the list, then each YouTube when Auto-next is on
+                                Tap play to start the first YouTube track.
                               </p>
                             </div>
                           </div>
@@ -10245,19 +10234,6 @@ function App() {
                                     {getPlaylistAssignmentText(currentPlaylistEntry)}
                                   </p>
                                 </div>
-                              </div>
-                              <div className="mt-3 grid grid-cols-1 gap-2 md:hidden">
-                                <button
-                                  type="button"
-                                  className={`min-h-[44px] rounded-xl border px-3 py-2 text-sm ${
-                                    playlistAutoAdvance
-                                      ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
-                                      : 'border-white/10 text-slate-300'
-                                  }`}
-                                  onClick={() => setPlaylistAutoAdvance((current) => !current)}
-                                >
-                                  Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
-                                </button>
                               </div>
                               <div className="mt-2 rounded-none border-0 bg-transparent p-0 sm:mt-3 sm:rounded-xl sm:border sm:border-white/10 sm:bg-slate-950/40 sm:p-3">
                                 {!currentPlaylistEntry.audioUrl ? (

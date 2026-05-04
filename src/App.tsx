@@ -919,7 +919,6 @@ function App() {
   const [playlistDrawerOverlay, setPlaylistDrawerOverlay] = useState(false)
   const [sharedPlaylistDrawerOverlay, setSharedPlaylistDrawerOverlay] = useState(false)
   const [playlistDrawerDockTop, setPlaylistDrawerDockTop] = useState(240)
-  const [sharedPlaylistDrawerDockTop, setSharedPlaylistDrawerDockTop] = useState(240)
   const playlistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
   const sharedPlaylistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
   const playlistDrawerTouchStartYRef = useRef<number | null>(null)
@@ -9413,16 +9412,6 @@ function App() {
   }, [currentPlaylistEntry, playlistIndex, showPlaylistModal, visiblePlaylistEntries.length])
 
   useEffect(() => {
-    const updateDockTop = () => {
-      const playerHeight = sharedPlaylistPlayerBlockRef.current?.getBoundingClientRect().height ?? 220
-      setSharedPlaylistDrawerDockTop(Math.max(120, Math.round(playerHeight + 12)))
-    }
-    updateDockTop()
-    window.addEventListener('resize', updateDockTop)
-    return () => window.removeEventListener('resize', updateDockTop)
-  }, [currentPlaylistEntry, playlistIndex, sharedPlaylistView, visiblePlaylistEntries.length])
-
-  useEffect(() => {
     if (showPlaylistModal) return
     setPlaylistDrawerOverlay(false)
   }, [showPlaylistModal])
@@ -9876,13 +9865,7 @@ function App() {
 
   if ((sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && !authUserId) {
     return (
-      <div
-        className={`shared-public-mode min-h-dvh overflow-x-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-24 pt-4 text-white sm:px-4 sm:pt-5 ${
-          sharedPublicTab === 'playlist'
-            ? 'overflow-y-auto sm:h-dvh sm:overflow-hidden'
-            : 'overflow-y-auto'
-        }`}
-      >
+      <div className="shared-public-mode fixed inset-0 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-[calc(8rem+env(safe-area-inset-bottom))] pt-4 text-white sm:px-4 sm:pt-5">
         {showSharedInstrumentPrompt && (
           <div
             className="fixed inset-0 z-[110] flex items-end justify-center bg-slate-950/80 pb-[env(safe-area-inset-bottom)] pt-6 sm:items-center sm:pb-6"
@@ -9939,20 +9922,12 @@ function App() {
           </div>
         )}
         <div
-          className={`mx-auto flex w-full flex-col ${
+          className={`mx-auto flex min-h-[calc(100dvh-9rem)] w-full flex-col ${
             sharedPublicTab === 'playlist' ? 'max-w-[1480px]' : 'max-w-5xl'
-          } ${
-            sharedPublicTab === 'playlist'
-              ? 'min-h-[calc(100dvh-7rem)] sm:h-full sm:min-h-0'
-              : 'min-h-[calc(100dvh-7rem)]'
           }`}
         >
           <div
-            className={`flex min-h-[calc(100dvh-7rem)] flex-col overflow-visible p-3 sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4 ${
-              sharedPublicTab === 'playlist'
-                ? 'sm:h-full sm:min-h-0 sm:overflow-hidden'
-                : ''
-            }`}
+            className="flex min-h-[calc(100dvh-9rem)] flex-col overflow-visible p-3 sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 pr-2">
@@ -9989,7 +9964,7 @@ function App() {
                   )}
                   <button
                     type="button"
-                    className="min-h-[36px] rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-[11px] font-semibold text-slate-200"
+                    className="min-h-[36px] whitespace-nowrap rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-[11px] font-semibold text-slate-200"
                     onClick={() => {
                       setInstrumentSelectionDraft(appState.instrument ?? [])
                       setShowSharedInstrumentPrompt(true)
@@ -10202,7 +10177,7 @@ function App() {
                         </select>
                       </div>
                     </div>
-                    <div className="relative order-1 mt-3 min-h-[calc(100dvh-19rem)] overflow-visible md:order-2 md:mt-4 md:flex md:min-h-0 md:flex-1 md:flex-row md:gap-4 md:overflow-hidden">
+                    <div className="relative order-1 mt-3 flex flex-col overflow-visible md:order-2 md:mt-4 md:flex-1 md:flex-row md:gap-4 md:overflow-hidden">
                       <div
                         ref={sharedPlaylistPlayerBlockRef}
                         className={`sticky top-3 z-10 flex min-h-0 w-full flex-col md:relative md:top-auto md:min-h-0 md:flex-1 ${
@@ -10322,20 +10297,9 @@ function App() {
                       </div>
 
                         <div
-                          className={`absolute inset-x-0 bottom-0 z-20 flex flex-col overflow-hidden rounded-t-3xl border border-teal-300/30 bg-slate-900 shadow-2xl transition-all duration-200 md:h-full md:w-[320px] md:shrink-0 md:rounded-2xl md:shadow-xl lg:w-[340px] ${
-                            sharedPlaylistDrawerOverlay
-                              ? 'top-0 md:top-auto'
-                              : 'max-h-[185px] md:max-h-none'
-                          } ${
-                            widePlaylistUi
-                              ? 'absolute inset-x-0 bottom-0 shadow-2xl md:static md:inset-auto'
-                              : 'md:min-h-0'
+                          className={`relative z-20 mt-3 flex max-h-none flex-col overflow-hidden rounded-3xl border border-teal-300/30 bg-slate-900 shadow-2xl transition-all duration-200 md:mt-0 md:h-full md:w-[320px] md:shrink-0 md:rounded-2xl md:shadow-xl lg:w-[340px] ${
+                            widePlaylistUi ? 'md:static' : 'md:min-h-0'
                           }`}
-                          style={
-                            widePlaylistUi
-                              ? { top: sharedPlaylistDrawerOverlay ? 0 : sharedPlaylistDrawerDockTop }
-                              : undefined
-                          }
                           onTouchStart={handleSharedPlaylistDrawerTouchStart}
                           onTouchMove={handleSharedPlaylistDrawerTouchMove}
                           onTouchEnd={handleSharedPlaylistDrawerTouchEnd}
@@ -10344,7 +10308,7 @@ function App() {
                             <div className="h-1 w-12 rounded-full bg-white/25" />
                           </div>
                           <div
-                            className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 pb-2 md:h-full md:max-h-none"
+                            className="max-h-[42dvh] min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 pb-2 md:h-full md:max-h-none"
                             onScroll={handleSharedPlaylistDrawerScroll}
                           >
                             <div className="space-y-3 pb-2">

@@ -71,6 +71,11 @@ body {
   overflow-x: hidden;
 }
 
+.shared-public-mode {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
 #root,
 * {
   scrollbar-width: none;

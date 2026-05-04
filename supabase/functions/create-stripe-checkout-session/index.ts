@@ -15,7 +15,6 @@ if (!STRIPE_SECRET_KEY) throw new Error('Missing STRIPE_SECRET_KEY')
 if (!SUPABASE_URL) throw new Error('Missing SUPABASE_URL')
 if (!SUPABASE_ANON_KEY) throw new Error('Missing SUPABASE_ANON_KEY')
 if (!PRICE_ID_PRO) throw new Error('Missing STRIPE_PRICE_ID_PRO')
-if (!PRICE_ID_AGENCY) throw new Error('Missing STRIPE_PRICE_ID_AGENCY')
 if (!SUCCESS_URL) throw new Error('Missing STRIPE_CHECKOUT_SUCCESS_URL')
 if (!CANCEL_URL) throw new Error('Missing STRIPE_CHECKOUT_CANCEL_URL')
 
@@ -65,6 +64,9 @@ Deno.serve(async (req) => {
     if (membershipError) return json({ error: membershipError.message }, 400)
     if (!membership) return json({ error: 'Band admin access required' }, 403)
 
+    if (tier === 'agency' && !PRICE_ID_AGENCY) {
+      return json({ error: 'Agency price is not configured' }, 400)
+    }
     const price = tier === 'agency' ? PRICE_ID_AGENCY : PRICE_ID_PRO
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
@@ -93,4 +95,3 @@ Deno.serve(async (req) => {
     return json({ error: message }, 400)
   }
 })
-

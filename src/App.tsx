@@ -27,6 +27,13 @@ const isMainNavScreen = (
 ): value is Extract<Screen, 'setlists' | 'song' | 'musicians' | 'account'> =>
   value === 'setlists' || value === 'song' || value === 'musicians' || value === 'account'
 type BandTier = 'free' | 'pro'
+const FREE_MUSICIAN_LIMIT = 12
+const FREE_GIG_LIMIT = 3
+const BILLING_TEST_EMAILS = new Set([
+  'bill.doss@ymail.com',
+  'bill.doss@therealschoolofmusic.com',
+  'bill.doss@therealschoolofmuis.com',
+])
 
 type SongKey = {
   singer: string
@@ -421,9 +428,9 @@ const BAND_TIER_DETAILS: Record<
     name: 'Free',
     summary: 'Best for getting started',
     includes: [
-      'Unlimited songs while we are in testing',
-      'Unlimited musicians while we are in testing',
-      'Unlimited saved gigs while we are in testing',
+      'Unlimited songs',
+      `Up to ${FREE_MUSICIAN_LIMIT} saved musicians`,
+      `Up to ${FREE_GIG_LIMIT} saved gigs`,
       'Core setlist builder',
       'Special request tracking',
       'Shareable gig view',
@@ -431,7 +438,7 @@ const BAND_TIER_DETAILS: Record<
   },
   pro: {
     name: 'Pro',
-    summary: 'Coming soon for active working bands',
+    summary: '$2.99/month for active working bands',
     includes: [
       'Unlimited songs',
       'Unlimited musicians',
@@ -1598,7 +1605,10 @@ function App() {
     editingMusicianRoster,
     editingMusicianSinger,
   ])
-  const activeBandTier: BandTier = activeBandId
+  const isBillingTestAccount = BILLING_TEST_EMAILS.has((authUserEmail ?? '').trim().toLowerCase())
+  const activeBandTier: BandTier = isBillingTestAccount
+    ? 'pro'
+    : activeBandId
     ? (bandSubscriptionTierByBandId[activeBandId] ?? 'free')
     : 'free'
   const activeBandPendingTierChange = activeBandId
@@ -1625,8 +1635,25 @@ function App() {
   const supabaseFunctionsBaseUrl = String(import.meta.env.VITE_SUPABASE_URL ?? '').replace(/\/$/, '')
   const supabaseAnonPublicKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim()
   const canCreateSongs = useCallback((_nextSongCount = 1) => true, [])
-  const canCreateMusicians = useCallback((_nextMusicianCount = 1) => true, [])
-  const canCreateGigs = useCallback(() => true, [])
+  const canCreateMusicians = useCallback((nextMusicianCount = 1) => {
+    if (activeBandTier === 'pro') return true
+    const projectedCount = appState.musicians.length + Math.max(1, nextMusicianCount)
+    if (projectedCount <= FREE_MUSICIAN_LIMIT) return true
+    setShowTierLimitModal({
+      resource: 'musicians',
+      message: `Free accounts can save up to ${FREE_MUSICIAN_LIMIT} musicians. Upgrade to Pro for unlimited musicians.`,
+    })
+    return false
+  }, [activeBandTier, appState.musicians.length])
+  const canCreateGigs = useCallback(() => {
+    if (activeBandTier === 'pro') return true
+    if (appState.setlists.length < FREE_GIG_LIMIT) return true
+    setShowTierLimitModal({
+      resource: 'gigs',
+      message: `Free accounts can save up to ${FREE_GIG_LIMIT} gigs. Upgrade to Pro for unlimited gigs.`,
+    })
+    return false
+  }, [activeBandTier, appState.setlists.length])
   const openStripeUrl = useCallback((url: string, targetTier?: BandTier) => {
     if (!url) {
       setAccountSaveStatus('Billing URL is not configured yet. Add Stripe checkout URLs in your environment.')
@@ -1648,6 +1675,65 @@ function App() {
       setAccountSaveStatus('Billing URL is invalid. Check your Stripe URL environment variables.')
     }
   }, [activeBandId])
+  const openStripeCheckout = useCallback(async (targetTier: BandTier) => {
+    if (targetTier === 'free') return
+    if (isBillingTestAccount) {
+      setAccountSaveStatus('Testing account: Pro access is enabled without billing.')
+      return
+    }
+    if (!activeBandId) {
+      setAccountSaveStatus('Select or create a band before upgrading.')
+      return
+    }
+    if (!canAccessBillingControls) {
+      setAccountSaveStatus('Only band admins can change billing plans.')
+      return
+    }
+    if (!supabase || !supabaseFunctionsBaseUrl || !supabaseAnonPublicKey) {
+      setAccountSaveStatus('Supabase billing endpoint is not configured. Please contact support.')
+      return
+    }
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+    if (sessionError || !sessionData.session?.access_token) {
+      setAccountSaveStatus('Your login session expired. Please sign out and log back in to upgrade.')
+      return
+    }
+    setAccountSaveStatus('Opening Pro checkout...')
+    const response = await fetch(
+      `${supabaseFunctionsBaseUrl}/functions/v1/create-stripe-checkout-session`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${sessionData.session.access_token}`,
+          apikey: supabaseAnonPublicKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ bandId: activeBandId, tier: targetTier }),
+      },
+    )
+    let payload: { url?: string; error?: string } | null = null
+    try {
+      payload = await response.json()
+    } catch {
+      payload = null
+    }
+    const checkoutUrl = String(payload?.url ?? '').trim()
+    if (response.ok && checkoutUrl) {
+      const opened = window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
+      setAccountSaveStatus(opened ? 'Opening Pro checkout...' : 'Popup blocked. Allow popups and try again.')
+      return
+    }
+    setAccountSaveStatus(
+      `Checkout failed: ${payload?.error ?? `Request failed (${response.status}).`}`,
+    )
+  }, [
+    activeBandId,
+    canAccessBillingControls,
+    isBillingTestAccount,
+    supabase,
+    supabaseAnonPublicKey,
+    supabaseFunctionsBaseUrl,
+  ])
   const openStripePortal = useCallback(async () => {
     if (!activeBandId) {
       setAccountSaveStatus('Select or create a band before managing billing.')
@@ -3479,9 +3565,13 @@ function App() {
     if (!visiblePlaylistEntries.length) return
     const selectedEntry = visiblePlaylistEntries[index]
     if (!selectedEntry) return
-    setPlaylistIndex(index)
+    flushSync(() => {
+      setPlaylistIndex(index)
+      if (isPlaylistEntryPlayable(selectedEntry)) {
+        setPlaylistPlayNonce((current) => current + 1)
+      }
+    })
     if (isPlaylistEntryPlayable(selectedEntry)) {
-      setPlaylistPlayNonce((current) => current + 1)
       if (isYouTubeUrl(selectedEntry.audioUrl ?? null) && selectedEntry.audioUrl) {
         sharedPublicYtHandleRef.current?.loadAndPlayUrl(selectedEntry.audioUrl)
         playlistModalYtHandleRef.current?.loadAndPlayUrl(selectedEntry.audioUrl)
@@ -10138,26 +10228,6 @@ function App() {
                   </div>
                 ) : (
                   <>
-                    <div className="order-2 mt-3 shrink-0 space-y-2 md:order-1 md:mt-3">
-                      <div className="grid grid-cols-2 gap-2 md:hidden">
-                        <button
-                          type="button"
-                          className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
-                          disabled={visiblePlaylistEntries.length === 0}
-                          onClick={() => movePlaylistBy(-1)}
-                        >
-                          ⏮ Prev
-                        </button>
-                        <button
-                          type="button"
-                          className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
-                          disabled={visiblePlaylistEntries.length === 0}
-                          onClick={() => movePlaylistBy(1)}
-                        >
-                          ⏭ Next
-                        </button>
-                      </div>
-                    </div>
                     <div className="relative order-1 mt-3 flex flex-col overflow-visible md:order-2 md:mt-4 md:flex-1 md:flex-row md:gap-4 md:overflow-hidden">
                       <div
                         ref={sharedPlaylistPlayerBlockRef}
@@ -10276,9 +10346,27 @@ function App() {
                             </div>
                           )}
                       </div>
+                      <div className="order-2 mt-3 grid grid-cols-2 gap-2 md:hidden">
+                        <button
+                          type="button"
+                          className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
+                          disabled={visiblePlaylistEntries.length === 0}
+                          onClick={() => movePlaylistBy(-1)}
+                        >
+                          ⏮ Prev
+                        </button>
+                        <button
+                          type="button"
+                          className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
+                          disabled={visiblePlaylistEntries.length === 0}
+                          onClick={() => movePlaylistBy(1)}
+                        >
+                          ⏭ Next
+                        </button>
+                      </div>
 
                         <div
-                          className={`relative z-20 mt-3 flex max-h-none flex-col overflow-hidden rounded-3xl border border-teal-300/30 bg-slate-900 shadow-2xl transition-all duration-200 md:mt-0 md:h-full md:w-[320px] md:shrink-0 md:rounded-2xl md:shadow-xl lg:w-[340px] ${
+                          className={`relative order-3 z-20 mt-3 flex max-h-none flex-col overflow-hidden rounded-3xl border border-teal-300/30 bg-slate-900 shadow-2xl transition-all duration-200 md:order-none md:mt-0 md:h-full md:w-[320px] md:shrink-0 md:rounded-2xl md:shadow-xl lg:w-[340px] ${
                             widePlaylistUi ? 'md:static' : 'md:min-h-0'
                           }`}
                           onTouchStart={handleSharedPlaylistDrawerTouchStart}
@@ -10374,6 +10462,15 @@ function App() {
         </div>
         {(sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && (
           <nav className="fixed bottom-0 left-0 right-0 z-[320] bg-transparent px-3 pb-[env(safe-area-inset-bottom)]">
+            {sharedPlaylistView && (
+              <button
+                type="button"
+                className="mx-auto mt-2 block rounded-full border border-white/10 bg-slate-950/90 px-3 py-1.5 text-[11px] font-semibold text-teal-100 shadow-lg backdrop-blur"
+                onClick={enterSignupFromSharedView}
+              >
+                Create a free Setlist Connect account
+              </button>
+            )}
             <div
               className={`mx-auto flex w-full items-center justify-between gap-2 py-3 ${
                 sharedPublicTab === 'playlist' ? 'max-w-[980px]' : 'max-w-3xl'
@@ -12624,35 +12721,31 @@ function App() {
                       {
                         id: 'free',
                         name: 'Free',
-                        detail: 'Testing mode: no creation caps',
+                        detail: `${FREE_MUSICIAN_LIMIT} musicians, ${FREE_GIG_LIMIT} gigs`,
                       },
                       {
                         id: 'pro',
                         name: 'Pro',
-                        detail: 'Coming soon',
+                        detail: '$2.99/month for unlimited musicians and gigs',
                       },
                     ] as const).map((tier) => (
                       <button
                         type="button"
                         key={tier.id}
-                        disabled={tier.id === 'pro'}
                         className={`rounded-xl border px-3 py-3 text-left text-sm ${
                           activeBandTier === tier.id
                             ? 'border-teal-300 bg-teal-400/10 text-teal-100'
-                            : tier.id === 'pro'
-                            ? 'cursor-not-allowed border-white/10 bg-slate-900/35 text-slate-500 opacity-70'
                             : 'border-white/10 bg-slate-900/70 text-slate-300 hover:border-cyan-300/40'
                         }`}
                         onClick={() => {
-                          if (tier.id === 'pro') return
                           setShowTierDetailsModal(tier.id)
                         }}
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-semibold">{tier.name}</span>
-                          {tier.id === 'pro' && (
-                            <span className="rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-100">
-                              Coming soon
+                          {tier.id === 'pro' && isBillingTestAccount && (
+                            <span className="rounded-full border border-teal-300/30 bg-teal-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-100">
+                              Testing
                             </span>
                           )}
                         </div>
@@ -12662,6 +12755,9 @@ function App() {
                   </div>
                   <div className="mt-3 text-xs text-slate-400">
                     Current plan: <span className="font-semibold text-slate-200">{activeBandTier.toUpperCase()}</span>
+                    {isBillingTestAccount ? (
+                      <span className="ml-2 text-teal-200">(testing account)</span>
+                    ) : null}
                   </div>
                   {activeBandPendingTierChange && (
                     <div className="mt-2 rounded-xl border border-amber-300/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
@@ -13722,10 +13818,14 @@ function App() {
               ) : isSelectedUpgrade && selectedTier && selectedTier !== 'free' ? (
                 <button
                   type="button"
-                  className="rounded-xl border border-amber-300/30 bg-amber-400/10 px-4 py-2 text-sm font-semibold text-amber-100"
-                  disabled
+                  className="rounded-xl border border-teal-300/40 bg-teal-400/10 px-4 py-2 text-sm font-semibold text-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => {
+                    void openStripeCheckout(selectedTier)
+                    setShowTierDetailsModal(null)
+                  }}
+                  disabled={!canAccessBillingControls}
                 >
-                  Coming soon
+                  Upgrade to Pro - $2.99/month
                 </button>
               ) : isSelectedDowngrade ? (
                 <button
@@ -13760,14 +13860,18 @@ function App() {
             <h3 className="text-lg font-semibold">Free plan limit reached</h3>
             <p className="mt-2 text-sm text-slate-300">{showTierLimitModal.message}</p>
             <p className="mt-2 text-xs text-slate-400">
-              Pro is coming soon. Testing mode currently allows continued setup while billing is paused.
+              Upgrade to Pro for $2.99/month to remove musician and gig limits.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <button
-                className="rounded-xl border border-amber-300/30 bg-amber-400/10 px-4 py-2 text-sm font-semibold text-amber-100"
-                disabled
+                className="rounded-xl border border-teal-300/40 bg-teal-400/10 px-4 py-2 text-sm font-semibold text-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => {
+                  setShowTierLimitModal(null)
+                  void openStripeCheckout('pro')
+                }}
+                disabled={!canAccessBillingControls}
               >
-                Pro coming soon
+                Upgrade to Pro
               </button>
               <button
                 className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"

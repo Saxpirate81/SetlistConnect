@@ -1111,6 +1111,39 @@ function App() {
   }, [])
 
   useEffect(() => {
+    const manifestLink = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
+    if (!manifestLink) return
+    const gigDateName = sharedPlaylistView?.date
+      ? formatGigDate(sharedPlaylistView.date)
+      : ''
+    const appName = gigDateName || 'Setlist Connect'
+    const manifest = {
+      name: appName,
+      short_name: gigDateName || 'Setlist',
+      start_url: `${window.location.pathname}${window.location.search || ''}`,
+      scope: '/',
+      display: 'standalone',
+      background_color: '#050816',
+      theme_color: '#050816',
+      icons: [
+        { src: '/logo-192.png', sizes: '192x192', type: 'image/png' },
+        { src: '/logo-512.png', sizes: '512x512', type: 'image/png' },
+      ],
+    }
+    const manifestUrl = URL.createObjectURL(
+      new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' }),
+    )
+    const priorHref = manifestLink.href
+    manifestLink.href = manifestUrl
+    document.title = appName
+    return () => {
+      manifestLink.href = priorHref
+      URL.revokeObjectURL(manifestUrl)
+      document.title = 'Setlist Connect'
+    }
+  }, [sharedPlaylistView])
+
+  useEffect(() => {
     const syncIconTitles = (root: ParentNode = document) => {
       root.querySelectorAll<HTMLElement>('[aria-label]').forEach((element) => {
         const label = element.getAttribute('aria-label')?.trim()
@@ -3450,6 +3483,10 @@ function App() {
     setPlaylistIndex(index)
     if (isPlaylistEntryPlayable(selectedEntry)) {
       setPlaylistPlayNonce((current) => current + 1)
+      if (isYouTubeUrl(selectedEntry.audioUrl ?? null) && selectedEntry.audioUrl) {
+        sharedPublicYtHandleRef.current?.loadAndPlayUrl(selectedEntry.audioUrl)
+        playlistModalYtHandleRef.current?.loadAndPlayUrl(selectedEntry.audioUrl)
+      }
     }
   }
   const playPlaylistFromStart = () => {
@@ -7989,6 +8026,10 @@ function App() {
     }
   }
 
+  const installAppLabel = sharedPlaylistView
+    ? `Install ${formatGigDate(sharedPlaylistView.date) || 'Gig'}`
+    : 'Install App'
+
   const handlePrintSetlistPDF = () => {
     if (!currentSetlist) return
     window.requestAnimationFrame(() => {
@@ -8321,7 +8362,7 @@ function App() {
                 className="min-w-[110px] rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                 onClick={handleInstallClick}
               >
-                Install App
+                {installAppLabel}
               </button>
             )}
             {role && (
@@ -9957,6 +9998,15 @@ function App() {
                     : 'No playable songs'}
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
+                  {installPrompt && !isInstalled && (
+                    <button
+                      type="button"
+                      className="min-h-[36px] rounded-lg border border-teal-300/50 bg-teal-500/20 px-3 py-1.5 text-[11px] font-semibold text-teal-100"
+                      onClick={handleInstallClick}
+                    >
+                      {installAppLabel}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="min-h-[36px] rounded-lg border border-indigo-300/50 bg-indigo-500/15 px-3 py-1.5 text-[11px] font-semibold text-indigo-100"
@@ -10176,15 +10226,8 @@ function App() {
                         >
                           Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
                         </button>
-                        <button
-                          type="button"
-                          className="min-h-[44px] rounded-xl border border-indigo-300/60 bg-indigo-500/20 px-3 py-2 text-sm font-semibold text-indigo-100"
-                          onClick={() => void copyPublicSharePageUrl({ currentSong: true })}
-                        >
-                          Copy Link to Current Song
-                        </button>
                         <select
-                          className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-300"
+                          className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-300 md:col-span-2"
                           value={playlistSingerFilter}
                           onChange={(event) => setPlaylistSingerFilter(event.target.value)}
                         >
@@ -10257,13 +10300,6 @@ function App() {
                                   onClick={() => setPlaylistAutoAdvance((current) => !current)}
                                 >
                                   Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="min-h-[44px] rounded-xl border border-indigo-300/60 bg-indigo-500/20 px-3 py-2 text-sm font-semibold text-indigo-100"
-                                  onClick={() => void copyPublicSharePageUrl({ currentSong: true })}
-                                >
-                                  Copy Link to Current Song
                                 </button>
                               </div>
                               <div className="mt-2 rounded-none border-0 bg-transparent p-0 sm:mt-3 sm:rounded-xl sm:border sm:border-white/10 sm:bg-slate-950/40 sm:p-3">
@@ -10428,18 +10464,18 @@ function App() {
           </div>
         </div>
         {(sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && (
-          <nav className="fixed bottom-0 left-0 right-0 z-[320] border-t border-white/10 bg-slate-950/95 backdrop-blur">
+          <nav className="fixed bottom-0 left-0 right-0 z-[320] bg-transparent px-3 pb-[env(safe-area-inset-bottom)]">
             <div
-              className={`mx-auto flex w-full items-center justify-between gap-2 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 ${
+              className={`mx-auto flex w-full items-center justify-between gap-2 py-3 ${
                 sharedPublicTab === 'playlist' ? 'max-w-[980px]' : 'max-w-3xl'
               }`}
             >
               <button
                 type="button"
-                className={`flex min-w-[140px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                className={`flex min-w-[140px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold shadow-lg transition ${
                   sharedPublicTab === 'setlist'
-                    ? 'border-teal-300/70 bg-teal-400/10 text-teal-100'
-                    : 'border-white/10 text-slate-300'
+                    ? 'border-teal-300/70 bg-teal-500 text-slate-950'
+                    : 'border-white/10 bg-slate-900 text-slate-200'
                 }`}
                 disabled={!sharedPlaylistView}
                 onClick={() => setSharedPublicTab('setlist')}
@@ -10449,10 +10485,10 @@ function App() {
               </button>
               <button
                 type="button"
-                className={`flex min-w-[140px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                className={`flex min-w-[140px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold shadow-lg transition ${
                   sharedPublicTab === 'playlist'
-                    ? 'border-teal-300/70 bg-teal-400/10 text-teal-100'
-                    : 'border-white/10 text-slate-300'
+                    ? 'border-teal-300/70 bg-teal-500 text-slate-950'
+                    : 'border-white/10 bg-slate-900 text-slate-200'
                 }`}
                 disabled={!sharedPlaylistView}
                 onClick={handleSharedPublicAudioTabClick}
@@ -15878,7 +15914,7 @@ function App() {
                       ⏭ Next
                     </button>
                   </div>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                     <button
                       type="button"
                       className={`min-h-[44px] rounded-xl border px-2 py-2 text-xs ${
@@ -15889,13 +15925,6 @@ function App() {
                       onClick={() => setPlaylistAutoAdvance((current) => !current)}
                     >
                       Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
-                    </button>
-                    <button
-                      type="button"
-                      className="min-h-[44px] rounded-xl border border-indigo-300/60 bg-indigo-500/20 px-2 py-2 text-xs text-indigo-100"
-                      onClick={() => void copyPlaylistShareLink()}
-                    >
-                      Copy Link to Current Song
                     </button>
                     <select
                       className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-2 py-2 text-xs text-slate-100 outline-none focus:border-teal-300 sm:col-span-2"
@@ -16342,16 +16371,16 @@ function App() {
               )}
             </div>
             <nav
-              className="shrink-0 border-t border-white/10 bg-slate-950/95 backdrop-blur"
+              className="shrink-0 bg-transparent px-3 pb-[env(safe-area-inset-bottom)]"
               aria-label="Active Setlist views"
             >
-              <div className="mx-auto flex w-full max-w-3xl items-stretch justify-between gap-2 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
+              <div className="mx-auto flex w-full max-w-3xl items-stretch justify-between gap-2 py-3">
                 <button
                   type="button"
-                  className={`flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-2 rounded-xl border px-2 py-2 text-sm font-semibold transition ${
+                  className={`flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-2 rounded-xl border px-2 py-2 text-sm font-semibold shadow-lg transition ${
                     playlistModalTab === 'setlist'
-                      ? 'border-teal-300/70 bg-teal-400/10 text-teal-100'
-                      : 'border-white/10 text-slate-300'
+                      ? 'border-teal-300/70 bg-teal-500 text-slate-950'
+                      : 'border-white/10 bg-slate-900 text-slate-200'
                   }`}
                   onClick={() => setPlaylistModalTab('setlist')}
                 >
@@ -16360,10 +16389,10 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  className={`flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-2 rounded-xl border px-2 py-2 text-sm font-semibold transition ${
+                  className={`flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-2 rounded-xl border px-2 py-2 text-sm font-semibold shadow-lg transition ${
                     playlistModalTab === 'playlist'
-                      ? 'border-teal-300/70 bg-teal-400/10 text-teal-100'
-                      : 'border-white/10 text-slate-300'
+                      ? 'border-teal-300/70 bg-teal-500 text-slate-950'
+                      : 'border-white/10 bg-slate-900 text-slate-200'
                   }`}
                   onClick={() => setPlaylistModalTab('playlist')}
                 >

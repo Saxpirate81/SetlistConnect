@@ -10157,20 +10157,6 @@ function App() {
                           ⏭ Next
                         </button>
                       </div>
-                      <div className="hidden md:block">
-                        <select
-                          className="min-h-[44px] w-full rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-300"
-                          value={playlistSingerFilter}
-                          onChange={(event) => setPlaylistSingerFilter(event.target.value)}
-                        >
-                          <option value="__all__">All singers</option>
-                          {playlistSingerOptions.map((singer) => (
-                            <option key={`shared-playlist-singer-${singer}`} value={singer}>
-                              {singer}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
                     </div>
                     <div className="relative order-1 mt-3 flex flex-col overflow-visible md:order-2 md:mt-4 md:flex-1 md:flex-row md:gap-4 md:overflow-hidden">
                       <div
@@ -10306,6 +10292,21 @@ function App() {
                             className="max-h-[42dvh] min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 pb-2 md:h-full md:max-h-none"
                             onScroll={handleSharedPlaylistDrawerScroll}
                           >
+                            <div className="sticky top-0 z-10 mb-2 bg-slate-900/95 pb-2 pt-1 backdrop-blur">
+                              <select
+                                className="min-h-[38px] w-full rounded-xl border border-white/10 bg-slate-950/80 px-3 py-2 text-xs font-semibold text-slate-100 outline-none focus:border-teal-300"
+                                value={playlistSingerFilter}
+                                onChange={(event) => setPlaylistSingerFilter(event.target.value)}
+                                aria-label="Filter songs by singer"
+                              >
+                                <option value="__all__">All singers</option>
+                                {playlistSingerOptions.map((singer) => (
+                                  <option key={`shared-playlist-singer-${singer}`} value={singer}>
+                                    {singer}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
                             <div className="space-y-3 pb-2">
                               {groupedPlaylistSections.map((group) => (
                                 <div
@@ -15822,7 +15823,7 @@ function App() {
                       ⏭ Next
                     </button>
                   </div>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-2">
                     <button
                       type="button"
                       className={`min-h-[44px] rounded-xl border px-2 py-2 text-xs ${
@@ -15834,18 +15835,6 @@ function App() {
                     >
                       Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
                     </button>
-                    <select
-                      className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-2 py-2 text-xs text-slate-100 outline-none focus:border-teal-300 sm:col-span-2"
-                      value={playlistSingerFilter}
-                      onChange={(event) => setPlaylistSingerFilter(event.target.value)}
-                    >
-                      <option value="__all__">All singers</option>
-                      {playlistSingerOptions.map((singer) => (
-                        <option key={`playlist-singer-${singer}`} value={singer}>
-                          {singer}
-                        </option>
-                      ))}
-                    </select>
                   </div>
                   {playlistShareStatus ? (
                     <span className="text-xs text-teal-200">{playlistShareStatus}</span>
@@ -16232,6 +16221,21 @@ function App() {
                   onScroll={handlePlaylistDrawerScroll}
                 >
                   <div className="space-y-3 pb-2">
+                    <div className="sticky top-0 z-10 bg-slate-900/95 pb-2 pt-1 backdrop-blur md:pt-2">
+                      <select
+                        className="min-h-[38px] w-full rounded-xl border border-white/10 bg-slate-950/80 px-3 py-2 text-xs font-semibold text-slate-100 outline-none focus:border-teal-300"
+                        value={playlistSingerFilter}
+                        onChange={(event) => setPlaylistSingerFilter(event.target.value)}
+                        aria-label="Filter songs by singer"
+                      >
+                        <option value="__all__">All singers</option>
+                        {playlistSingerOptions.map((singer) => (
+                          <option key={`playlist-singer-${singer}`} value={singer}>
+                            {singer}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                     {groupedPlaylistSections.map((group) => (
                       <div
                         key={`playlist-group-${group.section}`}

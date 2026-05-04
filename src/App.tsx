@@ -9871,7 +9871,7 @@ function App() {
 
   if ((sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && !authUserId) {
     return (
-      <div className="shared-public-mode h-dvh overflow-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-24 pt-4 text-white sm:px-4 sm:pt-5">
+      <div className="shared-public-mode min-h-dvh overflow-y-auto overflow-x-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-24 pt-4 text-white sm:h-dvh sm:overflow-hidden sm:px-4 sm:pt-5">
         {showSharedInstrumentPrompt && (
           <div
             className="fixed inset-0 z-[110] flex items-end justify-center bg-slate-950/80 pb-[env(safe-area-inset-bottom)] pt-6 sm:items-center sm:pb-6"
@@ -9928,11 +9928,11 @@ function App() {
           </div>
         )}
         <div
-          className={`mx-auto flex h-full min-h-0 w-full flex-col ${
+          className={`mx-auto flex min-h-[calc(100dvh-7rem)] w-full flex-col sm:h-full sm:min-h-0 ${
             sharedPublicTab === 'playlist' ? 'max-w-[1480px]' : 'max-w-5xl'
           }`}
         >
-          <div className="flex h-full min-h-0 flex-col overflow-hidden p-3 sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4">
+          <div className="flex min-h-[calc(100dvh-7rem)] flex-col overflow-visible p-3 sm:h-full sm:min-h-0 sm:overflow-hidden sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 pr-2">
                 <h2 className="text-lg font-semibold">Active Setlist</h2>
@@ -9993,7 +9993,7 @@ function App() {
             {sharedPlaylistView && (
               <>
                 {sharedPublicTab === 'setlist' ? (
-                  <div className="mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden rounded-none bg-transparent p-0 sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4">
+                  <div className="mt-3 min-h-0 flex-1 overflow-visible rounded-none bg-transparent p-0 sm:mt-4 sm:overflow-y-auto sm:overflow-x-hidden sm:rounded-2xl sm:bg-slate-950/50 sm:p-4">
                     {sharedDocsLoading && (
                       <div className="mb-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
                         Loading charts and lyrics...
@@ -10197,7 +10197,7 @@ function App() {
                         </select>
                       </div>
                     </div>
-                    <div className="order-1 mt-3 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden md:order-2 md:mt-4 md:flex-row md:gap-4 md:overflow-hidden">
+                    <div className="order-1 mt-3 flex min-h-0 flex-1 flex-col gap-3 overflow-visible md:order-2 md:mt-4 md:flex-row md:gap-4 md:overflow-hidden">
                       <div
                         ref={sharedPlaylistPlayerBlockRef}
                         className={`relative z-10 flex min-h-0 w-full flex-col md:min-h-0 md:flex-1 ${
@@ -10337,7 +10337,7 @@ function App() {
                       </div>
 
                         <div
-                          className={`z-20 overflow-hidden rounded-none border-0 bg-transparent shadow-none transition-all duration-150 md:h-full md:w-[320px] md:shrink-0 md:rounded-2xl md:border md:border-teal-300/30 md:bg-slate-900 md:shadow-xl lg:w-[340px] ${
+                          className={`z-20 overflow-visible rounded-none border-0 bg-transparent shadow-none transition-all duration-150 md:h-full md:w-[320px] md:shrink-0 md:overflow-hidden md:rounded-2xl md:border md:border-teal-300/30 md:bg-slate-900 md:shadow-xl lg:w-[340px] ${
                             widePlaylistUi
                               ? 'absolute inset-x-0 bottom-0 shadow-2xl md:static md:inset-auto'
                               : 'flex min-h-[36vh] flex-1 flex-col md:min-h-0'
@@ -10355,7 +10355,7 @@ function App() {
                             <div className="h-1 w-12 rounded-full bg-white/25" />
                           </div>
                           <div
-                            className={`min-h-0 overscroll-contain overflow-y-auto p-0 md:h-full md:max-h-none md:px-2 md:pb-2 ${
+                            className={`min-h-0 overscroll-contain overflow-visible p-0 md:h-full md:max-h-none md:overflow-y-auto md:px-2 md:pb-2 ${
                               widePlaylistUi ? 'max-h-full' : 'flex-1'
                             }`}
                             onScroll={handleSharedPlaylistDrawerScroll}
@@ -15813,10 +15813,10 @@ function App() {
 
       {showPlaylistModal && currentSetlist && (
         <div
-          className="fixed inset-0 z-[98] bg-slate-950/90 backdrop-blur-sm"
+          className="fixed inset-0 z-[98] overflow-y-auto overflow-x-hidden bg-slate-950/90 backdrop-blur-sm md:overflow-hidden"
         >
           <div
-            className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-slate-900"
+            className="flex min-h-dvh w-full flex-col overflow-visible bg-slate-900 md:h-full md:min-h-0 md:overflow-hidden"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sticky top-0 z-10 shrink-0 border-b border-white/10 bg-slate-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
@@ -15915,9 +15915,9 @@ function App() {
               ) : null}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-visible md:overflow-hidden">
               {playlistModalTab === 'setlist' ? (
-                <div className="h-full min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-4 pt-2 sm:px-5 sm:pb-5 sm:pt-3">
+                <div className="min-h-0 overflow-visible px-3 pb-4 pt-2 sm:px-5 sm:pb-5 sm:pt-3 md:h-full md:overflow-y-auto md:overflow-x-hidden">
                   <div className="mb-3 flex flex-wrap items-center gap-2">
                     <button
                       type="button"
@@ -16096,7 +16096,7 @@ function App() {
                   </div>
                 </div>
               ) : (
-            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-4 pb-2 pt-3 sm:px-5 sm:pb-4 sm:pt-4 md:flex-row md:gap-4">
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-visible px-4 pb-2 pt-3 sm:px-5 sm:pb-4 sm:pt-4 md:flex-row md:gap-4 md:overflow-hidden">
               <div
                 ref={playlistPlayerBlockRef}
                 className={`relative z-10 flex min-h-0 w-full flex-col md:min-h-0 md:flex-1 ${
@@ -16269,7 +16269,7 @@ function App() {
               </div>
 
               <div
-                className={`z-20 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-xl transition-all duration-150 md:h-full md:w-[300px] md:shrink-0 ${
+                className={`z-20 overflow-visible rounded-2xl border border-white/10 bg-slate-900 shadow-xl transition-all duration-150 md:h-full md:w-[300px] md:shrink-0 md:overflow-hidden ${
                   widePlaylistUi
                     ? 'absolute inset-x-0 bottom-0 shadow-2xl md:static md:inset-auto'
                     : 'flex min-h-[36vh] flex-1 flex-col'
@@ -16287,7 +16287,7 @@ function App() {
                   <div className="h-1 w-12 rounded-full bg-white/25" />
                 </div>
                 <div
-                  className={`min-h-0 overflow-y-auto px-2 pb-2 md:h-full md:max-h-none ${
+                  className={`min-h-0 overflow-visible px-2 pb-2 md:h-full md:max-h-none md:overflow-y-auto ${
                     widePlaylistUi ? 'max-h-full' : 'flex-1'
                   }`}
                   onScroll={handlePlaylistDrawerScroll}

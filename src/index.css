@@ -44,7 +44,8 @@ button[class*='border-']:not([class*='bg-']) {
     background-color 180ms ease,
     border-color 180ms ease,
     color 180ms ease,
-    box-shadow 180ms ease;
+    box-shadow 180ms ease,
+    transform 160ms ease;
 }
 
 button[class*='border-']:not([class*='bg-']):hover {
@@ -90,33 +91,90 @@ button,
 [role="button"],
 a {
   cursor: pointer;
-  transition: background-color 150ms ease, box-shadow 150ms ease;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    color 150ms ease,
+    opacity 150ms ease,
+    transform 150ms ease;
+  transform: translateY(0) scale(1);
 }
 
-button:hover,
+button:not(:disabled):hover,
 [role="button"]:hover,
 a:hover {
   box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.2), 0 8px 20px rgba(0, 0, 0, 0.25);
+  transform: translateY(-1px) scale(1.01);
 }
 
+button:not(:disabled):active,
+[role="button"]:active,
+a:active {
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.22), 0 4px 12px rgba(0, 0, 0, 0.22);
+  transform: translateY(1px) scale(0.98);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  transform: none;
+}
+
+.app-close-button,
+button.icon-header-btn.app-close-button,
 .lyrics-floating-panel-close {
-  width: 20px !important;
-  height: 20px !important;
-  min-width: 20px !important;
-  min-height: 20px !important;
-  padding: 1px !important;
-  border-radius: 0.5rem !important;
-  border: 1px solid rgba(255, 255, 255, 0.22) !important;
-  background: rgba(15, 23, 42, 0.5) !important;
+  width: 36px !important;
+  height: 36px !important;
+  min-width: 36px !important;
+  min-height: 36px !important;
+  padding: 0 !important;
+  border-radius: 9999px !important;
+  border: 1px solid rgba(148, 163, 184, 0.28) !important;
+  background: rgba(15, 23, 42, 0.72) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 24px rgba(2, 6, 23, 0.32);
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   line-height: 0;
   color: transparent !important;
+  overflow: hidden;
 }
 
-button.icon-header-btn {
+.app-close-button:hover,
+button.icon-header-btn.app-close-button:hover,
+.lyrics-floating-panel-close:hover {
+  border-color: rgba(94, 234, 212, 0.55) !important;
+  background: rgba(20, 184, 166, 0.16) !important;
+  box-shadow: 0 0 0 1px rgba(94, 234, 212, 0.2), 0 12px 28px rgba(20, 184, 166, 0.16);
+}
+
+.app-close-button::before,
+.app-close-button::after,
+.lyrics-floating-panel-close::before,
+.lyrics-floating-panel-close::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 15px;
+  height: 2px;
+  border-radius: 9999px;
+  background: rgb(226, 232, 240);
+  transform-origin: center;
+}
+
+.app-close-button::before,
+.lyrics-floating-panel-close::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.app-close-button::after,
+.lyrics-floating-panel-close::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+button.icon-header-btn:not(.app-close-button) {
   width: 30px !important;
   height: 30px !important;
   min-width: 30px !important;
@@ -132,21 +190,6 @@ button.icon-header-btn {
   line-height: 0;
   color: transparent !important;
   font-size: 24px;
-}
-
-button.icon-header-btn[aria-label="Close"]::before,
-.lyrics-floating-panel-close::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 1.1em;
-  height: 1.1em;
-  transform: translate(-50%, -50%);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f3f31a' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2' ry='2'/%3E%3Cpath d='m15 9-6 6'/%3E%3Cpath d='m9 9 6 6'/%3E%3C/svg%3E");
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: contain;
 }
 
 button.icon-header-btn[aria-label="Back"]::before {
@@ -1591,15 +1634,105 @@ button[aria-label="Print chart or lyrics"] {
   }
 }
 
+.print-container.pdf-export-mode {
+  gap: 6px;
+  font-size: 9px;
+}
+
+.pdf-export-mode .print-header {
+  break-after: avoid;
+  page-break-after: avoid;
+  margin-bottom: 7px;
+  padding: 5px 10px;
+}
+
+.pdf-export-mode .print-band-name {
+  font-size: 24px;
+  letter-spacing: 0.08em;
+}
+
+.pdf-export-mode .print-title {
+  font-size: 15px;
+}
+
+.pdf-export-mode .print-subtitle {
+  font-size: 8px;
+}
+
+.pdf-export-mode .print-badge {
+  font-size: 7px;
+  padding: 2px 8px;
+}
+
+.pdf-export-mode .print-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 7px;
+  grid-auto-flow: row dense;
+}
+
+.pdf-export-mode .print-section-box {
+  break-inside: avoid;
+  page-break-inside: avoid;
+  box-shadow: none;
+  margin-bottom: 0;
+  padding: 6px;
+}
+
+.pdf-export-mode .print-musicians,
+.pdf-export-mode .print-special {
+  grid-column: 1 / -1;
+}
+
 .pdf-export-mode .print-section-title {
   position: static;
+  break-after: avoid;
+  page-break-after: avoid;
+  margin-bottom: 4px;
+  padding: 4px 6px;
+  font-size: 8px;
+  letter-spacing: 0.1em;
+}
+
+.pdf-export-mode .print-list,
+.pdf-export-mode .print-grid,
+.pdf-export-mode .print-dance .print-list,
+.pdf-export-mode .print-dinner .print-list,
+.pdf-export-mode .print-special .print-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  column-count: auto;
+  padding: 4px;
+}
+
+.pdf-export-mode .print-musicians .print-grid,
+.pdf-export-mode .print-special .print-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .pdf-export-mode .print-row {
+  grid-template-columns: minmax(0, 1fr) minmax(70px, 28%);
   align-items: start;
-  min-height: 52px;
+  break-inside: avoid;
+  page-break-inside: avoid;
+  min-height: 42px;
   overflow: visible;
-  padding: 2px 5px;
+  padding: 6px 6px;
+  border-radius: 8px;
+}
+
+.pdf-export-mode .print-card {
+  break-inside: avoid;
+  page-break-inside: avoid;
+  padding: 5px 6px;
+  box-shadow: none;
+}
+
+.pdf-export-mode .print-contact-row,
+.pdf-export-mode .print-icon-link {
+  display: none;
 }
 
 .pdf-export-mode .print-title-line {
@@ -1613,10 +1746,10 @@ button[aria-label="Print chart or lyrics"] {
 .pdf-export-mode .print-row-title {
   min-height: auto;
   padding-top: 0;
-  line-height: 1.55;
+  line-height: 1.42;
   overflow: visible;
   font-family: "Inter", system-ui, -apple-system, sans-serif;
-  font-size: 11px;
+  font-size: 9.5px;
 }
 
 .pdf-export-mode .print-link {
@@ -1624,7 +1757,7 @@ button[aria-label="Print chart or lyrics"] {
   overflow: visible;
   text-overflow: clip;
   white-space: normal;
-  line-height: 1.55;
+  line-height: 1.42;
 }
 
 .pdf-export-mode .print-row-title .song-name,
@@ -1634,10 +1767,10 @@ button[aria-label="Print chart or lyrics"] {
   text-overflow: clip;
   white-space: normal;
   word-break: break-word;
-  line-height: 1.55;
-  padding-bottom: 2px;
+  line-height: 1.42;
+  padding-bottom: 0;
   font-family: "Inter", system-ui, -apple-system, sans-serif;
-  font-size: 11px;
+  font-size: 9.5px;
   font-weight: 700;
 }
 
@@ -1646,9 +1779,9 @@ button[aria-label="Print chart or lyrics"] {
 }
 
 .pdf-export-mode .song-title-stack {
-  gap: 2px;
+  gap: 1px;
   overflow: visible;
-  padding-bottom: 2px;
+  padding-bottom: 0;
 }
 
 .pdf-export-mode .artist-name {
@@ -1657,11 +1790,35 @@ button[aria-label="Print chart or lyrics"] {
   overflow: visible;
   text-overflow: clip;
   word-break: break-word;
-  line-height: 1.55;
-  padding-bottom: 2px;
+  line-height: 1.35;
+  padding-bottom: 0;
   font-family: "Inter", system-ui, -apple-system, sans-serif;
-  font-size: 9px;
+  font-size: 7.8px;
   color: #475569;
+}
+
+.pdf-export-mode .print-row-subtitle {
+  align-self: start;
+  padding-top: 1px;
+  font-size: 7.8px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.pdf-export-mode .print-assignee-names {
+  font-size: 1em;
+}
+
+.pdf-export-mode .print-row-note {
+  grid-column: 1 / -1;
+  margin-top: 1px;
+  font-size: 6.5px;
+  line-height: 1.2;
+}
+
+.pdf-export-mode .print-pill {
+  padding: 1px 4px;
+  font-size: 6px;
 }
 
 @media print {

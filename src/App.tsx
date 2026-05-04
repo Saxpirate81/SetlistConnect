@@ -9876,7 +9876,13 @@ function App() {
 
   if ((sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && !authUserId) {
     return (
-      <div className="shared-public-mode min-h-dvh overflow-y-auto overflow-x-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-24 pt-4 text-white sm:h-dvh sm:overflow-hidden sm:px-4 sm:pt-5">
+      <div
+        className={`shared-public-mode min-h-dvh overflow-x-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-24 pt-4 text-white sm:px-4 sm:pt-5 ${
+          sharedPublicTab === 'playlist'
+            ? 'overflow-y-auto sm:h-dvh sm:overflow-hidden'
+            : 'overflow-y-auto'
+        }`}
+      >
         {showSharedInstrumentPrompt && (
           <div
             className="fixed inset-0 z-[110] flex items-end justify-center bg-slate-950/80 pb-[env(safe-area-inset-bottom)] pt-6 sm:items-center sm:pb-6"
@@ -9933,11 +9939,21 @@ function App() {
           </div>
         )}
         <div
-          className={`mx-auto flex min-h-[calc(100dvh-7rem)] w-full flex-col sm:h-full sm:min-h-0 ${
+          className={`mx-auto flex w-full flex-col ${
             sharedPublicTab === 'playlist' ? 'max-w-[1480px]' : 'max-w-5xl'
+          } ${
+            sharedPublicTab === 'playlist'
+              ? 'min-h-[calc(100dvh-7rem)] sm:h-full sm:min-h-0'
+              : 'min-h-[calc(100dvh-7rem)]'
           }`}
         >
-          <div className="flex min-h-[calc(100dvh-7rem)] flex-col overflow-visible p-3 sm:h-full sm:min-h-0 sm:overflow-hidden sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4">
+          <div
+            className={`flex min-h-[calc(100dvh-7rem)] flex-col overflow-visible p-3 sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4 ${
+              sharedPublicTab === 'playlist'
+                ? 'sm:h-full sm:min-h-0 sm:overflow-hidden'
+                : ''
+            }`}
+          >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 pr-2">
                 <h2 className="text-lg font-semibold">Active Setlist</h2>
@@ -10000,7 +10016,7 @@ function App() {
             {sharedPlaylistView && (
               <>
                 {sharedPublicTab === 'setlist' ? (
-                  <div className="mt-3 min-h-0 flex-1 overflow-visible rounded-none bg-transparent p-0 sm:mt-4 sm:overflow-y-auto sm:overflow-x-hidden sm:rounded-2xl sm:bg-slate-950/50 sm:p-4">
+                  <div className="mt-3 min-h-0 flex-1 overflow-visible rounded-none bg-transparent p-0 sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4">
                     {sharedDocsLoading && (
                       <div className="mb-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
                         Loading charts and lyrics...
@@ -15847,9 +15863,20 @@ function App() {
                       ⏭ Next
                     </button>
                   </div>
-                  <div className="grid grid-cols-1 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <button
+                      type="button"
+                      className={`min-h-[44px] rounded-xl border px-2 py-2 text-xs ${
+                        playlistAutoAdvance
+                          ? 'border-teal-300/60 bg-teal-400/10 text-teal-100'
+                          : 'border-white/10 text-slate-300'
+                      }`}
+                      onClick={() => setPlaylistAutoAdvance((current) => !current)}
+                    >
+                      Auto-next: {playlistAutoAdvance ? 'On' : 'Off'}
+                    </button>
                     <select
-                      className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-2 py-2 text-xs text-slate-100 outline-none focus:border-teal-300"
+                      className="min-h-[44px] rounded-xl border border-white/10 bg-slate-900/80 px-2 py-2 text-xs text-slate-100 outline-none focus:border-teal-300 sm:col-span-2"
                       value={playlistSingerFilter}
                       onChange={(event) => setPlaylistSingerFilter(event.target.value)}
                     >
@@ -16074,12 +16101,12 @@ function App() {
                       className="flex h-14 w-14 items-center justify-center rounded-full bg-teal-400 text-slate-950 shadow-lg ring-2 ring-teal-300/35 disabled:opacity-40"
                       disabled={visiblePlaylistEntries.length === 0}
                       onClick={playPlaylistFromFirstYoutube}
-                      aria-label="Play from the first YouTube song"
+                      aria-label="Play from the first YouTube song, then auto-advance YouTube tracks"
                     >
                       <span className="text-2xl leading-none">▶</span>
                     </button>
                     <p className="px-2 text-center text-[11px] text-slate-500">
-                      Tap play to start the first YouTube track.
+                      First YouTube (after singer filter); with Auto-next, goes to the next YouTube
                     </p>
                   </div>
                 </div>
@@ -16167,12 +16194,13 @@ function App() {
                               className="flex h-16 w-16 items-center justify-center rounded-full bg-teal-400 text-slate-950 shadow-lg ring-2 ring-teal-300/40 disabled:opacity-40"
                               disabled={visiblePlaylistEntries.length === 0}
                               onClick={handleModalYoutubeOverlayPlay}
-                              aria-label="Play from the first YouTube song"
+                              aria-label="Play from the first YouTube song, then auto-advance YouTube tracks"
                             >
                               <span className="text-3xl leading-none">▶</span>
                             </button>
                             <p className="max-w-[260px] text-center text-[11px] leading-snug text-slate-400">
-                              Tap play to start the first YouTube track.
+                              Tap play to start. First YouTube (after singer filter); Auto-next goes to the next
+                              YouTube.
                             </p>
                           </div>
                         ) : null}

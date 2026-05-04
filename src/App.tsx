@@ -3736,42 +3736,6 @@ function App() {
       setStatus('Could not copy link. Copy from browser URL bar.')
     }
   }
-  const copyPublicSharePageUrl = async (options?: { currentSong?: boolean }) => {
-    const setStatus = (value: string) => {
-      setPlaylistShareStatus(value)
-      if (playlistShareTimerRef.current) {
-        window.clearTimeout(playlistShareTimerRef.current)
-      }
-      playlistShareTimerRef.current = window.setTimeout(() => {
-        setPlaylistShareStatus('')
-        playlistShareTimerRef.current = null
-      }, 2200)
-    }
-    const url = (() => {
-      if (!options?.currentSong) return window.location.href
-      const next = new URL(window.location.href)
-      next.searchParams.set('item', String(Math.max(0, playlistIndex)))
-      return next.toString()
-    })()
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(url)
-      } else {
-        const textArea = document.createElement('textarea')
-        textArea.value = url
-        textArea.style.position = 'fixed'
-        textArea.style.left = '-9999px'
-        document.body.appendChild(textArea)
-        textArea.focus()
-        textArea.select()
-        document.execCommand('copy')
-        document.body.removeChild(textArea)
-      }
-      setStatus('Link copied.')
-    } catch {
-      setStatus('Could not copy. Copy from the address bar.')
-    }
-  }
   const moveDocPageBy = (delta: number) => {
     if (docModalPages.length <= 1) return
     setDocModalPageIndex((current) => {
@@ -10009,14 +9973,7 @@ function App() {
                   )}
                   <button
                     type="button"
-                    className="min-h-[36px] rounded-lg border border-indigo-300/50 bg-indigo-500/15 px-3 py-1.5 text-[11px] font-semibold text-indigo-100"
-                    onClick={() => void copyPublicSharePageUrl()}
-                  >
-                    Copy Page Link
-                  </button>
-                  <button
-                    type="button"
-                    className="min-h-[36px] rounded-lg border border-white/10 px-3 py-1.5 text-[11px] text-slate-300"
+                    className="min-h-[36px] rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-[11px] font-semibold text-slate-200"
                     onClick={() => {
                       setInstrumentSelectionDraft(appState.instrument ?? [])
                       setShowSharedInstrumentPrompt(true)

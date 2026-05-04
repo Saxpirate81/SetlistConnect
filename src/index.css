@@ -1349,7 +1349,7 @@ button[aria-label="Print chart or lyrics"] {
   }
 
   .shared-setlist-container {
-    gap: 10px;
+    gap: 0;
     font-size: clamp(9px, 2.6vw, 10px);
     width: 100%;
     max-width: 100%;
@@ -1369,7 +1369,7 @@ button[aria-label="Print chart or lyrics"] {
     grid-template-columns: 1fr;
     row-gap: 5px;
     padding: 8px 10px;
-    margin-bottom: 6px;
+    margin-bottom: 0;
     width: 100%;
     min-width: 0;
     overflow-x: hidden;
@@ -1547,14 +1547,14 @@ button[aria-label="Print chart or lyrics"] {
   }
 
   .shared-setlist-container {
-    gap: 6px;
+    gap: 0;
     font-size: 8.5px;
   }
 
   .shared-setlist-container .print-header {
     padding: 6px 8px;
     row-gap: 4px;
-    margin-bottom: 4px;
+    margin-bottom: 0;
   }
 
   .shared-setlist-container .print-band-name {

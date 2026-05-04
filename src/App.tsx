@@ -9946,17 +9946,12 @@ function App() {
                   </>
                 )}
               </div>
-              <div className="flex min-w-0 flex-col items-end gap-2 text-right">
-                <div className="text-xs text-slate-400">
-                  {visiblePlaylistEntries.length
-                    ? `${playlistIndex + 1} / ${visiblePlaylistEntries.length}`
-                    : 'No playable songs'}
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="flex shrink-0 flex-col items-end gap-2 pt-1 text-right">
+                <div className="flex items-center justify-end gap-2">
                   {installPrompt && !isInstalled && (
                     <button
                       type="button"
-                      className="min-h-[36px] rounded-lg border border-teal-300/50 bg-teal-500/20 px-3 py-1.5 text-[11px] font-semibold text-teal-100"
+                      className="min-h-[36px] shrink-0 whitespace-nowrap rounded-lg border border-teal-300/50 bg-teal-500/20 px-3 py-1.5 text-[11px] font-semibold text-teal-100"
                       onClick={handleInstallClick}
                     >
                       {installAppLabel}
@@ -9964,7 +9959,7 @@ function App() {
                   )}
                   <button
                     type="button"
-                    className="min-h-[36px] whitespace-nowrap rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-[11px] font-semibold text-slate-200"
+                    className="min-h-[36px] min-w-[92px] shrink-0 whitespace-nowrap rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-[11px] font-semibold text-slate-200"
                     onClick={() => {
                       setInstrumentSelectionDraft(appState.instrument ?? [])
                       setShowSharedInstrumentPrompt(true)

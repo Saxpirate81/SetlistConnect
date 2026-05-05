@@ -1717,6 +1717,7 @@ function App() {
   }, [appState.songs, currentSetlist, isSetlistTypeTag, orderedSetSections])
   const orderedPrintableSongSections = useMemo(() => {
     if (!currentSetlist) return []
+    const isDjOnlySection = (section: string) => section.trim().toLowerCase() === 'dj only'
     const getSectionSongCount = (section: string) => {
       return currentSetlist.songIds
         .map((songId) => appState.songs.find((song) => song.id === songId))
@@ -1726,6 +1727,8 @@ function App() {
         }).length
     }
     return [...printableSetSections].sort((a, b) => {
+      if (isDjOnlySection(a) && !isDjOnlySection(b)) return -1
+      if (!isDjOnlySection(a) && isDjOnlySection(b)) return 1
       const countDiff = getSectionSongCount(a) - getSectionSongCount(b)
       if (countDiff !== 0) return countDiff
       return a.localeCompare(b)
@@ -2433,8 +2436,11 @@ function App() {
       })
     })
     const preferredOrder = [
+      'DJ Only',
       'Special Requests',
-      ...orderedSetSections.map(normalizePlaylistSection).filter(Boolean),
+      ...orderedSetSections
+        .map(normalizePlaylistSection)
+        .filter((section) => section && section.toLowerCase() !== 'dj only'),
       'Setlist',
     ]
     const seen = new Set<string>()
@@ -5741,12 +5747,16 @@ function App() {
     if (supabase) {
       const client = supabase
       reordered.forEach((request, index) => {
-        if (request.origin !== 'dj_track') return
         runSupabase(
-          client
-            .from('SetlistGigDjTracks')
-            .update({ sort_order: index })
-            .eq('id', request.id),
+          request.origin === 'dj_track'
+            ? client
+                .from('SetlistGigDjTracks')
+                .update({ sort_order: index })
+                .eq('id', request.id)
+            : client
+                .from('SetlistSpecialRequests')
+                .update({ sort_order: index })
+                .eq('id', request.id),
         )
       })
     }
@@ -7411,6 +7421,7 @@ function App() {
               note: pendingSpecialNote.trim() || null,
               dj_only: isPendingSpecialDjOnly,
               external_audio_url: pendingSpecialExternalUrl.trim() || null,
+              sort_order: getOrderedSpecialRequests(currentSetlist.id).length,
             }))
           return { error: requestInsertError }
         })(),
@@ -7758,7 +7769,7 @@ function App() {
 
     const songsById = new Map(songs.map((song) => [song.id, song]))
     const specialRequestsFromLegacy: SpecialRequest[] =
-      specialReqRes.data?.map((row) => {
+      [...(specialReqRes.data ?? [])].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)).map((row) => {
         const linkedSong = row.song_id ? songsById.get(row.song_id) : undefined
         return {
           id: row.id,
@@ -7774,7 +7785,7 @@ function App() {
           externalAudioUrl: row.external_audio_url ?? undefined,
           origin: 'special_request',
         }
-      }) ?? []
+      })
     const djTracksAsRequests: SpecialRequest[] = (djTracksRes.data ?? [])
       .filter((row) => row.status !== 'archived')
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
@@ -7801,6 +7812,12 @@ function App() {
         }
       })
     const specialRequests: SpecialRequest[] = [...specialRequestsFromLegacy, ...djTracksAsRequests]
+    const specialOrderFromSupabase = specialRequests.reduce<Record<string, string[]>>((acc, request) => {
+      const list = acc[request.gigId] ?? []
+      list.push(request.id)
+      acc[request.gigId] = list
+      return acc
+    }, {})
 
     const documents: Document[] =
       docsRes.data?.map((row) => ({
@@ -7893,6 +7910,7 @@ function App() {
         {},
       ),
     )
+    setSpecialRequestOrderByGig(specialOrderFromSupabase)
 
     if (pollutedTagValues.length > 0 && supabase && activeBandId) {
       void supabase
@@ -8600,33 +8618,6 @@ function App() {
       return
     }
     setAccountSaveStatus('Band name updated.')
-  }
-
-  const clearSharedPlaylistQueryParams = () => {
-    const params = new URLSearchParams(window.location.search)
-    params.delete('playlist')
-    params.delete('setlist')
-    params.delete('item')
-    params.delete('band')
-    params.delete('musicians')
-    params.delete('data')
-    const next = params.toString()
-    const newUrl = `${window.location.pathname}${next ? `?${next}` : ''}${window.location.hash}`
-    window.history.replaceState({}, '', newUrl)
-  }
-
-  const enterSignupFromSharedView = () => {
-    if (!sharedPlaylistView) return
-    setSharedSignupReturnView(sharedPlaylistView)
-    try {
-      localStorage.setItem(SHARED_SIGNUP_RETURN_KEY, JSON.stringify(sharedPlaylistView))
-    } catch {
-      // Non-critical. The in-memory return view still works for this session.
-    }
-    clearSharedPlaylistQueryParams()
-    setSharedPlaylistView(null)
-    setSharedWelcomeStep('hidden')
-    setAuthMode('signup')
   }
 
   const restoreSharedViewFromSignup = (skipWelcome: boolean) => {
@@ -10703,15 +10694,6 @@ function App() {
         </div>
         {(sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && (
           <nav className="fixed bottom-0 left-0 right-0 z-[320] bg-transparent px-3 pb-[env(safe-area-inset-bottom)]">
-            {sharedPlaylistView && (
-              <button
-                type="button"
-                className="mx-auto mt-2 block rounded-full border border-white/10 bg-slate-950/90 px-3 py-1.5 text-[11px] font-semibold text-teal-100 shadow-lg backdrop-blur"
-                onClick={enterSignupFromSharedView}
-              >
-                Create a free Setlist Connect account
-              </button>
-            )}
             <div
               className={`mx-auto flex w-full items-center justify-between gap-2 py-3 ${
                 sharedPublicTab === 'playlist' ? 'max-w-[980px]' : 'max-w-3xl'
@@ -10991,8 +10973,8 @@ function App() {
           !authUserId &&
           (sharedWelcomeStep !== 'hidden' ||
             sharedWelcomeCompletedSetlistId !== sharedPlaylistView.setlistId) && (
-          <div className="fixed inset-0 z-[320] flex items-center justify-center bg-slate-950 px-5">
-            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900/95 p-5 text-center">
+          <div className="fixed inset-0 z-[320] flex items-start justify-center overflow-y-auto overscroll-contain bg-slate-950 px-5 py-[calc(1rem+env(safe-area-inset-top))]">
+            <div className="my-auto max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-md overflow-y-auto overscroll-contain rounded-3xl border border-white/10 bg-slate-900/95 p-5 text-center">
               {sharedWelcomeStep === 'welcome' ||
               sharedWelcomeStep === 'welcome-fade' ||
               sharedWelcomeStep === 'hidden' ? (
@@ -11048,21 +11030,13 @@ function App() {
                     >
                       Back
                     </button>
-                    <button
-                      type="button"
-                      className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                      onClick={enterSignupFromSharedView}
-                    >
-                      Sign up
-                    </button>
                   </div>
                 </div>
               ) : (
                 <div className="animate-[fade-in_320ms_ease-out]">
-                  <h3 className="text-xl font-semibold">Explore or join Setlist Connect</h3>
+                  <h3 className="text-xl font-semibold">Explore Setlist Connect</h3>
                   <p className="mt-2 text-sm text-slate-300">
-                    Learn more about the platform, create your account, or skip straight to this gig&apos;s
-                    details.
+                    Learn more about the platform, or skip straight to this gig&apos;s details.
                   </p>
                   <div className="mt-4 flex flex-col gap-2">
                     <button
@@ -11071,13 +11045,6 @@ function App() {
                       onClick={() => setSharedWelcomeStep('learn')}
                     >
                       Learn more about Setlist Connect
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                      onClick={enterSignupFromSharedView}
-                    >
-                      Sign up
                     </button>
                     <button
                       type="button"
@@ -13107,50 +13074,6 @@ function App() {
             </div>
 
             <div className="print-layout">
-              {getOrderedSpecialRequests(currentSetlist.id).length > 0 && (
-                <div className="print-section-box print-special">
-                  <div className="print-section-title">Special Requests</div>
-                  <div className="print-list">
-                    {getOrderedSpecialRequests(currentSetlist.id)
-                      .map((request) => {
-                        const song = appState.songs.find((item) => item.id === request.songId)
-                        return (
-                        <div key={request.id} className="print-row">
-                          <div className="print-row-title">
-                            <span className="print-title-line">
-                              {request.djOnly ? <span className="print-pill">DJ Only</span> : null}
-                              {request.externalAudioUrl || song?.youtubeUrl ? (
-                                <a
-                                  className="print-link song-name"
-                                  href={request.externalAudioUrl ?? song?.youtubeUrl ?? ''}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  {request.songTitle}
-                                </a>
-                              ) : (
-                                <span className="song-name">{request.songTitle}</span>
-                              )}
-                            </span>
-                          </div>
-                          <div className="print-row-subtitle">
-                            {request.type} ·{' '}
-                            <span className="print-assignee-names">
-                              {request.djOnly
-                                ? 'DJ'
-                                : request.singers.length
-                                  ? formatSingerAssignmentNames(request.singers)
-                                  : 'No singers'}
-                            </span>{' '}
-                            · {request.djOnly ? '—' : request.key || 'No key'}
-                          </div>
-                          {request.note && <div className="print-row-note">{request.note}</div>}
-                        </div>
-                      )})}
-                  </div>
-                </div>
-              )}
-
               <div className="print-section-box print-musicians">
                 <div className="print-section-title">Musicians</div>
                 <div className="print-grid">
@@ -13198,6 +13121,50 @@ function App() {
                   )}
                 </div>
               </div>
+
+              {getOrderedSpecialRequests(currentSetlist.id).length > 0 && (
+                <div className="print-section-box print-special">
+                  <div className="print-section-title">Special Requests</div>
+                  <div className="print-list">
+                    {getOrderedSpecialRequests(currentSetlist.id)
+                      .map((request) => {
+                        const song = appState.songs.find((item) => item.id === request.songId)
+                        return (
+                        <div key={request.id} className="print-row">
+                          <div className="print-row-title">
+                            <span className="print-title-line">
+                              {request.djOnly ? <span className="print-pill">DJ Only</span> : null}
+                              {request.externalAudioUrl || song?.youtubeUrl ? (
+                                <a
+                                  className="print-link song-name"
+                                  href={request.externalAudioUrl ?? song?.youtubeUrl ?? ''}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {request.songTitle}
+                                </a>
+                              ) : (
+                                <span className="song-name">{request.songTitle}</span>
+                              )}
+                            </span>
+                          </div>
+                          <div className="print-row-subtitle">
+                            {request.type} ·{' '}
+                            <span className="print-assignee-names">
+                              {request.djOnly
+                                ? 'DJ'
+                                : request.singers.length
+                                  ? formatSingerAssignmentNames(request.singers)
+                                  : 'No singers'}
+                            </span>{' '}
+                            · {request.djOnly ? '—' : request.key || 'No key'}
+                          </div>
+                          {request.note && <div className="print-row-note">{request.note}</div>}
+                        </div>
+                      )})}
+                  </div>
+                </div>
+              )}
 
               <div className="print-section-box print-latin">
                 <div className="print-section-title">Latin Set</div>
@@ -15904,11 +15871,40 @@ function App() {
                           key={`gig-sheet-special-${request.id}`}
                           role={request.songId ? 'button' : undefined}
                           tabIndex={request.songId ? 0 : -1}
-                          className={`print-row ${isLocked ? 'opacity-45' : ''} ${
+                          draggable={isAdmin}
+                          className={`print-row ${isAdmin ? 'cursor-grab active:cursor-grabbing' : ''} ${isLocked ? 'opacity-45' : ''} ${
                             request.songId && appState.currentSongId === request.songId
                               ? 'ring-2 ring-emerald-300/80 shadow-[0_0_18px_rgba(74,222,128,0.35)]'
                               : ''
                           }`}
+                          onDragStart={(event) => {
+                            if (!isAdmin) return
+                            clearSheetLongPress()
+                            setDraggedSpecialRequestId(request.id)
+                            setDragOverSpecialRequestId(null)
+                            event.dataTransfer.effectAllowed = 'move'
+                            event.dataTransfer.setData('text/plain', request.id)
+                          }}
+                          onDragOver={(event) => {
+                            if (!isAdmin) return
+                            event.preventDefault()
+                            event.dataTransfer.dropEffect = 'move'
+                            autoScrollDragContainer(event)
+                            setDragOverSpecialRequestId(request.id)
+                          }}
+                          onDrop={(event) => {
+                            if (!isAdmin) return
+                            event.preventDefault()
+                            const fromId = draggedSpecialRequestId ?? event.dataTransfer.getData('text/plain')
+                            if (!fromId) return
+                            reorderSpecialRequests(fromId, request.id)
+                            setDraggedSpecialRequestId(null)
+                            setDragOverSpecialRequestId(null)
+                          }}
+                          onDragEnd={() => {
+                            setDraggedSpecialRequestId(null)
+                            setDragOverSpecialRequestId(null)
+                          }}
                           onMouseDown={() => request.songId && startGigSheetLongPress(request.songId)}
                           onMouseUp={endGigSheetLongPress}
                           onMouseLeave={endGigSheetLongPress}
@@ -17939,14 +17935,14 @@ function App() {
                             <div
                               role="button"
                               tabIndex={0}
-                              draggable={!gigMode}
+                              draggable={isAdmin}
                               className={`grid items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm md:grid-cols-[.9fr_1.4fr_1fr_.6fr_.4fr] ${
-                                gigMode ? 'cursor-pointer' : ''
+                                isAdmin ? 'cursor-grab active:cursor-grabbing' : gigMode ? 'cursor-pointer' : ''
                               } ${
                                 isLockedInGigMode ? 'opacity-45' : ''
                               }`}
                               onDragStart={(event) => {
-                                if (gigMode) {
+                                if (!isAdmin) {
                                   event.preventDefault()
                                   return
                                 }
@@ -17956,14 +17952,14 @@ function App() {
                                 event.dataTransfer.setData('text/plain', request.id)
                               }}
                               onDragOver={(event) => {
-                                if (gigMode) return
+                                if (!isAdmin) return
                                 event.preventDefault()
                                 event.dataTransfer.dropEffect = 'move'
                                 autoScrollDragContainer(event)
                                 setDragOverSpecialRequestId(request.id)
                               }}
                               onDrop={(event) => {
-                                if (gigMode) return
+                                if (!isAdmin) return
                                 event.preventDefault()
                                 const fromId =
                                   draggedSpecialRequestId ?? event.dataTransfer.getData('text/plain')

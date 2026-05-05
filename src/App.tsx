@@ -37,8 +37,7 @@ const isMainNavScreen = (
 ): value is Extract<Screen, 'setlists' | 'song' | 'musicians' | 'account'> =>
   value === 'setlists' || value === 'song' || value === 'musicians' || value === 'account'
 type BandTier = 'free' | 'pro'
-const FREE_MUSICIAN_LIMIT = 12
-const FREE_GIG_LIMIT = 3
+const SHARED_SIGNUP_RETURN_KEY = 'setlist:sharedSignupReturnView'
 const BILLING_TEST_EMAILS = new Set([
   'bill.doss@ymail.com',
   'bill.doss@therealschoolofmusic.com',
@@ -435,20 +434,21 @@ const BAND_TIER_DETAILS: Record<
   }
 > = {
   free: {
-    name: 'Free',
-    summary: 'Best for getting started',
+    name: 'Beta Free',
+    summary: 'Free during the beta period',
     includes: [
       'Unlimited songs',
-      `Up to ${FREE_MUSICIAN_LIMIT} saved musicians`,
-      `Up to ${FREE_GIG_LIMIT} saved gigs`,
+      'Unlimited musicians during beta',
+      'Unlimited saved gigs during beta',
       'Core setlist builder',
       'Special request tracking',
       'Shareable gig view',
+      'Paid storage and pro tools will come later',
     ],
   },
   pro: {
     name: 'Pro',
-    summary: '$2.99/month for active working bands',
+    summary: 'Coming after beta',
     includes: [
       'Unlimited songs',
       'Unlimited musicians',
@@ -457,8 +457,8 @@ const BAND_TIER_DETAILS: Record<
       'Special request tracking',
       'Shareable gig view',
       'Advanced collaboration tools',
-      'Priority support',
-      'Team billing management',
+      'Expanded storage',
+      'Priority workflow features',
     ],
   },
 }
@@ -754,7 +754,16 @@ function App() {
     'hidden',
   )
   const [showSharedInstrumentPrompt, setShowSharedInstrumentPrompt] = useState(false)
-  const [sharedSignupReturnView, setSharedSignupReturnView] = useState<SharedPlaylistView | null>(null)
+  const [sharedSignupReturnView, setSharedSignupReturnView] = useState<SharedPlaylistView | null>(() => {
+    try {
+      const raw = localStorage.getItem(SHARED_SIGNUP_RETURN_KEY)
+      return raw ? (JSON.parse(raw) as SharedPlaylistView) : null
+    } catch {
+      return null
+    }
+  })
+  const [sharedImportSaving, setSharedImportSaving] = useState(false)
+  const [sharedImportStatus, setSharedImportStatus] = useState('')
   const [sharedWelcomeCompletedSetlistId, setSharedWelcomeCompletedSetlistId] = useState<string | null>(
     null,
   )
@@ -940,6 +949,7 @@ function App() {
   const sharedPlaylistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
   const playlistDrawerTouchStartYRef = useRef<number | null>(null)
   const sharedPlaylistDrawerTouchStartYRef = useRef<number | null>(null)
+  const sharedPlaylistDrawerTouchStartXRef = useRef<number | null>(null)
   const playlistDrawerAutoCloseTimerRef = useRef<number | null>(null)
   const sharedPlaylistDrawerAutoCloseTimerRef = useRef<number | null>(null)
   const setlistSectionSaveInProgressRef = useRef(false)
@@ -1640,90 +1650,9 @@ function App() {
   const isSelectedDowngrade = Boolean(
     selectedTier && tierRank[selectedTier] < tierRank[activeBandTier],
   )
-  const canAccessBillingControls = isAdmin && Boolean(activeBandId) && Boolean(authUserId)
-  const lemonSqueezyProCheckoutUrl = String(import.meta.env.VITE_LEMONSQUEEZY_PRO_CHECKOUT_URL ?? '').trim()
-  const lemonSqueezyCustomerPortalUrl = String(import.meta.env.VITE_LEMONSQUEEZY_CUSTOMER_PORTAL_URL ?? '').trim()
   const canCreateSongs = useCallback((_nextSongCount = 1) => true, [])
-  const canCreateMusicians = useCallback((nextMusicianCount = 1) => {
-    if (activeBandTier === 'pro') return true
-    const projectedCount = appState.musicians.length + Math.max(1, nextMusicianCount)
-    if (projectedCount <= FREE_MUSICIAN_LIMIT) return true
-    setShowTierLimitModal({
-      resource: 'musicians',
-      message: `Free accounts can save up to ${FREE_MUSICIAN_LIMIT} musicians. Upgrade to Pro for unlimited musicians.`,
-    })
-    return false
-  }, [activeBandTier, appState.musicians.length])
-  const canCreateGigs = useCallback(() => {
-    if (activeBandTier === 'pro') return true
-    if (appState.setlists.length < FREE_GIG_LIMIT) return true
-    setShowTierLimitModal({
-      resource: 'gigs',
-      message: `Free accounts can save up to ${FREE_GIG_LIMIT} gigs. Upgrade to Pro for unlimited gigs.`,
-    })
-    return false
-  }, [activeBandTier, appState.setlists.length])
-  const openLemonSqueezyUrl = useCallback((url: string, targetTier?: BandTier) => {
-    if (!url) {
-      setAccountSaveStatus('Lemon Squeezy checkout is not configured yet. Add the Pro checkout link in your environment.')
-      return
-    }
-    try {
-      const resolved = new URL(url)
-      if (activeBandId) {
-        resolved.searchParams.set('checkout[custom][band_id]', activeBandId)
-      }
-      if (authUserId) resolved.searchParams.set('checkout[custom][user_id]', authUserId)
-      if (authUserEmail) resolved.searchParams.set('checkout[email]', authUserEmail)
-      if (targetTier && targetTier !== 'free') {
-        resolved.searchParams.set('checkout[custom][requested_tier]', targetTier)
-      }
-      window.open(resolved.toString(), '_blank', 'noopener,noreferrer')
-      setAccountSaveStatus(
-        targetTier && targetTier !== 'free' ? 'Opening Pro checkout...' : 'Opening billing portal...',
-      )
-    } catch {
-      setAccountSaveStatus('Billing URL is invalid. Check your Lemon Squeezy URL environment variables.')
-    }
-  }, [activeBandId, authUserEmail, authUserId])
-  const openLemonSqueezyCheckout = useCallback((targetTier: BandTier) => {
-    if (targetTier === 'free') return
-    if (isBillingTestAccount) {
-      setAccountSaveStatus('Testing account: Pro access is enabled without billing.')
-      return
-    }
-    if (!activeBandId) {
-      setAccountSaveStatus('Select or create a band before upgrading.')
-      return
-    }
-    if (!canAccessBillingControls) {
-      setAccountSaveStatus('Only band admins can change billing plans.')
-      return
-    }
-    openLemonSqueezyUrl(lemonSqueezyProCheckoutUrl, targetTier)
-  }, [
-    activeBandId,
-    canAccessBillingControls,
-    isBillingTestAccount,
-    lemonSqueezyProCheckoutUrl,
-    openLemonSqueezyUrl,
-  ])
-  const openLemonSqueezyPortal = useCallback(() => {
-    if (!activeBandId) {
-      setAccountSaveStatus('Select or create a band before managing billing.')
-      return
-    }
-    if (!canAccessBillingControls) {
-      setAccountSaveStatus('Only band admins can manage billing.')
-      return
-    }
-    openLemonSqueezyUrl(lemonSqueezyCustomerPortalUrl)
-  }, [
-    activeBandId,
-    canAccessBillingControls,
-    lemonSqueezyCustomerPortalUrl,
-    openLemonSqueezyUrl,
-  ])
+  const canCreateMusicians = useCallback((_nextMusicianCount = 1) => true, [])
+  const canCreateGigs = useCallback(() => true, [])
   const isSpecialSectionHidden = currentSetlist
     ? Boolean(gigHiddenSpecialSection[currentSetlist.id])
     : false
@@ -3682,6 +3611,7 @@ function App() {
       }, 6000)
     }
     sharedPlaylistDrawerTouchStartYRef.current = event.touches[0]?.clientY ?? null
+    sharedPlaylistDrawerTouchStartXRef.current = event.touches[0]?.clientX ?? null
   }
   const handleSharedPlaylistDrawerTouchMove = () => {
     if (!sharedPlaylistDrawerOverlay) return
@@ -3704,18 +3634,25 @@ function App() {
     }, 6000)
   }
   const handleSharedPlaylistDrawerTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    const startX = sharedPlaylistDrawerTouchStartXRef.current
     const startY = sharedPlaylistDrawerTouchStartYRef.current
+    sharedPlaylistDrawerTouchStartXRef.current = null
     sharedPlaylistDrawerTouchStartYRef.current = null
-    if (startY === null) return
-    const endY = event.changedTouches[0]?.clientY ?? startY
-    const deltaY = endY - startY
-    if (deltaY <= -70) {
+    if (startX === null) return
+    const endX = event.changedTouches[0]?.clientX ?? startX
+    const deltaX = endX - startX
+    if (deltaX <= -55) {
       setSharedPlaylistDrawerOverlay(true)
       return
     }
-    if (deltaY >= 90) {
+    if (deltaX >= 55) {
       setSharedPlaylistDrawerOverlay(false)
+      return
     }
+    if (startY === null) return
+    const endY = event.changedTouches[0]?.clientY ?? startY
+    const deltaY = endY - startY
+    if (Math.abs(deltaY) > 90) setSharedPlaylistDrawerOverlay(false)
   }
   const movePlaylistBy = (delta: number) => {
     if (!visiblePlaylistEntries.length) return
@@ -6726,25 +6663,26 @@ function App() {
     }))
     if (supabase) {
       runSupabase(
-        supabase.from('SetlistSongs').insert(withBandId({
-          id,
-          title: draft.title,
-          artist: draft.artist || null,
-          audio_url: draft.audioUrl || null,
-          original_key: draft.originalKey || null,
-        })),
-      )
-      if (draft.tags.length) {
-        runSupabase(
-          supabase.from('SetlistSongTags').insert(
+        (async () => {
+          const { error: songInsertError } = await supabase.from('SetlistSongs').insert(withBandId({
+            id,
+            title: draft.title,
+            artist: draft.artist || null,
+            audio_url: draft.audioUrl || null,
+            original_key: draft.originalKey || null,
+          }))
+          if (songInsertError) return { error: songInsertError }
+          if (!draft.tags.length) return { error: null }
+          const { error: tagInsertError } = await supabase.from('SetlistSongTags').insert(
             draft.tags.map((tag) => withBandId({
               id: createId(),
               song_id: id,
               tag,
             })),
-          ),
-        )
-      }
+          )
+          return { error: tagInsertError }
+        })(),
+      )
     }
     if (openEditor) {
       openSongEditor(createdSong)
@@ -8668,6 +8606,11 @@ function App() {
   const enterSignupFromSharedView = () => {
     if (!sharedPlaylistView) return
     setSharedSignupReturnView(sharedPlaylistView)
+    try {
+      localStorage.setItem(SHARED_SIGNUP_RETURN_KEY, JSON.stringify(sharedPlaylistView))
+    } catch {
+      // Non-critical. The in-memory return view still works for this session.
+    }
     clearSharedPlaylistQueryParams()
     setSharedPlaylistView(null)
     setSharedWelcomeStep('hidden')
@@ -8680,11 +8623,273 @@ function App() {
     setSharedPlaylistError(null)
     setSharedPlaylistView(sharedSignupReturnView)
     setSharedSignupReturnView(null)
+    localStorage.removeItem(SHARED_SIGNUP_RETURN_KEY)
     if (skipWelcome) {
       setSharedWelcomeCompletedSetlistId(sharedSignupReturnView.setlistId)
       setSharedWelcomeStep('hidden')
     } else {
       setSharedWelcomeStep('cta')
+    }
+  }
+
+  const saveSharedGigToAccount = async () => {
+    const sourceView = sharedSignupReturnView
+    if (!sourceView || !supabase || !authUserId) return
+    setSharedImportSaving(true)
+    setSharedImportStatus('')
+    try {
+      let targetBandId = activeBandId
+      if (!targetBandId) {
+        const fallbackBandName = authUserEmail?.split('@')[0]?.trim() || 'My'
+        const { data: createdBand, error: bandError } = await supabase
+          .from('bands')
+          .insert({ name: `${fallbackBandName} Setlists`, created_by: authUserId })
+          .select('*')
+          .single()
+        if (bandError || !createdBand) {
+          setSharedImportStatus(`Could not create your setlist workspace: ${bandError?.message ?? 'Unknown error'}`)
+          return
+        }
+        const { error: membershipError } = await supabase.from('band_memberships').insert({
+          band_id: createdBand.id,
+          user_id: authUserId,
+          role: 'admin',
+          status: 'active',
+        })
+        if (membershipError) {
+          setSharedImportStatus(`Could not finish your workspace setup: ${membershipError.message}`)
+          return
+        }
+        targetBandId = createdBand.id
+        setBands((prev) => [{ id: createdBand.id, name: createdBand.name, createdBy: createdBand.created_by }, ...prev])
+        setMemberships((prev) => [
+          {
+            id: crypto.randomUUID(),
+            bandId: createdBand.id,
+            userId: authUserId,
+            role: 'admin',
+            status: 'active',
+          },
+          ...prev,
+        ])
+        setActiveBandId(createdBand.id)
+        localStorage.setItem(ACTIVE_BAND_KEY, createdBand.id)
+        setRole('admin')
+        setShowCreateBandOnboarding(false)
+      }
+
+      const withTargetBandId = <T extends Record<string, unknown>>(payload: T): T & { band_id: string } => ({
+        ...payload,
+        band_id: targetBandId,
+      })
+      const sourceEntries = sourceView.allEntries?.length ? sourceView.allEntries : sourceView.entries
+      const songRowsByKey = new Map<
+        string,
+        {
+          id: string
+          title: string
+          artist: string
+          audioUrl: string
+          tags: string[]
+          singers: string[]
+          keys: string[]
+        }
+      >()
+      sourceEntries.forEach((entry) => {
+        const title = entry.title.trim()
+        if (!title) return
+        const artist = (entry.artist ?? '').trim()
+        const key = `${title.toLowerCase()}|${artist.toLowerCase()}`
+        const existing = songRowsByKey.get(key)
+        if (existing) {
+          existing.tags = normalizeTagList([...existing.tags, ...(entry.tags ?? [])])
+          existing.singers = normalizeTagList([...existing.singers, ...(entry.assignmentSingers ?? [])])
+          existing.keys = normalizeTagList([...existing.keys, ...(entry.assignmentKeys ?? [])])
+          if (!existing.audioUrl && entry.audioUrl) existing.audioUrl = entry.audioUrl
+          return
+        }
+        songRowsByKey.set(key, {
+          id: createId(),
+          title,
+          artist,
+          audioUrl: (entry.audioUrl ?? '').trim(),
+          tags: normalizeTagList(entry.tags ?? []),
+          singers: normalizeTagList(entry.assignmentSingers ?? []),
+          keys: normalizeTagList(entry.assignmentKeys ?? []),
+        })
+      })
+      const savedSongs = [...songRowsByKey.values()]
+      if (!savedSongs.length) {
+        setSharedImportStatus('This shared gig does not have songs to save yet.')
+        return
+      }
+
+      const newGigId = createId()
+      const newMusicians = normalizeSharedMusicians(sourceView.musicians ?? []).map((musician) => ({
+        ...musician,
+        id: createId(),
+      }))
+      const { error: gigError } = await supabase.from('SetlistGigs').insert(withTargetBandId({
+        id: newGigId,
+        gig_name: sourceView.gigName || 'Shared Gig',
+        gig_date: sourceView.date || new Date().toISOString().slice(0, 10),
+        venue_address: sourceView.venueAddress ?? '',
+      }))
+      if (gigError) {
+        setSharedImportStatus(`Could not save the gig: ${gigError.message}`)
+        return
+      }
+      const { error: songError } = await supabase.from('SetlistSongs').insert(
+        savedSongs.map((song) => withTargetBandId({
+          id: song.id,
+          title: song.title,
+          artist: song.artist || null,
+          audio_url: song.audioUrl || null,
+          original_key: song.keys[0] || null,
+        })),
+      )
+      if (songError) {
+        setSharedImportStatus(`Could not save the songs: ${songError.message}`)
+        return
+      }
+      const { error: gigSongError } = await supabase.from('SetlistGigSongs').insert(
+        savedSongs.map((song, index) => withTargetBandId({
+          id: createId(),
+          gig_id: newGigId,
+          song_id: song.id,
+          sort_order: index,
+        })),
+      )
+      if (gigSongError) {
+        setSharedImportStatus(`Could not attach songs to the gig: ${gigSongError.message}`)
+        return
+      }
+      const tagRows = savedSongs.flatMap((song) => {
+        const sections = normalizeTagList(song.tags.filter((tag) => isSetlistTypeTag(tag)))
+        const regularTags = normalizeTagList(song.tags.filter((tag) => !tag.startsWith(GIG_SECTION_TAG_PREFIX)))
+        return [
+          ...regularTags.map((tag) => ({
+            id: createId(),
+            song_id: song.id,
+            tag,
+          })),
+          ...sections.slice(0, 1).map((section) => ({
+            id: createId(),
+            song_id: song.id,
+            tag: makeGigSectionTag(newGigId, section),
+          })),
+        ]
+      })
+      if (tagRows.length) {
+        const { error: tagError } = await supabase.from('SetlistSongTags').insert(
+          tagRows.map((row) => withTargetBandId(row)),
+        )
+        if (tagError) {
+          setSharedImportStatus(`Could not save setlist sections: ${tagError.message}`)
+          return
+        }
+      }
+      const singerKeyRows = savedSongs.flatMap((song) => {
+        const singers = song.singers.length ? song.singers : ['']
+        return singers
+          .map((singer, index) => ({
+            id: createId(),
+            gig_id: newGigId,
+            song_id: song.id,
+            singer_name: singer || 'TBD',
+            gig_key: song.keys[index] ?? song.keys[0] ?? 'TBD',
+          }))
+          .filter((row) => row.singer_name.trim())
+      })
+      if (singerKeyRows.length) {
+        const { error: singerKeyError } = await supabase.from('SetlistGigSingerKeys').insert(
+          singerKeyRows.map((row) => withTargetBandId(row)),
+        )
+        if (singerKeyError) {
+          setSharedImportStatus(`Could not save singer/key notes: ${singerKeyError.message}`)
+          return
+        }
+      }
+      if (newMusicians.length) {
+        const { error: musicianError } = await supabase.from('SetlistMusicians').insert(
+          newMusicians.map((musician) => withTargetBandId({
+            id: musician.id,
+            name: musician.name,
+            roster: musician.roster ?? 'sub',
+            email: musician.email ?? null,
+            phone: musician.phone ?? null,
+            instruments: musician.instruments ?? [],
+            singer: musician.singer ?? null,
+          })),
+        )
+        if (musicianError) {
+          setSharedImportStatus(`The setlist saved, but musician contacts could not be copied: ${musicianError.message}`)
+        } else {
+          const { error: gigMusicianError } = await supabase.from('SetlistGigMusicians').insert(
+            newMusicians.map((musician) => withTargetBandId({
+              id: createId(),
+              gig_id: newGigId,
+              musician_id: musician.id,
+              status: 'active',
+              note: null,
+            })),
+          )
+          if (gigMusicianError) {
+            setSharedImportStatus(`The setlist saved, but gig musician assignments could not be copied: ${gigMusicianError.message}`)
+          }
+        }
+      }
+
+      const importedSetlist: Setlist = {
+        id: newGigId,
+        gigName: sourceView.gigName || 'Shared Gig',
+        date: sourceView.date || new Date().toISOString().slice(0, 10),
+        venueAddress: sourceView.venueAddress ?? '',
+        songIds: savedSongs.map((song) => song.id),
+      }
+      const importedSongs: Song[] = savedSongs.map((song) => ({
+        id: song.id,
+        title: song.title,
+        artist: song.artist,
+        originalKey: song.keys[0] ?? '',
+        youtubeUrl: song.audioUrl,
+        tags: song.tags,
+        keys: song.singers.map((singer, index) => ({
+          singer,
+          defaultKey: song.keys[index] ?? song.keys[0] ?? 'TBD',
+          gigOverrides: { [newGigId]: song.keys[index] ?? song.keys[0] ?? 'TBD' },
+        })),
+        specialPlayedCount: 0,
+      }))
+      commitChange('Save shared gig', (prev) => ({
+        ...prev,
+        setlists: [importedSetlist, ...prev.setlists],
+        songs: [...importedSongs, ...prev.songs],
+        musicians: [...newMusicians, ...prev.musicians],
+        gigMusicians: [
+          ...newMusicians.map((musician) => ({
+            gigId: newGigId,
+            musicianId: musician.id,
+            status: 'active' as const,
+          })),
+          ...prev.gigMusicians,
+        ],
+        tagsCatalog: normalizeTagList([
+          ...prev.tagsCatalog,
+          ...savedSongs.flatMap((song) => song.tags),
+        ]),
+      }))
+      setSelectedSetlistId(newGigId)
+      setActiveGigId(newGigId)
+      setSharedSignupReturnView(null)
+      localStorage.removeItem(SHARED_SIGNUP_RETURN_KEY)
+      setSharedImportStatus('Saved to your account.')
+      setScreen('setlists')
+    } catch (error) {
+      console.error('Save shared gig failed:', error)
+      setSharedImportStatus('Could not save this shared gig. Please try again.')
+    } finally {
+      setSharedImportSaving(false)
     }
   }
 
@@ -10217,7 +10422,11 @@ function App() {
                   </div>
                 ) : (
                   <>
-                    <div className="relative order-1 mt-3 flex flex-col overflow-visible md:order-2 md:mt-4 md:flex-1 md:flex-row md:gap-4 md:overflow-hidden">
+                    <div
+                      className="relative order-1 mt-3 flex flex-col overflow-visible md:order-2 md:mt-4 md:flex-1 md:flex-row md:gap-4 md:overflow-hidden"
+                      onTouchStart={handleSharedPlaylistDrawerTouchStart}
+                      onTouchEnd={handleSharedPlaylistDrawerTouchEnd}
+                    >
                       <div
                         ref={sharedPlaylistPlayerBlockRef}
                         className={`sticky top-3 z-10 flex min-h-0 w-full flex-col md:relative md:top-auto md:min-h-0 md:flex-1 ${
@@ -10354,10 +10563,29 @@ function App() {
                         </button>
                       </div>
 
+                      <button
+                        type="button"
+                        className="fixed right-0 top-1/2 z-[330] flex -translate-y-1/2 items-center gap-1 rounded-l-2xl border border-r-0 border-teal-300/50 bg-slate-900/95 px-2.5 py-3 text-xs font-semibold uppercase tracking-wide text-teal-100 shadow-2xl backdrop-blur md:hidden"
+                        onClick={() => setSharedPlaylistDrawerOverlay(true)}
+                        aria-label="Open song list"
+                      >
+                        <span className="text-lg leading-none" aria-hidden>
+                          ☰
+                        </span>
+                        Songs
+                      </button>
+                      {sharedPlaylistDrawerOverlay && (
+                        <button
+                          type="button"
+                          className="fixed inset-0 z-[325] bg-slate-950/45 backdrop-blur-[1px] md:hidden"
+                          onClick={() => setSharedPlaylistDrawerOverlay(false)}
+                          aria-label="Close song list"
+                        />
+                      )}
                         <div
-                          className={`relative order-3 z-20 mt-3 flex max-h-none flex-col overflow-hidden rounded-3xl border border-teal-300/30 bg-slate-900 shadow-2xl transition-all duration-200 md:order-none md:mt-0 md:h-full md:w-[320px] md:shrink-0 md:rounded-2xl md:shadow-xl lg:w-[340px] ${
-                            widePlaylistUi ? 'md:static' : 'md:min-h-0'
-                          }`}
+                          className={`fixed bottom-[calc(6.5rem+env(safe-area-inset-bottom))] right-0 top-0 z-[330] order-3 flex w-[74vw] max-w-sm flex-col overflow-hidden rounded-l-3xl border border-r-0 border-teal-300/40 bg-slate-900 shadow-2xl transition-transform duration-200 md:static md:order-none md:mt-0 md:h-full md:w-[320px] md:max-w-none md:shrink-0 md:translate-x-0 md:rounded-2xl md:border-r md:shadow-xl lg:w-[340px] ${
+                            sharedPlaylistDrawerOverlay ? 'translate-x-0' : 'translate-x-full md:translate-x-0'
+                          } ${widePlaylistUi ? 'md:static' : 'md:min-h-0'}`}
                           onTouchStart={handleSharedPlaylistDrawerTouchStart}
                           onTouchMove={handleSharedPlaylistDrawerTouchMove}
                           onTouchEnd={handleSharedPlaylistDrawerTouchEnd}
@@ -10365,8 +10593,20 @@ function App() {
                           <div className="flex shrink-0 items-center justify-center py-2 md:hidden">
                             <div className="h-1 w-12 rounded-full bg-white/25" />
                           </div>
+                          <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 pb-3 md:hidden">
+                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-teal-200">
+                              Song List
+                            </div>
+                            <button
+                              type="button"
+                              className="rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-slate-200"
+                              onClick={() => setSharedPlaylistDrawerOverlay(false)}
+                            >
+                              Close
+                            </button>
+                          </div>
                           <div
-                            className="max-h-[42dvh] min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 pb-2 md:h-full md:max-h-none"
+                            className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 pb-2 md:h-full md:max-h-none"
                             onScroll={handleSharedPlaylistDrawerScroll}
                           >
                             <div className="sticky top-0 z-10 mb-2 bg-slate-900/95 pb-2 pt-1 backdrop-blur">
@@ -10768,8 +11008,25 @@ function App() {
                 <div className="animate-[fade-in_320ms_ease-out]">
                   <h3 className="text-xl font-semibold">Learn More</h3>
                   <p className="mt-3 text-sm text-slate-300">
-                    Setlist Connect helps band leaders and musicians stay aligned with live setlists,
-                    Up Next cues, audio links, charts, and lyrics in one mobile-friendly workspace.
+                    Setlist Connect gives musicians one clean place to see the gig, the setlist, the
+                    rehearsal audio, song notes, singer assignments, keys, charts, lyrics, and contact info.
+                  </p>
+                  <div className="mt-4 grid gap-2 text-left text-sm">
+                    {[
+                      ['Know the show fast', 'Open the shared gig link and see the date, venue, musicians, sections, and song order without digging through texts.'],
+                      ['Practice smarter', 'Tap a song to hear the saved rehearsal track, then filter by singer so each vocalist can focus on their own material.'],
+                      ['Show-ready details', 'Keys, singers, special requests, charts, and lyrics live with the setlist so the band is working from the same information.'],
+                      ['Keep the gig', 'Create a free account and save this setlist to your own My Gigs view, even if you are not an admin for the band.'],
+                    ].map(([title, detail]) => (
+                      <div key={title} className="rounded-2xl border border-white/10 bg-slate-950/45 p-3">
+                        <div className="font-semibold text-slate-100">{title}</div>
+                        <div className="mt-1 text-xs leading-relaxed text-slate-400">{detail}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-4 rounded-2xl border border-teal-300/25 bg-teal-400/10 p-3 text-xs leading-relaxed text-teal-100">
+                    Beta note: early accounts are free while Setlist Connect is being refined. Paid
+                    plans for expanded storage and advanced tools will come later.
                   </p>
                   <div className="mt-4 flex flex-wrap justify-center gap-2">
                     <button
@@ -12703,18 +12960,22 @@ function App() {
                 </div>
 
                 <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
-                  <div className="text-[10px] uppercase tracking-wide text-slate-400">Paid tiers</div>
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">Beta access</div>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-300">
+                    Setlist Connect is free during beta while the app is being tightened up for real gigs.
+                    Paid plans will come later for expanded storage, advanced collaboration, and pro workflow tools.
+                  </p>
                   <div className="mt-2 grid gap-2 md:grid-cols-2">
                     {([
                       {
                         id: 'free',
-                        name: 'Free',
-                        detail: `${FREE_MUSICIAN_LIMIT} musicians, ${FREE_GIG_LIMIT} gigs`,
+                        name: 'Beta Free',
+                        detail: 'Unlimited testing during beta',
                       },
                       {
                         id: 'pro',
                         name: 'Pro',
-                        detail: '$2.99/month for unlimited musicians and gigs',
+                        detail: 'Coming after beta',
                       },
                     ] as const).map((tier) => (
                       <button
@@ -12742,7 +13003,7 @@ function App() {
                     ))}
                   </div>
                   <div className="mt-3 text-xs text-slate-400">
-                    Current plan: <span className="font-semibold text-slate-200">{activeBandTier.toUpperCase()}</span>
+                    Current access: <span className="font-semibold text-slate-200">BETA FREE</span>
                     {isBillingTestAccount ? (
                       <span className="ml-2 text-teal-200">(testing account)</span>
                     ) : null}
@@ -12760,15 +13021,14 @@ function App() {
                   )}
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
-                      className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => openLemonSqueezyPortal()}
-                      disabled={!canAccessBillingControls}
+                      className="rounded-xl border border-teal-300/30 bg-teal-400/10 px-4 py-2 text-sm font-semibold text-teal-100"
+                      disabled
                     >
-                      Manage billing
+                      Purchases paused during beta
                     </button>
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
-                    <span>Billing uses Lemon Squeezy checkout.</span>
+                    <span>No payment is required during beta.</span>
                     <a className="font-semibold text-slate-300 hover:text-teal-200" href="/terms.html" target="_blank">
                       Terms
                     </a>
@@ -13727,6 +13987,59 @@ function App() {
         </div>
       )}
 
+      {authUserId && sharedSignupReturnView && (
+        <div
+          className="fixed inset-0 z-[112] flex items-center justify-center bg-slate-950/85 px-4 py-6"
+          onClick={() => {
+            if (sharedImportSaving) return
+            setSharedSignupReturnView(null)
+            localStorage.removeItem(SHARED_SIGNUP_RETURN_KEY)
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900 p-5 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p className="text-[10px] uppercase tracking-[0.24em] text-teal-300/80">Shared gig</p>
+            <h3 className="mt-2 text-2xl font-semibold">Save this setlist?</h3>
+            <p className="mt-2 text-sm leading-relaxed text-slate-300">
+              Add {sharedSignupReturnView.gigName || 'this gig'} to your account so it appears in My Gigs.
+              This copies the setlist, audio links, sections, musicians, singers, and keys into your own workspace.
+            </p>
+            <div className="mt-4 rounded-2xl border border-teal-300/25 bg-teal-400/10 p-3 text-xs leading-relaxed text-teal-100">
+              Beta accounts are free right now. You can save gigs during the beta without upgrading.
+            </div>
+            {sharedImportStatus && (
+              <div className="mt-3 rounded-2xl border border-white/10 bg-slate-950/50 px-3 py-2 text-xs text-slate-200">
+                {sharedImportStatus}
+              </div>
+            )}
+            <div className="mt-5 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="flex-1 rounded-xl bg-teal-400/90 px-4 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void saveSharedGigToAccount()}
+                disabled={sharedImportSaving}
+              >
+                {sharedImportSaving ? 'Saving...' : 'Save to My Gigs'}
+              </button>
+              <button
+                type="button"
+                className="rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => {
+                  if (sharedImportSaving) return
+                  setSharedSignupReturnView(null)
+                  localStorage.removeItem(SHARED_SIGNUP_RETURN_KEY)
+                }}
+                disabled={sharedImportSaving}
+              >
+                Not now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showDeleteGigConfirm && (
         <div
           className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
@@ -13813,36 +14126,28 @@ function App() {
                   className="rounded-xl border border-teal-300/40 bg-teal-400/10 px-4 py-2 text-sm font-semibold text-teal-100"
                   disabled
                 >
-                  Current plan
+                  Current beta access
                 </button>
               ) : isSelectedUpgrade && selectedTier && selectedTier !== 'free' ? (
                 <button
                   type="button"
                   className="rounded-xl border border-teal-300/40 bg-teal-400/10 px-4 py-2 text-sm font-semibold text-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={() => {
-                    openLemonSqueezyCheckout(selectedTier)
-                    setShowTierDetailsModal(null)
-                  }}
-                  disabled={!canAccessBillingControls}
+                  disabled
                 >
-                  Upgrade to Pro - $2.99/month
+                  Coming after beta
                 </button>
               ) : isSelectedDowngrade ? (
                 <button
                   type="button"
                   className="rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold text-slate-100"
-                  onClick={() => {
-                    openLemonSqueezyPortal()
-                    setShowTierDetailsModal(null)
-                  }}
-                  disabled={!canAccessBillingControls}
+                  disabled
                 >
-                  {selectedTier === 'free' ? 'Downgrade to Free' : `Switch to ${selectedTierDetails.name}`} in billing
+                  Beta access is already free
                 </button>
               ) : null}
-              {!canAccessBillingControls && (
-                <span className="text-xs text-slate-400">Only band admins can change billing plans.</span>
-              )}
+              <span className="text-xs text-slate-400">
+                Purchases and plan limits are paused while Setlist Connect is in beta.
+              </span>
             </div>
           </div>
         </div>
@@ -13857,27 +14162,19 @@ function App() {
             className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900 p-5"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold">Free plan limit reached</h3>
-            <p className="mt-2 text-sm text-slate-300">{showTierLimitModal.message}</p>
+            <h3 className="text-lg font-semibold">Beta access is free</h3>
+            <p className="mt-2 text-sm text-slate-300">
+              Plan limits are paused during beta, so you can keep testing with more gigs and musicians.
+            </p>
             <p className="mt-2 text-xs text-slate-400">
-              Upgrade to Pro for $2.99/month to remove musician and gig limits.
+              Paid storage and pro features will come later after the core app flow is ready.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                className="rounded-xl border border-teal-300/40 bg-teal-400/10 px-4 py-2 text-sm font-semibold text-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => {
-                  setShowTierLimitModal(null)
-                  openLemonSqueezyCheckout('pro')
-                }}
-                disabled={!canAccessBillingControls}
-              >
-                Upgrade to Pro
-              </button>
               <button
                 className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
                 onClick={() => setShowTierLimitModal(null)}
               >
-                Not now
+                Got it
               </button>
             </div>
           </div>

@@ -3811,12 +3811,22 @@ function App() {
   const getGigSingerAssignments = (songId: string, gigId: string) => {
     const song = appState.songs.find((item) => item.id === songId)
     if (!song) return []
-    return song.keys
+    const savedAssignments = song.keys
       .map((key) => ({
         singer: key.singer,
         key: key.gigOverrides[gigId] ?? '',
       }))
       .filter((entry) => entry.key)
+    if (savedAssignments.length) return savedAssignments
+    return appState.specialRequests
+      .filter((request) => request.gigId === gigId && request.songId === songId && !request.djOnly)
+      .flatMap((request) =>
+        normalizeTagList(request.singers ?? []).map((singer) => ({
+          singer,
+          key: request.key || '',
+        })),
+      )
+      .filter((entry) => entry.singer && entry.key)
   }
 
   const getPlaylistAssignmentText = (entry: PlaylistEntry) => {
@@ -7051,6 +7061,37 @@ function App() {
     }
   }
 
+  const syncSpecialRequestSingerKeys = async (
+    gigId: string,
+    songId: string | undefined,
+    singers: string[],
+    keyValue: string,
+  ) => {
+    if (!supabase || !songId) return { error: null }
+    const deleteQuery = supabase
+      .from('SetlistGigSingerKeys')
+      .delete()
+      .eq('gig_id', gigId)
+      .eq('song_id', songId)
+    const { error: deleteError } = activeBandId
+      ? await deleteQuery.eq('band_id', activeBandId)
+      : await deleteQuery
+    if (deleteError) return { error: deleteError }
+    const normalizedSingers = normalizeTagList(singers)
+    const normalizedKey = keyValue.trim()
+    if (!normalizedSingers.length || !normalizedKey) return { error: null }
+    const { error: insertError } = await supabase.from('SetlistGigSingerKeys').insert(
+      normalizedSingers.map((singer) => withBandId({
+        id: createId(),
+        gig_id: gigId,
+        song_id: songId,
+        singer_name: singer,
+        gig_key: normalizedKey,
+      })),
+    )
+    return { error: insertError }
+  }
+
   const updateSpecialRequest = () => {
     if (!currentSetlist || !editingSpecialRequestId) return
     const existingRequest =
@@ -7198,7 +7239,13 @@ function App() {
                 }),
               )
               .eq('id', editingSpecialRequestId)
-            return { error: updateSpecialError }
+            if (updateSpecialError) return { error: updateSpecialError }
+            return syncSpecialRequestSingerKeys(
+              currentSetlist.id,
+              nextSongId ?? existingRequest?.songId,
+              normalizedSingers,
+              normalizedKey,
+            )
           })(),
         )
       }
@@ -7423,7 +7470,13 @@ function App() {
               external_audio_url: pendingSpecialExternalUrl.trim() || null,
               sort_order: getOrderedSpecialRequests(currentSetlist.id).length,
             }))
-          return { error: requestInsertError }
+          if (requestInsertError) return { error: requestInsertError }
+          return syncSpecialRequestSingerKeys(
+            currentSetlist.id,
+            createdSongId,
+            normalizedSingers,
+            normalizedKey,
+          )
         })(),
       )
     }

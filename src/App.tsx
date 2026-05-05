@@ -21,6 +21,16 @@ const isAdminMembershipRole = (value?: string | null) => {
   const normalized = (value ?? '').trim().toLowerCase()
   return normalized === 'admin' || normalized === 'owner'
 }
+const getPreferredMembership = (memberships: BandMembership[], bandId: string) => {
+  const activeMemberships = memberships.filter(
+    (membership) => membership.bandId === bandId && membership.status === 'active',
+  )
+  return (
+    activeMemberships.find((membership) => isAdminMembershipRole(membership.role)) ??
+    activeMemberships[0] ??
+    null
+  )
+}
 type Screen = 'setlists' | 'builder' | 'song' | 'musicians' | 'account'
 const isMainNavScreen = (
   value: string,
@@ -4356,7 +4366,7 @@ function App() {
       ? storedBandId
       : mappedBands[0]?.id ?? ''
     setActiveBandId(resolvedBandId)
-    const membership = mappedMemberships.find((item) => item.bandId === resolvedBandId)
+    const membership = getPreferredMembership(mappedMemberships, resolvedBandId)
     setRole(isAdminMembershipRole(membership?.role) ? 'admin' : 'user')
     return mappedBands.length
   }, [])
@@ -8551,9 +8561,7 @@ function App() {
   useEffect(() => {
     if (!activeBandId) return
     localStorage.setItem(ACTIVE_BAND_KEY, activeBandId)
-    const membership = memberships.find(
-      (item) => item.bandId === activeBandId && item.status === 'active',
-    )
+    const membership = getPreferredMembership(memberships, activeBandId)
     setRole(isAdminMembershipRole(membership?.role) ? 'admin' : membership ? 'user' : null)
   }, [activeBandId, memberships])
 

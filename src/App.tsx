@@ -10065,7 +10065,7 @@ function App() {
             {sharedPlaylistView && (
               <>
                 {sharedPublicTab === 'setlist' ? (
-                  <div className="mt-3 min-h-0 flex-1 overflow-visible rounded-none bg-transparent p-0 sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4">
+                  <div className="shared-public-setlist-scroll mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain rounded-none bg-transparent p-0 pb-[calc(2rem+env(safe-area-inset-bottom))] sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4 sm:pb-[calc(2rem+env(safe-area-inset-bottom))]">
                     {sharedDocsLoading && (
                       <div className="mb-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
                         Loading charts and lyrics...

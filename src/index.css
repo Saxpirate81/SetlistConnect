@@ -76,6 +76,17 @@ body {
   overscroll-behavior-y: contain;
 }
 
+.shared-public-setlist-scroll {
+  -webkit-overflow-scrolling: touch;
+  max-height: none;
+}
+
+@media (min-width: 901px) {
+  .shared-public-setlist-scroll {
+    max-height: calc(100dvh - 12.5rem);
+  }
+}
+
 #root,
 * {
   scrollbar-width: none;

@@ -35,4 +35,3 @@ Subscribe to events:
 ## Important
 
 When creating checkout sessions, include `band_id` in metadata (or `client_reference_id`) so the webhook can map the subscription to a band.
-

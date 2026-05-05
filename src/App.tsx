@@ -1631,9 +1631,8 @@ function App() {
     selectedTier && tierRank[selectedTier] < tierRank[activeBandTier],
   )
   const canAccessBillingControls = isAdmin && Boolean(activeBandId) && Boolean(authUserId)
-  const stripePortalUrl = String(import.meta.env.VITE_STRIPE_CUSTOMER_PORTAL_URL ?? '').trim()
-  const supabaseFunctionsBaseUrl = String(import.meta.env.VITE_SUPABASE_URL ?? '').replace(/\/$/, '')
-  const supabaseAnonPublicKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim()
+  const lemonSqueezyProCheckoutUrl = String(import.meta.env.VITE_LEMONSQUEEZY_PRO_CHECKOUT_URL ?? '').trim()
+  const lemonSqueezyCustomerPortalUrl = String(import.meta.env.VITE_LEMONSQUEEZY_CUSTOMER_PORTAL_URL ?? '').trim()
   const canCreateSongs = useCallback((_nextSongCount = 1) => true, [])
   const canCreateMusicians = useCallback((nextMusicianCount = 1) => {
     if (activeBandTier === 'pro') return true
@@ -1654,28 +1653,30 @@ function App() {
     })
     return false
   }, [activeBandTier, appState.setlists.length])
-  const openStripeUrl = useCallback((url: string, targetTier?: BandTier) => {
+  const openLemonSqueezyUrl = useCallback((url: string, targetTier?: BandTier) => {
     if (!url) {
-      setAccountSaveStatus('Billing URL is not configured yet. Add Stripe checkout URLs in your environment.')
+      setAccountSaveStatus('Lemon Squeezy checkout is not configured yet. Add the Pro checkout link in your environment.')
       return
     }
     try {
       const resolved = new URL(url)
       if (activeBandId) {
-        resolved.searchParams.set('band_id', activeBandId)
+        resolved.searchParams.set('checkout[custom][band_id]', activeBandId)
       }
+      if (authUserId) resolved.searchParams.set('checkout[custom][user_id]', authUserId)
+      if (authUserEmail) resolved.searchParams.set('checkout[email]', authUserEmail)
       if (targetTier && targetTier !== 'free') {
-        resolved.searchParams.set('requested_tier', targetTier)
+        resolved.searchParams.set('checkout[custom][requested_tier]', targetTier)
       }
       window.open(resolved.toString(), '_blank', 'noopener,noreferrer')
       setAccountSaveStatus(
         targetTier && targetTier !== 'free' ? 'Opening Pro checkout...' : 'Opening billing portal...',
       )
     } catch {
-      setAccountSaveStatus('Billing URL is invalid. Check your Stripe URL environment variables.')
+      setAccountSaveStatus('Billing URL is invalid. Check your Lemon Squeezy URL environment variables.')
     }
-  }, [activeBandId])
-  const openStripeCheckout = useCallback(async (targetTier: BandTier) => {
+  }, [activeBandId, authUserEmail, authUserId])
+  const openLemonSqueezyCheckout = useCallback((targetTier: BandTier) => {
     if (targetTier === 'free') return
     if (isBillingTestAccount) {
       setAccountSaveStatus('Testing account: Pro access is enabled without billing.')
@@ -1689,52 +1690,15 @@ function App() {
       setAccountSaveStatus('Only band admins can change billing plans.')
       return
     }
-    if (!supabase || !supabaseFunctionsBaseUrl || !supabaseAnonPublicKey) {
-      setAccountSaveStatus('Supabase billing endpoint is not configured. Please contact support.')
-      return
-    }
-    const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
-    if (sessionError || !sessionData.session?.access_token) {
-      setAccountSaveStatus('Your login session expired. Please sign out and log back in to upgrade.')
-      return
-    }
-    setAccountSaveStatus('Opening Pro checkout...')
-    const response = await fetch(
-      `${supabaseFunctionsBaseUrl}/functions/v1/create-stripe-checkout-session`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${sessionData.session.access_token}`,
-          apikey: supabaseAnonPublicKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ bandId: activeBandId, tier: targetTier }),
-      },
-    )
-    let payload: { url?: string; error?: string } | null = null
-    try {
-      payload = await response.json()
-    } catch {
-      payload = null
-    }
-    const checkoutUrl = String(payload?.url ?? '').trim()
-    if (response.ok && checkoutUrl) {
-      const opened = window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
-      setAccountSaveStatus(opened ? 'Opening Pro checkout...' : 'Popup blocked. Allow popups and try again.')
-      return
-    }
-    setAccountSaveStatus(
-      `Checkout failed: ${payload?.error ?? `Request failed (${response.status}).`}`,
-    )
+    openLemonSqueezyUrl(lemonSqueezyProCheckoutUrl, targetTier)
   }, [
     activeBandId,
     canAccessBillingControls,
     isBillingTestAccount,
-    supabase,
-    supabaseAnonPublicKey,
-    supabaseFunctionsBaseUrl,
+    lemonSqueezyProCheckoutUrl,
+    openLemonSqueezyUrl,
   ])
-  const openStripePortal = useCallback(async () => {
+  const openLemonSqueezyPortal = useCallback(() => {
     if (!activeBandId) {
       setAccountSaveStatus('Select or create a band before managing billing.')
       return
@@ -1743,58 +1707,12 @@ function App() {
       setAccountSaveStatus('Only band admins can manage billing.')
       return
     }
-    if (supabase) {
-      const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
-      if (sessionError || !sessionData.session?.access_token) {
-        setAccountSaveStatus('Your login session expired. Please sign out and log back in to manage billing.')
-        return
-      }
-      const accessToken = sessionData.session.access_token
-      if (!supabaseFunctionsBaseUrl || !supabaseAnonPublicKey) {
-        setAccountSaveStatus('Supabase billing endpoint is not configured. Please contact support.')
-        return
-      }
-      const response = await fetch(
-        `${supabaseFunctionsBaseUrl}/functions/v1/create-stripe-portal-session`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            apikey: supabaseAnonPublicKey,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ bandId: activeBandId }),
-        },
-      )
-      let payload: { url?: string; error?: string } | null = null
-      try {
-        payload = await response.json()
-      } catch {
-        payload = null
-      }
-      const portalUrl = String(payload?.url ?? '').trim()
-      if (response.ok && portalUrl) {
-        const opened = window.open(portalUrl, '_blank', 'noopener,noreferrer')
-        if (!opened) {
-          setAccountSaveStatus('Popup blocked. Allow popups for this site and try again.')
-          return
-        }
-        setAccountSaveStatus('Opening billing portal...')
-        return
-      }
-      setAccountSaveStatus(
-        `Billing portal failed: ${payload?.error ?? `Request failed (${response.status}).`}`,
-      )
-      return
-    }
-    openStripeUrl(stripePortalUrl)
+    openLemonSqueezyUrl(lemonSqueezyCustomerPortalUrl)
   }, [
     activeBandId,
     canAccessBillingControls,
-    openStripeUrl,
-    stripePortalUrl,
-    supabaseAnonPublicKey,
-    supabaseFunctionsBaseUrl,
+    lemonSqueezyCustomerPortalUrl,
+    openLemonSqueezyUrl,
   ])
   const isSpecialSectionHidden = currentSetlist
     ? Boolean(gigHiddenSpecialSection[currentSetlist.id])
@@ -1893,6 +1811,41 @@ function App() {
         return a.name.localeCompare(b.name)
       })
   }, [appState.gigMusicians, appState.musicians, currentSetlist])
+  const normalizedAuthEmail = (authUserEmail ?? '').trim().toLowerCase()
+  const currentUserMusicianIds = useMemo(() => {
+    const ids = new Set<string>()
+    memberships.forEach((membership) => {
+      if (membership.bandId !== activeBandId || membership.status !== 'active') return
+      if (membership.musicianId) ids.add(membership.musicianId)
+    })
+    if (normalizedAuthEmail) {
+      appState.musicians.forEach((musician) => {
+        if ((musician.email ?? '').trim().toLowerCase() === normalizedAuthEmail) {
+          ids.add(musician.id)
+        }
+      })
+    }
+    return ids
+  }, [activeBandId, appState.musicians, memberships, normalizedAuthEmail])
+  const currentUserMusician = useMemo(() => {
+    const [firstMusicianId] = Array.from(currentUserMusicianIds)
+    return firstMusicianId
+      ? appState.musicians.find((musician) => musician.id === firstMusicianId) ?? null
+      : null
+  }, [appState.musicians, currentUserMusicianIds])
+  const assignedGigIdsForCurrentUser = useMemo(() => {
+    const ids = new Set<string>()
+    if (currentUserMusicianIds.size === 0) return ids
+    appState.gigMusicians.forEach((row) => {
+      if (row.status === 'out') return
+      if (currentUserMusicianIds.has(row.musicianId)) ids.add(row.gigId)
+    })
+    return ids
+  }, [appState.gigMusicians, currentUserMusicianIds])
+  const visibleSetlists = useMemo(() => {
+    if (isAdmin) return appState.setlists
+    return appState.setlists.filter((setlist) => assignedGigIdsForCurrentUser.has(setlist.id))
+  }, [appState.setlists, assignedGigIdsForCurrentUser, isAdmin])
   const getPrintToneClass = (section: string) => {
     const normalized = section.trim().toLowerCase()
     if (normalized === 'special requests' || normalized === 'special request') {
@@ -4302,6 +4255,15 @@ function App() {
 
   const loadBandContext = useCallback(async (userId: string) => {
     if (!supabase) return 0
+    const { error: claimError } = await supabase.rpc('claim_musician_memberships_for_current_user')
+    if (
+      claimError &&
+      !/claim_musician_memberships_for_current_user|function .* does not exist|schema cache/i.test(
+        claimError.message ?? '',
+      )
+    ) {
+      setSupabaseError(`Musician gig match failed: ${claimError.message}`)
+    }
     const { data: membershipsData, error: membershipsError } = await supabase
       .from('band_memberships')
       .select('*')
@@ -8523,14 +8485,14 @@ function App() {
     </div>
   )
 
-  const hasTodayGig = appState.setlists.some(
+  const hasTodayGig = visibleSetlists.some(
     (setlist) => normalizeGigDateISO(setlist.date) === operationalTodayISO,
   )
-  const upcomingGigs = appState.setlists.filter((setlist) => {
+  const upcomingGigs = visibleSetlists.filter((setlist) => {
     const gigDate = normalizeGigDateISO(setlist.date)
     return gigDate ? gigDate >= operationalTodayISO : true
   })
-  const pastGigs = appState.setlists.filter((setlist) => {
+  const pastGigs = visibleSetlists.filter((setlist) => {
     const gigDate = normalizeGigDateISO(setlist.date)
     return gigDate ? gigDate < operationalTodayISO : false
   })
@@ -8573,6 +8535,20 @@ function App() {
   }, [activeBandId, loadSupabaseData])
 
   useEffect(() => {
+    if (isAdmin) return
+    if (visibleSetlists.length === 0) {
+      setSelectedSetlistId('')
+      setActiveGigId('')
+      return
+    }
+    if (!visibleSetlists.some((setlist) => setlist.id === selectedSetlistId)) {
+      const nextGigId = visibleSetlists[0]?.id ?? ''
+      setSelectedSetlistId(nextGigId)
+      setActiveGigId(nextGigId)
+    }
+  }, [isAdmin, selectedSetlistId, visibleSetlists])
+
+  useEffect(() => {
     if (!activeBandId) return
     localStorage.setItem(ACTIVE_BAND_KEY, activeBandId)
     const membership = memberships.find(
@@ -8586,6 +8562,13 @@ function App() {
     if (!isMainNavScreen(screen)) return
     localStorage.setItem(LAST_MAIN_SCREEN_KEY, screen)
   }, [authUserId, screen])
+
+  useEffect(() => {
+    if (isAdmin || !role) return
+    if (screen === 'song' || screen === 'musicians' || screen === 'builder') {
+      setScreen('setlists')
+    }
+  }, [isAdmin, role, screen])
 
   useEffect(() => {
     setAccountBandNameDraft(activeBandName)
@@ -8618,6 +8601,8 @@ function App() {
       setBandContextLoading(false)
       if (bandCount > 0) {
         setShowCreateBandOnboarding(false)
+      } else {
+        setShowCreateBandOnboarding(true)
       }
     }
 
@@ -8693,6 +8678,15 @@ function App() {
     } else {
       setSharedWelcomeStep('cta')
     }
+  }
+
+  const openAssignedGigView = (setlistId: string) => {
+    setSelectedSetlistId(setlistId)
+    setActiveGigId(setlistId)
+    setPlaylistModalTab('setlist')
+    setShowPlaylistModal(true)
+    setShowSetlistModal(false)
+    setShowGigMusiciansModal(false)
   }
 
   useEffect(() => {
@@ -9955,7 +9949,7 @@ function App() {
 
   if ((sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && !authUserId) {
     return (
-      <div className="shared-public-mode fixed inset-0 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-[calc(8rem+env(safe-area-inset-bottom))] pt-4 text-white sm:px-4 sm:pt-5">
+      <div className="shared-public-mode fixed inset-0 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-4 text-white sm:px-4 sm:pt-5">
         {showSharedInstrumentPrompt && (
           <div
             className="fixed inset-0 z-[110] flex items-end justify-center bg-slate-950/80 pb-[env(safe-area-inset-bottom)] pt-6 sm:items-center sm:pb-6"
@@ -10022,19 +10016,6 @@ function App() {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 pr-2">
                 <h2 className="text-lg font-semibold">Active Setlist</h2>
-                {sharedPlaylistView && (
-                  <>
-                    <p className="mt-1 text-xs text-slate-300">
-                      {sharedPlaylistView.gigName} · {formatGigDate(sharedPlaylistView.date)}
-                    </p>
-                    {sharedPlaylistView.venueAddress ? (
-                      <p className="mt-0.5 text-[11px] text-slate-400">{sharedPlaylistView.venueAddress}</p>
-                    ) : null}
-                    <p className="mt-2 text-[11px] leading-snug text-slate-500">
-                      Setlist is the printable sheet. Audio plays rehearsal tracks.
-                    </p>
-                  </>
-                )}
               </div>
               <div className="flex shrink-0 flex-col items-end gap-2 pt-1 text-right">
                 <div className="flex items-center justify-end gap-2">
@@ -11268,12 +11249,18 @@ function App() {
         {screen === 'setlists' && (
           <section className="flex flex-col gap-5">
             <div className="rounded-3xl border border-teal-300/20 bg-teal-400/10 px-5 py-4 shadow-[0_0_20px_rgba(20,184,166,0.12)]">
-              <p className="text-xs uppercase tracking-[0.28em] text-teal-200/80">Home</p>
+              <p className="text-xs uppercase tracking-[0.28em] text-teal-200/80">
+                {isAdmin ? 'Home' : 'My Gigs'}
+              </p>
               <h2 className="mt-1 text-2xl font-semibold leading-tight">
                 Welcome{userFirstName ? `, ${userFirstName}` : ' back'}
               </h2>
               <p className="mt-1 text-sm text-slate-300">
-                Here&apos;s what&apos;s ready for your next gig.
+                {isAdmin
+                  ? "Here's what's ready for your next gig."
+                  : currentUserMusician
+                    ? `Showing gigs assigned to ${currentUserMusician.name}.`
+                    : 'Showing gigs assigned to your account email.'}
               </p>
             </div>
             <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 via-white/5 to-white/0 p-5">
@@ -11281,7 +11268,7 @@ function App() {
               <p className="mt-1 text-sm text-slate-300">
                 {isAdmin
                   ? 'Duplicate a previous setlist, or jump straight into editing.'
-                  : 'Tap a gig, then use Musicians or Gig Info.'}
+                  : 'Open a gig to view the setlist, musicians, charts, lyrics, and audio.'}
               </p>
               <div className="mt-4 flex flex-col gap-3">
                 {upcomingGigs.map((setlist) => {
@@ -11344,36 +11331,22 @@ function App() {
 	                      </div>
 	                    )}
                     {!isAdmin && (
-                      <div className="mt-4 grid grid-cols-2 gap-3">
-                        <button
-                          className="flex min-h-[88px] flex-col items-start justify-between rounded-2xl border border-white/10 bg-gradient-to-br from-indigo-500/35 via-slate-900/50 to-slate-900/70 px-3 py-3 text-left text-white shadow-[0_0_14px_rgba(79,70,229,0.25)]"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            setSelectedSetlistId(setlist.id)
-                            setShowGigMusiciansModal(true)
-                            setShowSetlistModal(false)
-                          }}
-                        >
-                          <span className="text-lg">🎤</span>
-                          <span className="text-sm font-semibold">Musicians</span>
-                        </button>
-                        <button
-                          className="flex min-h-[88px] flex-col items-start justify-between rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500/35 via-slate-900/50 to-slate-900/70 px-3 py-3 text-left text-white shadow-[0_0_14px_rgba(16,185,129,0.25)]"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            setSelectedSetlistId(setlist.id)
-                            setShowSetlistModal(true)
-                            setShowGigMusiciansModal(false)
-                          }}
-                        >
-                          <span className="text-lg">🎶</span>
-                          <span className="text-sm font-semibold">Gig Info</span>
-                        </button>
-                      </div>
+                      <button
+                        className="mt-4 w-full rounded-xl bg-teal-400/90 px-3 py-3 text-sm font-semibold text-slate-950 shadow-[0_0_18px_rgba(45,212,191,0.25)]"
+                        onClick={() => openAssignedGigView(setlist.id)}
+                      >
+                        Open Gig View
+                      </button>
                     )}
                   </div>
                 )})}
               </div>
+              {!isAdmin && upcomingGigs.length === 0 && (
+                <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-4 text-sm text-slate-300">
+                  No upcoming gigs are assigned to this email yet. Ask your band leader to assign the musician record
+                  with this account email.
+                </div>
+              )}
               {isAdmin && (
                 <button
                   className="liquid-button mt-4 w-full rounded-xl bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950 shadow-[0_0_18px_rgba(74,222,128,0.45)]"
@@ -11461,32 +11434,12 @@ function App() {
 	                        </div>
 	                      )}
                       {!isAdmin && (
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                          <button
-                            className="flex min-h-[74px] flex-col items-start justify-between rounded-2xl border border-white/10 bg-gradient-to-br from-indigo-500/35 via-slate-900/50 to-slate-900/70 px-3 py-3 text-left text-white shadow-[0_0_14px_rgba(79,70,229,0.25)]"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              setSelectedSetlistId(setlist.id)
-                              setShowGigMusiciansModal(true)
-                              setShowSetlistModal(false)
-                            }}
-                          >
-                            <span className="text-lg">🎤</span>
-                            <span className="text-xs font-semibold">Musicians</span>
-                          </button>
-                          <button
-                            className="flex min-h-[74px] flex-col items-start justify-between rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500/35 via-slate-900/50 to-slate-900/70 px-3 py-3 text-left text-white shadow-[0_0_14px_rgba(16,185,129,0.25)]"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              setSelectedSetlistId(setlist.id)
-                              setShowSetlistModal(true)
-                              setShowGigMusiciansModal(false)
-                            }}
-                          >
-                            <span className="text-lg">🎶</span>
-                            <span className="text-xs font-semibold">Gig Info</span>
-                          </button>
-                        </div>
+                        <button
+                          className="mt-3 w-full rounded-xl border border-teal-300/50 bg-teal-400/10 px-3 py-2 text-sm font-semibold text-teal-100"
+                          onClick={() => openAssignedGigView(setlist.id)}
+                        >
+                          Open Gig View
+                        </button>
                       )}
                     </div>
                   ))}
@@ -12667,9 +12620,13 @@ function App() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Account</p>
-                  <h2 className="text-xl font-semibold">Band leader settings</h2>
+                  <h2 className="text-xl font-semibold">
+                    {isAdmin ? 'Band leader settings' : 'Musician account'}
+                  </h2>
                   <p className="text-xs text-slate-400">
-                    Manage your band name and choose a paid tier.
+                    {isAdmin
+                      ? 'Manage your band name and choose a paid tier.'
+                      : 'Your gigs are matched from the email on your musician record.'}
                   </p>
                 </div>
                 <button
@@ -12680,6 +12637,29 @@ function App() {
                 </button>
               </div>
 
+              {!isAdmin ? (
+                <div className="mt-4 space-y-4">
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                    <div className="text-[10px] uppercase tracking-wide text-slate-400">Signed in as</div>
+                    <div className="mt-2 text-sm font-semibold text-slate-100">{authUserEmail}</div>
+                    {currentUserMusician ? (
+                      <div className="mt-3 rounded-xl border border-teal-300/30 bg-teal-400/10 px-3 py-2 text-sm text-teal-100">
+                        Matched to {currentUserMusician.name}
+                        {currentUserMusician.instruments.length
+                          ? ` · ${currentUserMusician.instruments.join(', ')}`
+                          : ''}
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
+                        No musician record matches this email yet.
+                      </div>
+                    )}
+                    <div className="mt-3 text-xs text-slate-400">
+                      Assigned gigs: <span className="font-semibold text-slate-200">{visibleSetlists.length}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
               <div className="mt-4 space-y-4">
                 <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
                   <div className="text-[10px] uppercase tracking-wide text-slate-400">Band name</div>
@@ -12773,14 +12753,24 @@ function App() {
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => void openStripePortal()}
+                      onClick={() => openLemonSqueezyPortal()}
                       disabled={!canAccessBillingControls}
                     >
                       Manage billing
                     </button>
                   </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                    <span>Billing uses Lemon Squeezy checkout.</span>
+                    <a className="font-semibold text-slate-300 hover:text-teal-200" href="/terms.html" target="_blank">
+                      Terms
+                    </a>
+                    <a className="font-semibold text-slate-300 hover:text-teal-200" href="/privacy.html" target="_blank">
+                      Privacy
+                    </a>
+                  </div>
                 </div>
               </div>
+              )}
             </div>
           </section>
         )}
@@ -12792,14 +12782,16 @@ function App() {
             active={screen === 'setlists'}
             onClick={() => setScreen('setlists')}
             icon={<AppIcon name="home" />}
-            label="Home"
+            label={isAdmin ? 'Home' : 'My Gigs'}
           />
-          <NavButton
-            active={screen === 'song'}
-            onClick={() => setScreen('song')}
-            icon={<AppIcon name="songs" />}
-            label="Songs"
-          />
+          {isAdmin && (
+            <NavButton
+              active={screen === 'song'}
+              onClick={() => setScreen('song')}
+              icon={<AppIcon name="songs" />}
+              label="Songs"
+            />
+          )}
           {isAdmin && (
             <NavButton
               active={screen === 'musicians'}
@@ -12808,7 +12800,7 @@ function App() {
               label="Musicians"
             />
           )}
-          {isAdmin && (
+          {role && (
             <NavButton
               active={screen === 'account'}
               onClick={() => setScreen('account')}
@@ -13820,7 +13812,7 @@ function App() {
                   type="button"
                   className="rounded-xl border border-teal-300/40 bg-teal-400/10 px-4 py-2 text-sm font-semibold text-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => {
-                    void openStripeCheckout(selectedTier)
+                    openLemonSqueezyCheckout(selectedTier)
                     setShowTierDetailsModal(null)
                   }}
                   disabled={!canAccessBillingControls}
@@ -13832,7 +13824,7 @@ function App() {
                   type="button"
                   className="rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold text-slate-100"
                   onClick={() => {
-                    void openStripePortal()
+                    openLemonSqueezyPortal()
                     setShowTierDetailsModal(null)
                   }}
                   disabled={!canAccessBillingControls}
@@ -13867,7 +13859,7 @@ function App() {
                 className="rounded-xl border border-teal-300/40 bg-teal-400/10 px-4 py-2 text-sm font-semibold text-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={() => {
                   setShowTierLimitModal(null)
-                  void openStripeCheckout('pro')
+                  openLemonSqueezyCheckout('pro')
                 }}
                 disabled={!canAccessBillingControls}
               >
@@ -15864,7 +15856,7 @@ function App() {
 
       {showPlaylistModal && currentSetlist && (
         <div
-          className="fixed inset-0 z-[98] overflow-y-auto overflow-x-hidden bg-slate-950/90 backdrop-blur-sm md:overflow-hidden"
+          className="fixed inset-0 z-[98] overflow-y-auto overflow-x-hidden bg-slate-950/90 pb-[calc(5.5rem+env(safe-area-inset-bottom))] backdrop-blur-sm md:overflow-hidden"
         >
           <div
             className="flex min-h-dvh w-full flex-col overflow-visible bg-slate-900 md:h-full md:min-h-0 md:overflow-hidden"
@@ -15874,17 +15866,6 @@ function App() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 pr-2">
                   <h3 className="text-lg font-semibold">Active Setlist</h3>
-                  <p className="text-xs text-slate-400">
-                    {currentSetlist.gigName} · {formatGigDate(currentSetlist.date)}
-                  </p>
-                  {currentSetlist.venueAddress ? (
-                    <p className="mt-0.5 text-[11px] text-slate-500">{currentSetlist.venueAddress}</p>
-                  ) : null}
-                  <p className="mt-2 text-[11px] leading-snug text-slate-500">
-                    {playlistModalTab === 'setlist'
-                      ? 'Same view guests see from a share link. Switch to Audio for playback.'
-                      : 'Prev / Next move the queue. Share link matches this layout.'}
-                  </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2 sm:gap-3">
                   {playlistModalTab === 'playlist' ? (
@@ -15949,39 +15930,41 @@ function App() {
 
             <div className="min-h-0 flex-1 overflow-visible md:overflow-hidden">
               {playlistModalTab === 'setlist' ? (
-                <div className="min-h-0 overflow-visible px-3 pb-4 pt-2 sm:px-5 sm:pb-5 sm:pt-3 md:h-full md:overflow-y-auto md:overflow-x-hidden">
-                  <div className="mb-3 flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      className="min-h-[44px] rounded-xl border border-indigo-300/60 bg-indigo-500/20 px-4 text-sm font-semibold text-indigo-100"
-                      onClick={() => void copyPlaylistShareLink({ fromFirstSong: true })}
-                    >
-                      Copy Guest Link
-                    </button>
-                    <button
-                      type="button"
-                      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-teal-300/50 bg-teal-400/10 px-4 text-sm font-semibold text-teal-100 shadow-[0_0_18px_rgba(20,184,166,0.18)]"
-                      onClick={handlePrintSetlist}
-                      title="Print or download setlist PDF"
-                      aria-label="Print or download setlist PDF"
-                    >
-                      <img src={downloadPdfIcon} alt="" className="h-5 w-5 shrink-0 object-contain" />
-                      Print / PDF
-                    </button>
-                    <button
-                      type="button"
-                      className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-white/15 bg-slate-900/70 px-4 text-sm font-semibold text-slate-200"
-                      onClick={handleDownloadOfflineGig}
-                    >
-                      Save Offline Copy
-                    </button>
-                    {playlistShareStatus ? (
-                      <span className="text-xs text-teal-200">{playlistShareStatus}</span>
-                    ) : null}
-                    {offlineExportStatus ? (
-                      <span className="text-xs text-teal-200">{offlineExportStatus}</span>
-                    ) : null}
-                  </div>
+                <div className="min-h-0 overflow-visible px-3 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pt-3 md:h-full md:overflow-y-auto md:overflow-x-hidden">
+                  {isAdmin && (
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        className="min-h-[44px] rounded-xl border border-indigo-300/60 bg-indigo-500/20 px-4 text-sm font-semibold text-indigo-100"
+                        onClick={() => void copyPlaylistShareLink({ fromFirstSong: true })}
+                      >
+                        Copy Guest Link
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-teal-300/50 bg-teal-400/10 px-4 text-sm font-semibold text-teal-100 shadow-[0_0_18px_rgba(20,184,166,0.18)]"
+                        onClick={handlePrintSetlist}
+                        title="Print or download setlist PDF"
+                        aria-label="Print or download setlist PDF"
+                      >
+                        <img src={downloadPdfIcon} alt="" className="h-5 w-5 shrink-0 object-contain" />
+                        Print / PDF
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-white/15 bg-slate-900/70 px-4 text-sm font-semibold text-slate-200"
+                        onClick={handleDownloadOfflineGig}
+                      >
+                        Save Offline Copy
+                      </button>
+                      {playlistShareStatus ? (
+                        <span className="text-xs text-teal-200">{playlistShareStatus}</span>
+                      ) : null}
+                      {offlineExportStatus ? (
+                        <span className="text-xs text-teal-200">{offlineExportStatus}</span>
+                      ) : null}
+                    </div>
+                  )}
                   <div className="w-full bg-white shared-setlist-shell sm:rounded-2xl sm:p-6">
                     <div className="print-container shared-setlist-container">
                       <div className="print-header">
@@ -16128,7 +16111,7 @@ function App() {
                   </div>
                 </div>
               ) : (
-            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-visible px-4 pb-2 pt-3 sm:px-5 sm:pb-4 sm:pt-4 md:flex-row md:gap-4 md:overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-visible px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-3 sm:px-5 sm:pt-4 md:flex-row md:gap-4 md:overflow-hidden">
               <div
                 ref={playlistPlayerBlockRef}
                 className={`relative z-10 flex min-h-0 w-full flex-col md:min-h-0 md:flex-1 ${
@@ -16387,7 +16370,7 @@ function App() {
               )}
             </div>
             <nav
-              className="shrink-0 bg-transparent px-3 pb-[env(safe-area-inset-bottom)]"
+              className="fixed bottom-0 left-0 right-0 z-[120] bg-slate-950/80 px-3 pb-[env(safe-area-inset-bottom)] backdrop-blur"
               aria-label="Active Setlist views"
             >
               <div className="mx-auto flex w-full max-w-3xl items-stretch justify-between gap-2 py-3">

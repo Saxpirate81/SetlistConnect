@@ -8,7 +8,7 @@ Supabase Edge Function that creates Stripe Checkout sessions for `pro` or `agenc
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `STRIPE_PRICE_ID_PRO`
-- `STRIPE_PRICE_ID_AGENCY`
+- `STRIPE_PRICE_ID_AGENCY` (optional; only needed if the Agency tier is re-enabled)
 - `STRIPE_CHECKOUT_SUCCESS_URL`
 - `STRIPE_CHECKOUT_CANCEL_URL`
 
@@ -28,4 +28,3 @@ supabase functions deploy create-stripe-checkout-session
 ```
 
 Only active band admins can create checkout sessions for that band.
-

@@ -8436,14 +8436,26 @@ function App() {
   const hasTodayGig = visibleSetlists.some(
     (setlist) => normalizeGigDateISO(setlist.date) === operationalTodayISO,
   )
-  const upcomingGigs = visibleSetlists.filter((setlist) => {
-    const gigDate = normalizeGigDateISO(setlist.date)
-    return gigDate ? gigDate >= operationalTodayISO : true
-  })
-  const pastGigs = visibleSetlists.filter((setlist) => {
-    const gigDate = normalizeGigDateISO(setlist.date)
-    return gigDate ? gigDate < operationalTodayISO : false
-  })
+  const compareGigsByDateAsc = (a: Setlist, b: Setlist) => {
+    const dateA = normalizeGigDateISO(a.date)
+    const dateB = normalizeGigDateISO(b.date)
+    if (dateA && dateB && dateA !== dateB) return dateA.localeCompare(dateB)
+    if (dateA && !dateB) return -1
+    if (!dateA && dateB) return 1
+    return a.gigName.localeCompare(b.gigName)
+  }
+  const upcomingGigs = visibleSetlists
+    .filter((setlist) => {
+      const gigDate = normalizeGigDateISO(setlist.date)
+      return gigDate ? gigDate >= operationalTodayISO : true
+    })
+    .sort(compareGigsByDateAsc)
+  const pastGigs = visibleSetlists
+    .filter((setlist) => {
+      const gigDate = normalizeGigDateISO(setlist.date)
+      return gigDate ? gigDate < operationalTodayISO : false
+    })
+    .sort((a, b) => compareGigsByDateAsc(b, a))
 
   useEffect(() => {
     if (!role) return

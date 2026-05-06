@@ -760,6 +760,8 @@ function App() {
   const [sharedImportSaving, setSharedImportSaving] = useState(false)
   const [sharedImportStatus, setSharedImportStatus] = useState('')
   const [sharedPublicTab, setSharedPublicTab] = useState<'setlist' | 'playlist'>('setlist')
+  const [sharedWelcomeStep, setSharedWelcomeStep] = useState<'hidden' | 'cta' | 'learn'>('hidden')
+  const [sharedWelcomeCompletedSetlistId, setSharedWelcomeCompletedSetlistId] = useState<string | null>(null)
   const [playlistModalYoutubeGateActive, setPlaylistModalYoutubeGateActive] = useState(true)
   const playlistModalYtHandleRef = useRef<PlaylistYouTubePlayerHandle | null>(null)
   const sharedPublicYtHandleRef = useRef<PlaylistYouTubePlayerHandle | null>(null)
@@ -9058,6 +9060,10 @@ function App() {
       setSharedPlaylistLoading(false)
       setPlaylistIndex(Math.min(requestedIndex, Math.max(0, parsedPayload.entries.length - 1)))
       setPlaylistAutoAdvance(true)
+      setSharedWelcomeStep('cta')
+      setSharedWelcomeCompletedSetlistId((current) =>
+        current === (parsedPayload.setlistId || setlistId) ? null : current,
+      )
     }
     const targetSetlist = appState.setlists.find((setlist) => setlist.id === setlistId)
     if (targetSetlist) {
@@ -9363,6 +9369,8 @@ function App() {
       })
       setPlaylistIndex(Math.min(requestedIndex, Math.max(0, entries.length - 1)))
       setPlaylistAutoAdvance(true)
+      setSharedWelcomeStep('cta')
+      setSharedWelcomeCompletedSetlistId((current) => (current === gig.id ? null : current))
       setSharedPlaylistLoading(false)
     })().catch((error) => {
       if (cancelled) return
@@ -10658,14 +10666,13 @@ function App() {
                           ⏭ Next
                         </button>
                       </div>
-
                       <button
                         type="button"
-                        className="fixed right-0 top-1/2 z-[330] flex -translate-y-1/2 items-center gap-1 rounded-l-2xl border border-r-0 border-teal-300/50 bg-slate-900/95 px-2.5 py-3 text-xs font-semibold uppercase tracking-wide text-teal-100 shadow-2xl backdrop-blur md:hidden"
+                        className="order-3 mt-2 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-teal-300/50 bg-slate-900/95 px-3 py-2 text-sm font-semibold text-teal-100 shadow-lg backdrop-blur md:hidden"
                         onClick={() => setSharedPlaylistDrawerOverlay(true)}
                         aria-label="Open song list"
                       >
-                        <span className="text-lg leading-none" aria-hidden>
+                        <span className="text-base leading-none" aria-hidden>
                           ☰
                         </span>
                         Songs
@@ -10679,8 +10686,10 @@ function App() {
                         />
                       )}
                         <div
-                          className={`fixed bottom-[calc(6.5rem+env(safe-area-inset-bottom))] right-0 top-0 z-[330] order-3 flex w-[74vw] max-w-sm flex-col overflow-hidden rounded-l-3xl border border-r-0 border-teal-300/40 bg-slate-900 shadow-2xl transition-transform duration-200 md:static md:order-none md:mt-0 md:h-full md:w-[320px] md:max-w-none md:shrink-0 md:translate-x-0 md:rounded-2xl md:border-r md:shadow-xl lg:w-[340px] ${
-                            sharedPlaylistDrawerOverlay ? 'translate-x-0' : 'translate-x-full md:translate-x-0'
+                          className={`${
+                            sharedPlaylistDrawerOverlay ? 'fixed' : 'hidden'
+                          } bottom-[calc(6.5rem+env(safe-area-inset-bottom))] left-3 right-3 top-[calc(1rem+env(safe-area-inset-top))] z-[330] order-4 flex flex-col overflow-hidden rounded-3xl border border-teal-300/40 bg-slate-900 shadow-2xl md:static md:order-none md:mt-0 md:flex md:h-full md:w-[320px] md:max-w-none md:shrink-0 md:rounded-2xl md:shadow-xl lg:w-[340px] ${
+                            sharedPlaylistDrawerOverlay ? '' : 'md:flex'
                           } ${widePlaylistUi ? 'md:static' : 'md:min-h-0'}`}
                           onTouchStart={handleSharedPlaylistDrawerTouchStart}
                           onTouchMove={handleSharedPlaylistDrawerTouchMove}
@@ -10821,6 +10830,104 @@ function App() {
             </div>
           </nav>
         )}
+        {sharedPlaylistView &&
+          sharedWelcomeStep !== 'hidden' &&
+          sharedWelcomeCompletedSetlistId !== sharedPlaylistView.setlistId && (
+            <div className="fixed inset-0 z-[340] flex items-center justify-center bg-slate-950/88 px-4 py-[calc(1.25rem+env(safe-area-inset-top))] backdrop-blur-xl">
+              <div className="max-h-full w-full max-w-lg overflow-y-auto rounded-3xl border border-white/15 bg-slate-900 p-5 text-slate-100 shadow-2xl sm:p-7">
+                {sharedWelcomeStep === 'learn' ? (
+                  <>
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-teal-200">
+                          Setlist Connect
+                        </p>
+                        <h3 className="mt-2 text-2xl font-semibold">A cleaner way to walk into the gig.</h3>
+                      </div>
+                      <button
+                        type="button"
+                        className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 text-2xl leading-none text-slate-200"
+                        onClick={() => setSharedWelcomeStep('cta')}
+                        aria-label="Back"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="mt-5 space-y-3 text-sm leading-6 text-slate-300">
+                      <p>
+                        This shared gig page keeps the details musicians usually hunt for in one place:
+                        the setlist, singer assignments, keys, charts, lyrics, musician contacts, and
+                        rehearsal audio.
+                      </p>
+                      <p>
+                        Use Setlist for the printable gig sheet. Use Audio to rehearse or jump to a song
+                        during prep. No account is needed from this shared link right now.
+                      </p>
+                      <p>
+                        The bandleader can keep making updates, and the shared link opens the latest saved
+                        version for this specific gig.
+                      </p>
+                    </div>
+                    <div className="mt-6 grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        className="min-h-[46px] rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm font-semibold text-slate-200"
+                        onClick={() => setSharedWelcomeStep('cta')}
+                      >
+                        Back
+                      </button>
+                      <button
+                        type="button"
+                        className="min-h-[46px] rounded-xl bg-teal-400 px-4 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-teal-500/20"
+                        onClick={() => {
+                          setSharedWelcomeCompletedSetlistId(sharedPlaylistView.setlistId)
+                          setSharedWelcomeStep('hidden')
+                        }}
+                      >
+                        Continue to Gig
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs font-semibold uppercase tracking-[0.28em] text-teal-200">
+                      Shared gig link
+                    </p>
+                    <h3 className="mt-3 text-3xl font-semibold leading-tight">
+                      {sharedPlaylistView.gigName || 'Shared Setlist'}
+                    </h3>
+                    <p className="mt-2 text-sm text-slate-400">
+                      {formatGigDate(sharedPlaylistView.date)}
+                      {sharedPlaylistView.venueAddress ? ` · ${sharedPlaylistView.venueAddress}` : ''}
+                    </p>
+                    <div className="mt-5 rounded-2xl border border-teal-300/25 bg-teal-400/10 p-4 text-sm leading-6 text-teal-50">
+                      Open the gig setlist and audio without creating an account. This link is your access
+                      pass for the band’s saved gig details.
+                    </div>
+                    <div className="mt-6 grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        className="min-h-[46px] rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm font-semibold text-slate-200"
+                        onClick={() => setSharedWelcomeStep('learn')}
+                      >
+                        Learn More
+                      </button>
+                      <button
+                        type="button"
+                        className="min-h-[46px] rounded-xl bg-teal-400 px-4 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-teal-500/20"
+                        onClick={() => {
+                          setSharedWelcomeCompletedSetlistId(sharedPlaylistView.setlistId)
+                          setSharedWelcomeStep('hidden')
+                        }}
+                      >
+                        Open Setlist
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         {sharedNowPlayingSongId && sharedNowPlayingSongId !== sharedDismissedUpNextId && (
           <div
             className="shared-upnext-banner shared-upnext-banner-pulse liquid-button upnext-flash fixed inset-x-0 top-0 z-[260] border-y border-emerald-300/45 bg-black px-3 pb-2 pt-[calc(0.55rem+env(safe-area-inset-top))] text-emerald-100 shadow-[0_0_18px_rgba(74,222,128,0.45)] transition-all duration-150"

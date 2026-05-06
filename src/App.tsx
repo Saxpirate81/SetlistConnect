@@ -2171,6 +2171,52 @@ function App() {
     return appState.songs.find((song) => song.title.trim().toLowerCase() === title) ?? null
   }, [appState.songs, pendingSpecialSong])
 
+  const getGigSingerAssignments = (songId: string, gigId: string) => {
+    const song = appState.songs.find((item) => item.id === songId)
+    if (!song) return []
+    const savedAssignments = song.keys
+      .map((key) => ({
+        singer: key.singer,
+        key: key.gigOverrides[gigId] ?? '',
+      }))
+      .filter((entry) => entry.key)
+    if (savedAssignments.length) return savedAssignments
+    return appState.specialRequests
+      .filter((request) => request.gigId === gigId && request.songId === songId && !request.djOnly)
+      .flatMap((request) =>
+        normalizeTagList(request.singers ?? []).map((singer) => ({
+          singer,
+          key: request.key || '',
+        })),
+      )
+      .filter((entry) => entry.singer && entry.key)
+  }
+
+  const getSpecialRequestDisplayAssignments = (request: SpecialRequest) => {
+    if (request.djOnly) {
+      return { singers: ['DJ'], keys: [] }
+    }
+    const directSingers = normalizeTagList(request.singers ?? [])
+    const directKeys = normalizeTagList(request.key ? [request.key] : [])
+    const savedAssignments = request.songId
+      ? getGigSingerAssignments(request.songId, request.gigId)
+      : []
+    const savedSingers = normalizeTagList(savedAssignments.map((entry) => entry.singer))
+    const savedKeys = normalizeTagList(savedAssignments.map((entry) => entry.key))
+    return {
+      singers: directSingers.length ? directSingers : savedSingers,
+      keys: directKeys.length ? directKeys : savedKeys,
+    }
+  }
+
+  const formatSpecialRequestKeyLabel = (request: SpecialRequest) => {
+    if (request.djOnly) return '—'
+    const { keys } = getSpecialRequestDisplayAssignments(request)
+    if (keys.length === 0) return 'No key'
+    if (keys.length === 1) return keys[0]
+    return 'Multi'
+  }
+
   const playlistEntries = useMemo<PlaylistEntry[]>(() => {
     if (!currentSetlist) return []
     const ordered: PlaylistEntry[] = []
@@ -2226,6 +2272,7 @@ function App() {
       .forEach((request) => {
         const linkedSong = appState.songs.find((song) => song.id === request.songId)
         const key = `special-request:${request.id}`
+        const displayAssignments = getSpecialRequestDisplayAssignments(request)
         addOrMerge({
           key,
           title: linkedSong?.title || request.songTitle,
@@ -2233,8 +2280,8 @@ function App() {
           audioUrl: (request.externalAudioUrl || linkedSong?.youtubeUrl || '').trim(),
           tags: request.djOnly ? [request.type || 'DJ Only'] : ['Special Request'],
           songId: request.songId,
-          assignmentSingers: request.djOnly ? ['DJ'] : request.singers,
-          assignmentKeys: request.djOnly ? [] : request.key ? [request.key] : [],
+          assignmentSingers: displayAssignments.singers,
+          assignmentKeys: displayAssignments.keys,
         })
       })
 
@@ -3808,27 +3855,6 @@ function App() {
       .join(' · ')
   }
 
-  const getGigSingerAssignments = (songId: string, gigId: string) => {
-    const song = appState.songs.find((item) => item.id === songId)
-    if (!song) return []
-    const savedAssignments = song.keys
-      .map((key) => ({
-        singer: key.singer,
-        key: key.gigOverrides[gigId] ?? '',
-      }))
-      .filter((entry) => entry.key)
-    if (savedAssignments.length) return savedAssignments
-    return appState.specialRequests
-      .filter((request) => request.gigId === gigId && request.songId === songId && !request.djOnly)
-      .flatMap((request) =>
-        normalizeTagList(request.singers ?? []).map((singer) => ({
-          singer,
-          key: request.key || '',
-        })),
-      )
-      .filter((entry) => entry.singer && entry.key)
-  }
-
   const getPlaylistAssignmentText = (entry: PlaylistEntry) => {
     if (
       entry.tags.some((tag) => {
@@ -4054,7 +4080,7 @@ function App() {
               (request) =>
                 request.gigId === currentSetlist.id &&
                 !request.djOnly &&
-                (!request.singers || request.singers.length === 0),
+                getSpecialRequestDisplayAssignments(request).singers.length === 0,
             )
           : currentSetlist.songIds
               .map((songId) => appState.songs.find((song) => song.id === songId))
@@ -7027,8 +7053,9 @@ function App() {
     setPendingSpecialType(request.type ?? '')
     setPendingSpecialSong(request.songTitle ?? '')
     setPendingSpecialArtist(request.artist ?? linkedSong?.artist ?? '')
-    setPendingSpecialSingers(request.djOnly ? [] : normalizeTagList(request.singers ?? []))
-    setPendingSpecialKey(request.djOnly ? '' : request.key ?? '')
+    const displayAssignments = getSpecialRequestDisplayAssignments(request)
+    setPendingSpecialSingers(request.djOnly ? [] : displayAssignments.singers)
+    setPendingSpecialKey(request.djOnly ? '' : displayAssignments.keys[0] ?? '')
     setPendingSpecialNote(request.note ?? '')
     setPendingSpecialDjOnly(Boolean(request.djOnly))
     setPendingSpecialExternalUrl(request.externalAudioUrl ?? '')
@@ -7113,7 +7140,7 @@ function App() {
     const normalizedSingers = shouldPersistAsDjTrack ? [] : normalizeTagList(pendingSpecialSingers)
     const normalizedKey = shouldPersistAsDjTrack ? '' : pendingSpecialKey.trim()
     const normalizedArtist = pendingSpecialArtist.trim()
-    const nextSongId = matchingSong?.id
+    const nextSongId = matchingSong?.id ?? existingRequest?.songId
     const djSongId = shouldPersistAsDjTrack
       ? matchingSong?.id ?? existingRequest?.songId ?? createId()
       : undefined
@@ -7754,6 +7781,21 @@ function App() {
       keysBySong.set(row.song_id, list)
     })
 
+    gigSingerKeysRes.data?.forEach((row) => {
+      const list = keysBySong.get(row.song_id) ?? []
+      const hasSinger = list.some(
+        (entry) => entry.singer.trim().toLowerCase() === row.singer_name.trim().toLowerCase(),
+      )
+      if (!hasSinger) {
+        list.push({
+          singer: row.singer_name,
+          defaultKey: '',
+          gigOverrides: {},
+        })
+        keysBySong.set(row.song_id, list)
+      }
+    })
+
     const gigOverrideMap = new Map<string, Record<string, string>>()
     gigSingerKeysRes.data?.forEach((row) => {
       const key = `${row.song_id}-${row.singer_name}`
@@ -7824,6 +7866,18 @@ function App() {
     const specialRequestsFromLegacy: SpecialRequest[] =
       [...(specialReqRes.data ?? [])].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)).map((row) => {
         const linkedSong = row.song_id ? songsById.get(row.song_id) : undefined
+        const savedAssignments = linkedSong
+          ? linkedSong.keys
+              .map((key) => ({
+                singer: key.singer,
+                key: key.gigOverrides[row.gig_id] ?? '',
+              }))
+              .filter((entry) => entry.key)
+          : []
+        const savedSingers = normalizeTagList(savedAssignments.map((entry) => entry.singer))
+        const savedKeys = normalizeTagList(savedAssignments.map((entry) => entry.key))
+        const rowSingers = normalizeTagList(row.singers ?? [])
+        const rowKey = (row.song_key ?? '').trim()
         return {
           id: row.id,
           gigId: row.gig_id,
@@ -7831,8 +7885,8 @@ function App() {
           songTitle: row.song_title,
           artist: linkedSong?.artist ?? undefined,
           songId: row.song_id ?? undefined,
-          singers: row.singers ?? [],
-          key: row.song_key ?? '',
+          singers: rowSingers.length ? rowSingers : savedSingers,
+          key: rowKey || savedKeys[0] || '',
           note: row.note ?? undefined,
           djOnly: row.dj_only ?? false,
           externalAudioUrl: row.external_audio_url ?? undefined,
@@ -8127,16 +8181,19 @@ function App() {
           }
         }),
     }))
-    const specialRequests = getOrderedSpecialRequests(currentSetlist.id).map((request) => ({
-      type: request.type,
-      title: request.songTitle,
-      artist: request.artist,
-      key: request.key,
-      singers: request.singers,
-      note: request.note,
-      djOnly: request.djOnly,
-      audioUrl: request.externalAudioUrl,
-    }))
+    const specialRequests = getOrderedSpecialRequests(currentSetlist.id).map((request) => {
+      const displayAssignments = getSpecialRequestDisplayAssignments(request)
+      return {
+        type: request.type,
+        title: request.songTitle,
+        artist: request.artist,
+        key: request.djOnly ? '' : displayAssignments.keys.join(', '),
+        singers: displayAssignments.singers,
+        note: request.note,
+        djOnly: request.djOnly,
+        audioUrl: request.externalAudioUrl,
+      }
+    })
     const payload = {
       exportedAt: new Date().toISOString(),
       bandName: activeBandName,
@@ -9241,6 +9298,13 @@ function App() {
       ;(specialReqRes.data ?? []).forEach((request) => {
           const linkedSong = request.song_id ? songsById.get(request.song_id) : undefined
           const key = `special-request:${request.id}`
+          const savedAssignments = request.song_id
+            ? gigSingerKeyAssignments.get(request.song_id) ?? []
+            : []
+          const savedSingers = uniqueList(savedAssignments.map((entry) => entry.singer))
+          const savedKeys = uniqueList(savedAssignments.map((entry) => entry.key))
+          const directSingers = uniqueList(request.singers ?? [])
+          const directKeys = request.song_key ? [request.song_key] : []
           addOrMerge({
             key,
             title: linkedSong?.title || request.song_title || 'Special Request',
@@ -9248,8 +9312,16 @@ function App() {
             audioUrl: (request.external_audio_url || linkedSong?.audio_url || '').trim(),
             tags: request.dj_only ? [request.request_type || 'DJ Only'] : ['Special Request'],
             songId: request.song_id ?? undefined,
-            assignmentSingers: request.dj_only ? ['DJ'] : (request.singers ?? []),
-            assignmentKeys: request.dj_only ? [] : request.song_key ? [request.song_key] : [],
+            assignmentSingers: request.dj_only
+              ? ['DJ']
+              : directSingers.length
+                ? directSingers
+                : savedSingers,
+            assignmentKeys: request.dj_only
+              ? []
+              : directKeys.length
+                ? directKeys
+                : savedKeys,
           })
         })
       ;(djTracksRes.data ?? [])
@@ -12191,6 +12263,7 @@ function App() {
                 {getOrderedSpecialRequests(currentSetlist.id)
                   .map((request) => {
                     const song = appState.songs.find((item) => item.id === request.songId)
+                    const displayAssignments = getSpecialRequestDisplayAssignments(request)
                     return (
                       <div
                         key={request.id}
@@ -12245,7 +12318,7 @@ function App() {
                         <div
                           className={`text-xs ${
                             !request.djOnly &&
-                            request.singers.some(
+                            displayAssignments.singers.some(
                               (singer) =>
                                 singer.trim().toLowerCase() === INSTRUMENTAL_LABEL.toLowerCase(),
                             )
@@ -12253,10 +12326,14 @@ function App() {
                               : 'text-slate-300'
                           }`}
                         >
-                          {request.djOnly ? 'DJ ONLY' : request.singers.join(', ')}
+                          {request.djOnly
+                            ? 'DJ ONLY'
+                            : displayAssignments.singers.length
+                              ? displayAssignments.singers.join(', ')
+                              : 'No singers'}
                         </div>
                         <div className="text-xs text-slate-200">
-                          {request.djOnly ? '—' : request.key}
+                          {formatSpecialRequestKeyLabel(request)}
                         </div>
                         <div className="text-xs text-slate-400">
                           {request.note ? 'ℹ️' : ''}
@@ -13182,6 +13259,7 @@ function App() {
                     {getOrderedSpecialRequests(currentSetlist.id)
                       .map((request) => {
                         const song = appState.songs.find((item) => item.id === request.songId)
+                        const displayAssignments = getSpecialRequestDisplayAssignments(request)
                         return (
                         <div key={request.id} className="print-row">
                           <div className="print-row-title">
@@ -13206,11 +13284,11 @@ function App() {
                             <span className="print-assignee-names">
                               {request.djOnly
                                 ? 'DJ'
-                                : request.singers.length
-                                  ? formatSingerAssignmentNames(request.singers)
+                                : displayAssignments.singers.length
+                                  ? formatSingerAssignmentNames(displayAssignments.singers)
                                   : 'No singers'}
                             </span>{' '}
-                            · {request.djOnly ? '—' : request.key || 'No key'}
+                            · {formatSpecialRequestKeyLabel(request)}
                           </div>
                           {request.note && <div className="print-row-note">{request.note}</div>}
                         </div>
@@ -15557,6 +15635,7 @@ function App() {
                     .filter((request) => request.gigId === currentSetlist.id)
                     .map((request) => {
                       const song = appState.songs.find((item) => item.id === request.songId)
+                      const displayAssignments = getSpecialRequestDisplayAssignments(request)
                       return (
                         <div
                           key={request.id}
@@ -15613,7 +15692,7 @@ function App() {
                           <div
                             className={`text-xs ${
                               !request.djOnly &&
-                              request.singers.some(
+                              displayAssignments.singers.some(
                                 (singer) =>
                                   singer.trim().toLowerCase() === INSTRUMENTAL_LABEL.toLowerCase(),
                               )
@@ -15621,10 +15700,14 @@ function App() {
                                 : 'text-slate-300'
                             }`}
                           >
-                            {request.djOnly ? 'DJ ONLY' : request.singers.join(', ')}
+                            {request.djOnly
+                              ? 'DJ ONLY'
+                              : displayAssignments.singers.length
+                                ? displayAssignments.singers.join(', ')
+                                : 'No singers'}
                           </div>
                           <div className="text-xs text-slate-200">
-                            {request.djOnly ? '—' : request.key}
+                            {formatSpecialRequestKeyLabel(request)}
                           </div>
                           <div className="flex items-center justify-start gap-2 text-xs text-slate-400">
                             {request.note ? 'ℹ️' : ''}
@@ -15919,6 +16002,7 @@ function App() {
                   <div className="print-list">
                     {getOrderedSpecialRequests(currentSetlist.id).map((request) => {
                       const isLocked = request.songId ? isGigSongLocked(request.songId) : false
+                      const displayAssignments = getSpecialRequestDisplayAssignments(request)
                       return (
                         <div
                           key={`gig-sheet-special-${request.id}`}
@@ -15991,11 +16075,11 @@ function App() {
                             <span className="print-assignee-names">
                               {request.djOnly
                                 ? 'DJ'
-                                : request.singers.length
-                                  ? formatSingerAssignmentNames(request.singers)
+                                : displayAssignments.singers.length
+                                  ? formatSingerAssignmentNames(displayAssignments.singers)
                                   : 'No singers'}
                             </span>
-                            <span className="musical-key">{request.djOnly ? '—' : request.key || 'No key'}</span>
+                            <span className="musical-key">{formatSpecialRequestKeyLabel(request)}</span>
                             {isAdmin && (
                               <span className="mt-1 inline-flex items-center gap-1 self-end">
                                 <button
@@ -16895,6 +16979,7 @@ function App() {
                                 <div className="print-list">
                                   {requestChunk.map((request) => {
                                     const song = appState.songs.find((item) => item.id === request.songId)
+                                    const displayAssignments = getSpecialRequestDisplayAssignments(request)
                                     return (
                                       <div key={request.id} className="print-row">
                                     <div className="print-row-title">
@@ -16919,11 +17004,11 @@ function App() {
                                           <span className="print-assignee-names">
                                             {request.djOnly
                                               ? 'DJ'
-                                              : request.singers.length
-                                                ? formatSingerAssignmentNames(request.singers)
+                                              : displayAssignments.singers.length
+                                                ? formatSingerAssignmentNames(displayAssignments.singers)
                                                 : 'No singers'}
                                           </span>{' '}
-                                      · {request.djOnly ? '—' : request.key || 'No key'}
+                                      · {formatSpecialRequestKeyLabel(request)}
                                     </div>
                                     {request.note && <div className="print-row-note">{request.note}</div>}
                                   </div>
@@ -17976,6 +18061,7 @@ function App() {
                         const song = appState.songs.find(
                           (item) => item.id === request.songId,
                         )
+                        const displayAssignments = getSpecialRequestDisplayAssignments(request)
                         const isLockedInGigMode =
                           gigMode && request.songId ? isGigSongLocked(request.songId) : false
                         return (
@@ -18109,7 +18195,7 @@ function App() {
                             <div
                               className={`text-xs ${
                                 !request.djOnly &&
-                                request.singers.some(
+                                displayAssignments.singers.some(
                                   (singer) =>
                                     singer.trim().toLowerCase() ===
                                     INSTRUMENTAL_LABEL.toLowerCase(),
@@ -18118,10 +18204,14 @@ function App() {
                                   : 'text-slate-300'
                               }`}
                             >
-                              {request.djOnly ? 'DJ ONLY' : request.singers.join(', ')}
+                              {request.djOnly
+                                ? 'DJ ONLY'
+                                : displayAssignments.singers.length
+                                  ? displayAssignments.singers.join(', ')
+                                  : 'No singers'}
                             </div>
                             <div className="text-xs text-slate-200">
-                              {request.djOnly ? '—' : request.key}
+                              {formatSpecialRequestKeyLabel(request)}
                             </div>
                             <div className="flex items-center justify-start gap-2 text-xs text-slate-400">
                               {request.note ? 'ℹ️' : ''}

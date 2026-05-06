@@ -9129,8 +9129,7 @@ function App() {
           .order('sort_order', { ascending: true }),
       ])
       if (cancelled) return
-      const firstError =
-        gigRes.error || gigSongsRes.error || songsRes.error || specialReqRes.error || djTracksRes.error
+      const firstError = gigRes.error || gigSongsRes.error || songsRes.error
       if (firstError) {
         if (parsedPayload) {
           setSharedPlaylistLoading(false)
@@ -9171,19 +9170,9 @@ function App() {
             .in('song_id', orderedSongIds)
         : { data: [], error: null as { message?: string } | null }
       if (cancelled) return
-      if (tagsRes.error) {
-        if (parsedPayload) {
-          setSharedPlaylistLoading(false)
-          return
-        }
-        setSharedPlaylistError(tagsRes.error.message ?? 'Shared playlist failed to load.')
-        setSharedPlaylistView(null)
-        setSharedPlaylistLoading(false)
-        return
-      }
       const tagsBySong = new Map<string, string[]>()
       const sharedGigSectionOverrides = new Map<string, string>()
-      ;(tagsRes.data ?? []).forEach((row) => {
+      ;(tagsRes.error ? [] : (tagsRes.data ?? [])).forEach((row) => {
         if (row.tag.startsWith(GIG_SECTION_DELETED_TAG_PREFIX)) return
         const gigSectionTag = parseGigSectionTag(row.tag)
         if (gigSectionTag?.gigId === setlistId) {
@@ -9295,7 +9284,7 @@ function App() {
         byKey.set(normalized.key, normalized)
         entries.push(normalized)
       }
-      ;(specialReqRes.data ?? []).forEach((request) => {
+      ;(specialReqRes.error ? [] : (specialReqRes.data ?? [])).forEach((request) => {
           const linkedSong = request.song_id ? songsById.get(request.song_id) : undefined
           const key = `special-request:${request.id}`
           const savedAssignments = request.song_id
@@ -9324,7 +9313,7 @@ function App() {
                 : savedKeys,
           })
         })
-      ;(djTracksRes.data ?? [])
+      ;(djTracksRes.error ? [] : (djTracksRes.data ?? []))
         .filter((track) => track.status !== 'archived')
         .forEach((track) => {
           const metadata =
@@ -9391,7 +9380,14 @@ function App() {
       setPlaylistIndex(Math.min(requestedIndex, Math.max(0, entries.length - 1)))
       setPlaylistAutoAdvance(true)
       setSharedPlaylistLoading(false)
-    })()
+    })().catch((error) => {
+      if (cancelled) return
+      setSharedPlaylistError(
+        error instanceof Error ? error.message : 'Shared playlist failed to load.',
+      )
+      setSharedPlaylistView(null)
+      setSharedPlaylistLoading(false)
+    })
     return () => {
       cancelled = true
     }

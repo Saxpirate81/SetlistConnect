@@ -748,11 +748,6 @@ function App() {
   const [sharedPlaylistView, setSharedPlaylistView] = useState<SharedPlaylistView | null>(null)
   const [sharedPlaylistLoading, setSharedPlaylistLoading] = useState(false)
   const [sharedPlaylistError, setSharedPlaylistError] = useState<string | null>(null)
-  const [sharedWelcomeStep, setSharedWelcomeStep] = useState<
-    'hidden' | 'welcome' | 'welcome-fade' | 'cta' | 'learn'
-  >(
-    'hidden',
-  )
   const [showSharedInstrumentPrompt, setShowSharedInstrumentPrompt] = useState(false)
   const [sharedSignupReturnView, setSharedSignupReturnView] = useState<SharedPlaylistView | null>(() => {
     try {
@@ -764,9 +759,6 @@ function App() {
   })
   const [sharedImportSaving, setSharedImportSaving] = useState(false)
   const [sharedImportStatus, setSharedImportStatus] = useState('')
-  const [sharedWelcomeCompletedSetlistId, setSharedWelcomeCompletedSetlistId] = useState<string | null>(
-    null,
-  )
   const [sharedPublicTab, setSharedPublicTab] = useState<'setlist' | 'playlist'>('setlist')
   const [playlistModalYoutubeGateActive, setPlaylistModalYoutubeGateActive] = useState(true)
   const playlistModalYtHandleRef = useRef<PlaylistYouTubePlayerHandle | null>(null)
@@ -2521,7 +2513,7 @@ function App() {
     return pages.length ? pages : [docModalContent.url]
   }, [docModalContent])
   const activeDocModalPage = docModalPages[docModalPageIndex] ?? docModalPages[0] ?? ''
-  const isSharedPublicDocsMode = Boolean(sharedPlaylistView && !authUserId)
+  const isSharedPublicDocsMode = Boolean(sharedPlaylistView)
   const docModalSelectionItems = useMemo(() => {
     if (!docModalSongId) return []
     return isSharedPublicDocsMode
@@ -8730,19 +8722,13 @@ function App() {
     setAccountSaveStatus('Band name updated.')
   }
 
-  const restoreSharedViewFromSignup = (skipWelcome: boolean) => {
+  const restoreSharedViewFromSignup = (_skipWelcome: boolean) => {
     if (!sharedSignupReturnView) return
     setSharedPlaylistLoading(false)
     setSharedPlaylistError(null)
     setSharedPlaylistView(sharedSignupReturnView)
     setSharedSignupReturnView(null)
     localStorage.removeItem(SHARED_SIGNUP_RETURN_KEY)
-    if (skipWelcome) {
-      setSharedWelcomeCompletedSetlistId(sharedSignupReturnView.setlistId)
-      setSharedWelcomeStep('hidden')
-    } else {
-      setSharedWelcomeStep('cta')
-    }
   }
 
   const saveSharedGigToAccount = async () => {
@@ -9058,7 +9044,6 @@ function App() {
         }
       })
       setSharedSongDisplayByAnyId(payloadDisplayMap)
-      setSharedWelcomeStep('cta')
       setSharedPlaylistView({
         setlistId: parsedPayload.setlistId || setlistId,
         bandName: parsedPayload.bandName ?? sharedBandNameParam ?? activeBandName ?? 'Band',
@@ -9366,7 +9351,6 @@ function App() {
       const playableEntries = entries.filter(
         (entry) => Boolean(entry.audioUrl && entry.audioUrl.trim()) || isSpecialRequestEntry(entry),
       )
-      setSharedWelcomeStep('cta')
       setSharedPlaylistView({
         setlistId: gig.id,
         bandName: sharedBandName,
@@ -9392,18 +9376,6 @@ function App() {
       cancelled = true
     }
   }, [activeBandName, appState.setlists, isSetlistTypeTag, normalizePlaylistSection, supabase])
-
-  useEffect(() => {
-    if (!sharedPlaylistView || authUserId) {
-      setSharedWelcomeStep('hidden')
-      return
-    }
-    if (sharedWelcomeCompletedSetlistId === sharedPlaylistView.setlistId) {
-      setSharedWelcomeStep('hidden')
-      return
-    }
-    setSharedWelcomeStep('cta')
-  }, [authUserId, sharedPlaylistView, sharedWelcomeCompletedSetlistId])
 
   useEffect(() => {
     if (!sharedPlaylistView) {
@@ -10284,7 +10256,7 @@ function App() {
     showPrintPreview,
   ])
 
-  if ((sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && !authUserId) {
+  if (sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) {
     return (
       <div className="shared-public-mode fixed inset-0 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-4 text-white sm:px-4 sm:pt-5">
         {showSharedInstrumentPrompt && (
@@ -11087,100 +11059,6 @@ function App() {
                   </div>
                 )}
               </div>
-            </div>
-          </div>
-        )}
-        {sharedPlaylistView &&
-          !authUserId &&
-          (sharedWelcomeStep !== 'hidden' ||
-            sharedWelcomeCompletedSetlistId !== sharedPlaylistView.setlistId) && (
-          <div className="fixed inset-0 z-[320] flex items-start justify-center overflow-y-auto overscroll-contain bg-slate-950 px-5 py-[calc(1rem+env(safe-area-inset-top))]">
-            <div className="my-auto max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-md overflow-y-auto overscroll-contain rounded-3xl border border-white/10 bg-slate-900/95 p-5 text-center">
-              {sharedWelcomeStep === 'welcome' ||
-              sharedWelcomeStep === 'welcome-fade' ||
-              sharedWelcomeStep === 'hidden' ? (
-                <div
-                  className={
-                    sharedWelcomeStep === 'welcome-fade'
-                      ? 'animate-[fade-out_700ms_ease-in_forwards]'
-                      : 'animate-[fade-in_420ms_ease-out]'
-                  }
-                >
-                  <img
-                    src={setlistConnectLogo}
-                    alt="Setlist Connect"
-                    className="mx-auto h-20 w-auto object-contain"
-                  />
-                  <p className="mt-3 text-xs uppercase tracking-[0.28em] text-teal-300/80">
-                    Setlist Connect
-                  </p>
-                  <h3 className="mt-2 text-2xl font-semibold">Welcome to Setlist Connect</h3>
-                  <p className="mt-2 text-sm text-slate-300">
-                    You are opening a live shared gig view for {sharedPlaylistView.gigName}.
-                  </p>
-                </div>
-              ) : sharedWelcomeStep === 'learn' ? (
-                <div className="animate-[fade-in_320ms_ease-out]">
-                  <h3 className="text-xl font-semibold">Learn More</h3>
-                  <p className="mt-3 text-sm text-slate-300">
-                    Setlist Connect gives musicians one clean place to see the gig, the setlist, the
-                    rehearsal audio, song notes, singer assignments, keys, charts, lyrics, and contact info.
-                  </p>
-                  <div className="mt-4 grid gap-2 text-left text-sm">
-                    {[
-                      ['Know the show fast', 'Open the shared gig link and see the date, venue, musicians, sections, and song order without digging through texts.'],
-                      ['Practice smarter', 'Tap a song to hear the saved rehearsal track, then filter by singer so each vocalist can focus on their own material.'],
-                      ['Show-ready details', 'Keys, singers, special requests, charts, and lyrics live with the setlist so the band is working from the same information.'],
-                      ['Keep the gig', 'Create a free account and save this setlist to your own My Gigs view, even if you are not an admin for the band.'],
-                    ].map(([title, detail]) => (
-                      <div key={title} className="rounded-2xl border border-white/10 bg-slate-950/45 p-3">
-                        <div className="font-semibold text-slate-100">{title}</div>
-                        <div className="mt-1 text-xs leading-relaxed text-slate-400">{detail}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="mt-4 rounded-2xl border border-teal-300/25 bg-teal-400/10 p-3 text-xs leading-relaxed text-teal-100">
-                    Beta note: early accounts are free while Setlist Connect is being refined. Paid
-                    plans for expanded storage and advanced tools will come later.
-                  </p>
-                  <div className="mt-4 flex flex-wrap justify-center gap-2">
-                    <button
-                      type="button"
-                      className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                      onClick={() => setSharedWelcomeStep('cta')}
-                    >
-                      Back
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="animate-[fade-in_320ms_ease-out]">
-                  <h3 className="text-xl font-semibold">Explore Setlist Connect</h3>
-                  <p className="mt-2 text-sm text-slate-300">
-                    Learn more about the platform, or skip straight to this gig&apos;s details.
-                  </p>
-                  <div className="mt-4 flex flex-col gap-2">
-                    <button
-                      type="button"
-                      className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                      onClick={() => setSharedWelcomeStep('learn')}
-                    >
-                      Learn more about Setlist Connect
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-xl border border-emerald-300/40 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100"
-                      onClick={() => {
-                        if (!sharedPlaylistView) return
-                        setSharedWelcomeCompletedSetlistId(sharedPlaylistView.setlistId)
-                        setSharedWelcomeStep('hidden')
-                      }}
-                    >
-                      Skip to Gig Info
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         )}

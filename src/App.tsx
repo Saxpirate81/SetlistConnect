@@ -942,10 +942,7 @@ function App() {
   const playlistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
   const sharedPlaylistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
   const playlistDrawerTouchStartYRef = useRef<number | null>(null)
-  const sharedPlaylistDrawerTouchStartYRef = useRef<number | null>(null)
-  const sharedPlaylistDrawerTouchStartXRef = useRef<number | null>(null)
   const playlistDrawerAutoCloseTimerRef = useRef<number | null>(null)
-  const sharedPlaylistDrawerAutoCloseTimerRef = useRef<number | null>(null)
   const setlistSectionSaveInProgressRef = useRef(false)
   const [widePlaylistUi, setWidePlaylistUi] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(min-width: 768px)').matches : false,
@@ -3646,60 +3643,6 @@ function App() {
     if (deltaY >= 90) {
       setPlaylistDrawerOverlay(false)
     }
-  }
-  const handleSharedPlaylistDrawerTouchStart = (event: TouchEvent<HTMLDivElement>) => {
-    if (sharedPlaylistDrawerOverlay) {
-      if (sharedPlaylistDrawerAutoCloseTimerRef.current) {
-        window.clearTimeout(sharedPlaylistDrawerAutoCloseTimerRef.current)
-      }
-      sharedPlaylistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
-        setSharedPlaylistDrawerOverlay(false)
-        sharedPlaylistDrawerAutoCloseTimerRef.current = null
-      }, 6000)
-    }
-    sharedPlaylistDrawerTouchStartYRef.current = event.touches[0]?.clientY ?? null
-    sharedPlaylistDrawerTouchStartXRef.current = event.touches[0]?.clientX ?? null
-  }
-  const handleSharedPlaylistDrawerTouchMove = () => {
-    if (!sharedPlaylistDrawerOverlay) return
-    if (sharedPlaylistDrawerAutoCloseTimerRef.current) {
-      window.clearTimeout(sharedPlaylistDrawerAutoCloseTimerRef.current)
-    }
-    sharedPlaylistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
-      setSharedPlaylistDrawerOverlay(false)
-      sharedPlaylistDrawerAutoCloseTimerRef.current = null
-    }, 6000)
-  }
-  const handleSharedPlaylistDrawerScroll = () => {
-    if (!sharedPlaylistDrawerOverlay) return
-    if (sharedPlaylistDrawerAutoCloseTimerRef.current) {
-      window.clearTimeout(sharedPlaylistDrawerAutoCloseTimerRef.current)
-    }
-    sharedPlaylistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
-      setSharedPlaylistDrawerOverlay(false)
-      sharedPlaylistDrawerAutoCloseTimerRef.current = null
-    }, 6000)
-  }
-  const handleSharedPlaylistDrawerTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
-    const startX = sharedPlaylistDrawerTouchStartXRef.current
-    const startY = sharedPlaylistDrawerTouchStartYRef.current
-    sharedPlaylistDrawerTouchStartXRef.current = null
-    sharedPlaylistDrawerTouchStartYRef.current = null
-    if (startX === null) return
-    const endX = event.changedTouches[0]?.clientX ?? startX
-    const deltaX = endX - startX
-    if (deltaX <= -55) {
-      setSharedPlaylistDrawerOverlay(true)
-      return
-    }
-    if (deltaX >= 55) {
-      setSharedPlaylistDrawerOverlay(false)
-      return
-    }
-    if (startY === null) return
-    const endY = event.changedTouches[0]?.clientY ?? startY
-    const deltaY = endY - startY
-    if (Math.abs(deltaY) > 90) setSharedPlaylistDrawerOverlay(false)
   }
   const movePlaylistBy = (delta: number) => {
     if (!visiblePlaylistEntries.length) return
@@ -9869,26 +9812,6 @@ function App() {
   }, [playlistDrawerOverlay])
 
   useEffect(() => {
-    if (!sharedPlaylistDrawerOverlay) {
-      if (sharedPlaylistDrawerAutoCloseTimerRef.current) {
-        window.clearTimeout(sharedPlaylistDrawerAutoCloseTimerRef.current)
-        sharedPlaylistDrawerAutoCloseTimerRef.current = null
-      }
-      return
-    }
-    sharedPlaylistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
-      setSharedPlaylistDrawerOverlay(false)
-      sharedPlaylistDrawerAutoCloseTimerRef.current = null
-    }, 6000)
-    return () => {
-      if (sharedPlaylistDrawerAutoCloseTimerRef.current) {
-        window.clearTimeout(sharedPlaylistDrawerAutoCloseTimerRef.current)
-        sharedPlaylistDrawerAutoCloseTimerRef.current = null
-      }
-    }
-  }, [sharedPlaylistDrawerOverlay])
-
-  useEffect(() => {
     if (playlistIndex < visiblePlaylistEntries.length) return
     setPlaylistIndex(Math.max(0, visiblePlaylistEntries.length - 1))
   }, [playlistIndex, visiblePlaylistEntries.length])
@@ -10528,8 +10451,6 @@ function App() {
                   <>
                     <div
                       className="relative order-1 mt-3 flex flex-col overflow-visible md:order-2 md:mt-4 md:flex-1 md:flex-row md:gap-4 md:overflow-hidden"
-                      onTouchStart={handleSharedPlaylistDrawerTouchStart}
-                      onTouchEnd={handleSharedPlaylistDrawerTouchEnd}
                     >
                       <div
                         ref={sharedPlaylistPlayerBlockRef}
@@ -10691,9 +10612,6 @@ function App() {
                           } bottom-[calc(6.5rem+env(safe-area-inset-bottom))] left-3 right-3 top-[calc(1rem+env(safe-area-inset-top))] z-[330] order-4 flex flex-col overflow-hidden rounded-3xl border border-teal-300/40 bg-slate-900 shadow-2xl md:static md:order-none md:mt-0 md:flex md:h-full md:w-[320px] md:max-w-none md:shrink-0 md:rounded-2xl md:shadow-xl lg:w-[340px] ${
                             sharedPlaylistDrawerOverlay ? '' : 'md:flex'
                           } ${widePlaylistUi ? 'md:static' : 'md:min-h-0'}`}
-                          onTouchStart={handleSharedPlaylistDrawerTouchStart}
-                          onTouchMove={handleSharedPlaylistDrawerTouchMove}
-                          onTouchEnd={handleSharedPlaylistDrawerTouchEnd}
                         >
                           <div className="flex shrink-0 items-center justify-center py-2 md:hidden">
                             <div className="h-1 w-12 rounded-full bg-white/25" />
@@ -10712,7 +10630,6 @@ function App() {
                           </div>
                           <div
                             className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 pb-2 md:h-full md:max-h-none"
-                            onScroll={handleSharedPlaylistDrawerScroll}
                           >
                             <div className="sticky top-0 z-10 mb-2 bg-slate-900/95 pb-2 pt-1 backdrop-blur">
                               <select

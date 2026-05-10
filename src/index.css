@@ -76,6 +76,29 @@ body {
   overscroll-behavior-y: contain;
 }
 
+.ios-standalone-mode .shared-public-mode.shared-ios-standalone {
+  padding-top: calc(0.75rem + env(safe-area-inset-top));
+  padding-bottom: calc(9.25rem + env(safe-area-inset-bottom));
+}
+
+.ios-standalone-mode .shared-bottom-nav.shared-bottom-nav-ios {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.ios-standalone-mode .playlist-modal-shell.playlist-modal-ios-standalone {
+  padding-bottom: calc(7.25rem + env(safe-area-inset-bottom));
+}
+
+.ios-standalone-mode .playlist-modal-bottom-nav.playlist-modal-bottom-nav-ios {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  margin-left: 0;
+  margin-right: 0;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
 .shared-public-setlist-scroll {
   -webkit-overflow-scrolling: touch;
   max-height: none;
@@ -226,22 +249,6 @@ button.icon-header-btn[aria-label="Back"]::before {
   width: 100%;
 }
 
-.gig-sheet-upnext-shell {
-  padding-left: var(--gig-sheet-upnext-padding-x);
-  padding-right: var(--gig-sheet-upnext-padding-x);
-  padding-top: var(--gig-sheet-upnext-padding-y);
-  padding-bottom: var(--gig-sheet-upnext-padding-y);
-}
-
-.gig-sheet-upnext-actions {
-  display: grid;
-  width: var(--gig-sheet-upnext-actions-width);
-  flex-shrink: 0;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: center;
-  gap: var(--gig-sheet-upnext-actions-gap);
-}
-
 .gig-sheet-upnext-action-button {
   display: flex;
   height: var(--gig-sheet-upnext-action-height);
@@ -255,54 +262,8 @@ button.icon-header-btn[aria-label="Back"]::before {
   font-weight: 600;
 }
 
-.gig-sheet-topbar {
-  padding-top: var(--gig-sheet-topbar-py);
-  padding-bottom: var(--gig-sheet-topbar-py);
-}
-
-.gig-sheet-top-grid {
-  gap: var(--gig-sheet-top-grid-gap);
-}
-
-.gig-sheet-search-input {
-  padding-top: var(--gig-sheet-search-py);
-  padding-bottom: var(--gig-sheet-search-py);
-}
-
-.gig-sheet-upnext-row {
-  min-height: var(--gig-sheet-upnext-min-row-height);
-}
-
-.gig-sheet-upnext-title {
-  margin-top: var(--gig-sheet-upnext-title-margin-top);
-  font-size: var(--gig-sheet-upnext-title-size);
-  font-weight: 600;
-  line-height: 1.25;
-}
-
-@media (min-width: 768px) {
-  .gig-sheet-upnext-actions {
-    width: var(--gig-sheet-upnext-actions-width-md);
-  }
-
-  .gig-sheet-upnext-title {
-    font-size: var(--gig-sheet-upnext-title-size-md);
-  }
-}
-
 .gig-sheet-clear-upnext {
   min-height: 32px;
-}
-
-.gig-sheet-lanes {
-  display: flex;
-  height: 100%;
-  flex-wrap: nowrap;
-  align-items: stretch;
-  gap: var(--gig-sheet-lane-gap);
-  overflow-x: auto;
-  overflow-y: hidden;
-  scroll-snap-type: x mandatory;
 }
 
 .gig-sheet-card {
@@ -311,13 +272,6 @@ button.icon-header-btn[aria-label="Back"]::before {
   max-height: calc(100vh - 220px);
   overflow-x: hidden;
   overflow-y: auto;
-}
-
-.gig-sheet-lane {
-  min-width: var(--gig-sheet-lane-width-mobile);
-  width: var(--gig-sheet-lane-width-mobile);
-  flex-shrink: 0;
-  scroll-snap-align: start;
 }
 
 .print-section-box.gig-sheet-card {
@@ -330,17 +284,6 @@ button.icon-header-btn[aria-label="Back"]::before {
     max-height: none;
   }
 
-  .gig-sheet-lane {
-    min-width: var(--gig-sheet-lane-width-desktop);
-    width: var(--gig-sheet-lane-width-desktop);
-  }
-}
-
-.gig-sheet-section-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
 }
 
 .gig-sheet-card .print-section-title {
@@ -883,15 +826,6 @@ button[aria-label="Print chart or lyrics"] {
   }
   to {
     opacity: 1;
-  }
-}
-
-@keyframes fade-out {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
   }
 }
 

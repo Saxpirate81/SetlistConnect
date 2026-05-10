@@ -12,6 +12,7 @@ import {
 import { flushSync } from 'react-dom'
 import { PlaylistYouTubePlayer, type PlaylistYouTubePlayerHandle } from './PlaylistYouTubePlayer'
 import { isSupabaseEnabled, supabase, supabaseEnvStatus } from './lib/supabaseClient'
+import { getYouTubeEmbedUrl, isYouTubeUrl } from './lib/youtube'
 import downloadPdfIcon from './assets/download-pdf-icon.png'
 import openPlaylistIcon from './assets/open-playlist-icon.png'
 import setlistConnectLogo from './assets/setlist-connect-logo.png'
@@ -38,11 +39,12 @@ const isMainNavScreen = (
   value === 'setlists' || value === 'song' || value === 'musicians' || value === 'account'
 type BandTier = 'free' | 'pro'
 const SHARED_SIGNUP_RETURN_KEY = 'setlist:sharedSignupReturnView'
-const BILLING_TEST_EMAILS = new Set([
-  'bill.doss@ymail.com',
-  'bill.doss@therealschoolofmusic.com',
-  'bill.doss@therealschoolofmuis.com',
-])
+const BILLING_TEST_EMAILS = new Set(
+  String(import.meta.env.VITE_BILLING_TEST_EMAILS ?? '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean),
+)
 
 type SongKey = {
   singer: string
@@ -648,6 +650,7 @@ function App() {
   const [docInstrumentDraft, setDocInstrumentDraft] = useState<string[]>([])
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [isInstalled, setIsInstalled] = useState(false)
+  const [isStandaloneDisplayMode, setIsStandaloneDisplayMode] = useState(false)
   const [dismissedUpNextId, setDismissedUpNextId] = useState<string | null>(null)
   const [audioModalUrl, setAudioModalUrl] = useState<string | null>(null)
   const [audioModalLabel, setAudioModalLabel] = useState('Audio player')
@@ -752,7 +755,11 @@ function App() {
   const [sharedSignupReturnView, setSharedSignupReturnView] = useState<SharedPlaylistView | null>(() => {
     try {
       const raw = localStorage.getItem(SHARED_SIGNUP_RETURN_KEY)
-      return raw ? (JSON.parse(raw) as SharedPlaylistView) : null
+      const parsed = raw ? parseSharedPlaylistPayload(raw) : null
+      if (!parsed && raw) {
+        localStorage.removeItem(SHARED_SIGNUP_RETURN_KEY)
+      }
+      return parsed
     } catch {
       return null
     }
@@ -762,10 +769,8 @@ function App() {
   const [sharedPublicTab, setSharedPublicTab] = useState<'setlist' | 'playlist'>('setlist')
   const [sharedWelcomeStep, setSharedWelcomeStep] = useState<'hidden' | 'cta' | 'learn'>('hidden')
   const [sharedWelcomeCompletedSetlistId, setSharedWelcomeCompletedSetlistId] = useState<string | null>(null)
-  const [playlistModalYoutubeGateActive, setPlaylistModalYoutubeGateActive] = useState(true)
   const playlistModalYtHandleRef = useRef<PlaylistYouTubePlayerHandle | null>(null)
   const sharedPublicYtHandleRef = useRef<PlaylistYouTubePlayerHandle | null>(null)
-  const dismissedModalYtGateBySetlistIdRef = useRef(new Set<string>())
   const [sharedGigMusicians, setSharedGigMusicians] = useState<Musician[]>([])
   const [sharedDocuments, setSharedDocuments] = useState<Document[]>([])
   const [sharedDocsLoading, setSharedDocsLoading] = useState(false)
@@ -962,7 +967,6 @@ function App() {
   const [recentlyMovedSongId, setRecentlyMovedSongId] = useState<string | null>(null)
   const movedSongTimerRef = useRef<number | null>(null)
   const [activeBuildPanel, setActiveBuildPanel] = useState<string | null>(null)
-  const [, setBuildPanelDirty] = useState(false)
   const [pendingSingerAssignments, setPendingSingerAssignments] = useState<
     Record<string, { singer: string; key: string }[]>
   >({})
@@ -1104,11 +1108,17 @@ function App() {
   }, [authLoading])
 
   useEffect(() => {
-    const standaloneMatch = window.matchMedia('(display-mode: standalone)').matches
-    const iosStandalone = (window.navigator as Navigator & { standalone?: boolean }).standalone
-    if (standaloneMatch || iosStandalone) {
-      setIsInstalled(true)
+    const displayModeMedia = window.matchMedia('(display-mode: standalone)')
+    const syncInstallState = () => {
+      const standaloneMatch = displayModeMedia.matches
+      const iosStandalone = (window.navigator as Navigator & { standalone?: boolean }).standalone
+      const standaloneMode = Boolean(standaloneMatch || iosStandalone)
+      setIsStandaloneDisplayMode(standaloneMode)
+      if (standaloneMode) {
+        setIsInstalled(true)
+      }
     }
+    syncInstallState()
 
     const handleBeforeInstall = (event: Event) => {
       event.preventDefault()
@@ -1119,11 +1129,28 @@ function App() {
       setInstallPrompt(null)
     }
 
+    const handleDisplayModeChange = () => {
+      syncInstallState()
+    }
     window.addEventListener('beforeinstallprompt', handleBeforeInstall)
     window.addEventListener('appinstalled', handleInstalled)
+    window.addEventListener('pageshow', handleDisplayModeChange)
+    window.addEventListener('orientationchange', handleDisplayModeChange)
+    if (typeof displayModeMedia.addEventListener === 'function') {
+      displayModeMedia.addEventListener('change', handleDisplayModeChange)
+    } else {
+      displayModeMedia.addListener(handleDisplayModeChange)
+    }
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall)
       window.removeEventListener('appinstalled', handleInstalled)
+      window.removeEventListener('pageshow', handleDisplayModeChange)
+      window.removeEventListener('orientationchange', handleDisplayModeChange)
+      if (typeof displayModeMedia.removeEventListener === 'function') {
+        displayModeMedia.removeEventListener('change', handleDisplayModeChange)
+      } else {
+        displayModeMedia.removeListener(handleDisplayModeChange)
+      }
     }
   }, [])
 
@@ -1280,17 +1307,22 @@ function App() {
     return normalized
   }, [])
   const formatDocumentInstruments = (raw: string) => parseDocumentInstruments(raw).join(', ')
-  const activeInstruments =
-    appState.instrument && appState.instrument.length > 0 ? appState.instrument : ['All']
-  const documentMatchesActiveInstruments = (doc: Document) => {
-    if (role === 'admin') return true
-    if (activeInstruments.includes('All')) return true
-    const docInstruments = parseDocumentInstruments(doc.instrument)
-    return docInstruments.includes('All')
-      ? true
-      : docInstruments.some((item) => activeInstruments.includes(item))
-  }
-  const getDocumentSelectionItems = (songId: string) => {
+  const activeInstruments = useMemo(
+    () => (appState.instrument && appState.instrument.length > 0 ? appState.instrument : ['All']),
+    [appState.instrument],
+  )
+  const documentMatchesActiveInstruments = useCallback(
+    (doc: Document) => {
+      if (role === 'admin') return true
+      if (activeInstruments.includes('All')) return true
+      const docInstruments = parseDocumentInstruments(doc.instrument)
+      return docInstruments.includes('All')
+        ? true
+        : docInstruments.some((item) => activeInstruments.includes(item))
+    },
+    [activeInstruments, parseDocumentInstruments, role],
+  )
+  const getDocumentSelectionItems = useCallback((songId: string) => {
     const docs = appState.documents
       .filter((doc) => doc.songId === songId)
       .filter((doc) => documentMatchesActiveInstruments(doc))
@@ -1330,7 +1362,7 @@ function App() {
       if (a.type !== 'Lyrics' && b.type === 'Lyrics') return 1
       return a.title.localeCompare(b.title)
     })
-  }
+  }, [appState.documents, documentMatchesActiveInstruments, parseDocumentInstruments])
   const getSharedDocumentSelectionItems = useCallback(
     (songId: string) => {
       const docs = sharedDocuments
@@ -1398,51 +1430,61 @@ function App() {
     panel && panel.startsWith(SETLIST_PANEL_PREFIX)
       ? panel.slice(SETLIST_PANEL_PREFIX.length)
       : null
-  const normalizeSetlistSectionLabel = (value: string) =>
-    value.replace(/\s+/g, ' ').trim()
+  const normalizeSetlistSectionLabel = useCallback(
+    (value: string) => value.replace(/\s+/g, ' ').trim(),
+    [],
+  )
   const makeGigSectionTag = (gigId: string, section: string) =>
     `${GIG_SECTION_TAG_PREFIX}${gigId}::${encodeURIComponent(normalizeSetlistSectionLabel(section))}`
-  const getSectionDeleteKey = (section: string) =>
-    normalizeSetlistSectionLabel(section).toLowerCase()
+  const getSectionDeleteKey = useCallback(
+    (section: string) => normalizeSetlistSectionLabel(section).toLowerCase(),
+    [normalizeSetlistSectionLabel],
+  )
   const makeGigSectionDeletedTag = (gigId: string, section: string) =>
     `${GIG_SECTION_DELETED_TAG_PREFIX}${gigId}::${encodeURIComponent(normalizeSetlistSectionLabel(section))}`
-  const parseGigSectionTag = (value: string): { gigId: string; section: string } | null => {
-    if (!value.startsWith(GIG_SECTION_TAG_PREFIX)) return null
-    const payload = value.slice(GIG_SECTION_TAG_PREFIX.length)
-    const separatorIndex = payload.indexOf('::')
-    if (separatorIndex <= 0) return null
-    const gigId = payload.slice(0, separatorIndex)
-    const encodedSection = payload.slice(separatorIndex + 2)
-    const decodedSection = normalizeSetlistSectionLabel(
-      decodeURIComponent(encodedSection || ''),
-    )
-    if (!gigId || !decodedSection) return null
-    return { gigId, section: decodedSection }
-  }
-  const parseGigSectionDeletedTag = (value: string): { gigId: string; section: string } | null => {
-    if (!value.startsWith(GIG_SECTION_DELETED_TAG_PREFIX)) return null
-    const payload = value.slice(GIG_SECTION_DELETED_TAG_PREFIX.length)
-    const separatorIndex = payload.indexOf('::')
-    if (separatorIndex <= 0) return null
-    const gigId = payload.slice(0, separatorIndex)
-    const encodedSection = payload.slice(separatorIndex + 2)
-    const decodedSection = normalizeSetlistSectionLabel(
-      decodeURIComponent(encodedSection || ''),
-    )
-    if (!gigId || !decodedSection) return null
-    return { gigId, section: decodedSection }
-  }
+  const parseGigSectionTag = useCallback(
+    (value: string): { gigId: string; section: string } | null => {
+      if (!value.startsWith(GIG_SECTION_TAG_PREFIX)) return null
+      const payload = value.slice(GIG_SECTION_TAG_PREFIX.length)
+      const separatorIndex = payload.indexOf('::')
+      if (separatorIndex <= 0) return null
+      const gigId = payload.slice(0, separatorIndex)
+      const encodedSection = payload.slice(separatorIndex + 2)
+      const decodedSection = normalizeSetlistSectionLabel(
+        decodeURIComponent(encodedSection || ''),
+      )
+      if (!gigId || !decodedSection) return null
+      return { gigId, section: decodedSection }
+    },
+    [normalizeSetlistSectionLabel],
+  )
+  const parseGigSectionDeletedTag = useCallback(
+    (value: string): { gigId: string; section: string } | null => {
+      if (!value.startsWith(GIG_SECTION_DELETED_TAG_PREFIX)) return null
+      const payload = value.slice(GIG_SECTION_DELETED_TAG_PREFIX.length)
+      const separatorIndex = payload.indexOf('::')
+      if (separatorIndex <= 0) return null
+      const gigId = payload.slice(0, separatorIndex)
+      const encodedSection = payload.slice(separatorIndex + 2)
+      const decodedSection = normalizeSetlistSectionLabel(
+        decodeURIComponent(encodedSection || ''),
+      )
+      if (!gigId || !decodedSection) return null
+      return { gigId, section: decodedSection }
+    },
+    [normalizeSetlistSectionLabel],
+  )
   const getGigSongSectionOverride = useCallback(
     (gigId: string, songId: string) => {
       const override = gigSongSectionOverrides[gigId]?.[songId]
       return override ? normalizeSetlistSectionLabel(override) : ''
     },
-    [gigSongSectionOverrides],
+    [gigSongSectionOverrides, normalizeSetlistSectionLabel],
   )
   const getDeletedSectionSongIds = useCallback(
     (gigId: string, section: string) =>
       new Set(gigDeletedSectionSongs[gigId]?.[getSectionDeleteKey(section)] ?? []),
-    [gigDeletedSectionSongs],
+    [gigDeletedSectionSongs, getSectionDeleteKey],
   )
   const isExplicitGigSetlistSection = useCallback(
     (gigId: string, section: string) => {
@@ -1452,7 +1494,7 @@ function App() {
         (item) => normalizeSetlistSectionLabel(item).toLowerCase() === normalizedSection,
       )
     },
-    [gigSetlistSections],
+    [gigSetlistSections, normalizeSetlistSectionLabel],
   )
   const songMatchesGigSection = useCallback(
     (song: Song, section: string, gigId: string) => {
@@ -1477,7 +1519,7 @@ function App() {
       }
       return hasSongTag(song, section)
     },
-    [getGigSongSectionOverride, isExplicitGigSetlistSection],
+    [getGigSongSectionOverride, isExplicitGigSetlistSection, normalizeSetlistSectionLabel],
   )
   const normalizeTagIdentity = (value: string) =>
     value
@@ -1527,7 +1569,7 @@ function App() {
     if (identity === 'djonly') return true
     if (requestTypeIdentitySet.has(identity)) return false
     return !specialTypeIdentitySet.has(identity)
-  }, [requestTypeIdentitySet, specialTypeIdentitySet])
+  }, [normalizeSetlistSectionLabel, requestTypeIdentitySet, specialTypeIdentitySet])
   const setlistTypeTags = useMemo(
     () => normalizeTagList(appState.tagsCatalog.filter((tag) => isSetlistTypeTag(tag))),
     [appState.tagsCatalog, isSetlistTypeTag],
@@ -1616,7 +1658,8 @@ function App() {
     editingMusicianRoster,
     editingMusicianSinger,
   ])
-  const isBillingTestAccount = BILLING_TEST_EMAILS.has((authUserEmail ?? '').trim().toLowerCase())
+  const isBillingTestAccount =
+    import.meta.env.DEV && BILLING_TEST_EMAILS.has((authUserEmail ?? '').trim().toLowerCase())
   const activeBandTier: BandTier = isBillingTestAccount
     ? 'pro'
     : activeBandId
@@ -1641,8 +1684,14 @@ function App() {
   const isSelectedDowngrade = Boolean(
     selectedTier && tierRank[selectedTier] < tierRank[activeBandTier],
   )
-  const canCreateSongs = useCallback((_nextSongCount = 1) => true, [])
-  const canCreateMusicians = useCallback((_nextMusicianCount = 1) => true, [])
+  const canCreateSongs = useCallback((nextSongCount = 1) => {
+    void nextSongCount
+    return true
+  }, [])
+  const canCreateMusicians = useCallback((nextMusicianCount = 1) => {
+    void nextMusicianCount
+    return true
+  }, [])
   const canCreateGigs = useCallback(() => true, [])
   const isSpecialSectionHidden = currentSetlist
     ? Boolean(gigHiddenSpecialSection[currentSetlist.id])
@@ -1684,6 +1733,7 @@ function App() {
     gigSetlistSections,
     getGigSongSectionOverride,
     isSetlistTypeTag,
+    normalizeSetlistSectionLabel,
   ])
   const printableSetSections = useMemo(() => {
     if (!currentSetlist) return []
@@ -1705,7 +1755,7 @@ function App() {
       .flatMap((song) => song.tags)
       .forEach(addSection)
     return sections
-  }, [appState.songs, currentSetlist, isSetlistTypeTag, orderedSetSections])
+  }, [appState.songs, currentSetlist, isSetlistTypeTag, normalizeSetlistSectionLabel, orderedSetSections])
   const orderedPrintableSongSections = useMemo(() => {
     if (!currentSetlist) return []
     const isDjOnlySection = (section: string) => section.trim().toLowerCase() === 'dj only'
@@ -1817,7 +1867,7 @@ function App() {
     if (lower === 'special request' || lower === 'special requests') return 'Special Requests'
     if (lower === 'dj only') return 'DJ Only'
     return normalized
-  }, [])
+  }, [normalizeSetlistSectionLabel])
   const getPlaylistSections = useCallback((entry: PlaylistEntry) => {
     const seen = new Set<string>()
     const normalizedTags = (entry.tags ?? [])
@@ -2162,7 +2212,7 @@ function App() {
     return appState.songs.find((song) => song.title.trim().toLowerCase() === title) ?? null
   }, [appState.songs, pendingSpecialSong])
 
-  const getGigSingerAssignments = (songId: string, gigId: string) => {
+  const getGigSingerAssignments = useCallback((songId: string, gigId: string) => {
     const song = appState.songs.find((item) => item.id === songId)
     if (!song) return []
     const savedAssignments = song.keys
@@ -2181,9 +2231,9 @@ function App() {
         })),
       )
       .filter((entry) => entry.singer && entry.key)
-  }
+  }, [appState.songs, appState.specialRequests])
 
-  const getSpecialRequestDisplayAssignments = (request: SpecialRequest) => {
+  const getSpecialRequestDisplayAssignments = useCallback((request: SpecialRequest) => {
     if (request.djOnly) {
       return { singers: ['DJ'], keys: [] }
     }
@@ -2198,7 +2248,7 @@ function App() {
       singers: directSingers.length ? directSingers : savedSingers,
       keys: directKeys.length ? directKeys : savedKeys,
     }
-  }
+  }, [getGigSingerAssignments])
 
   const formatSpecialRequestKeyLabel = (request: SpecialRequest) => {
     if (request.djOnly) return '—'
@@ -2314,13 +2364,17 @@ function App() {
   }, [
     appState.songs,
     currentSetlist,
+    getSpecialRequestDisplayAssignments,
     getGigSongSectionOverride,
     getOrderedSpecialRequests,
     isSetlistTypeTag,
     normalizePlaylistSection,
   ])
 
-  const sharedAllPlaylistEntries = sharedPlaylistView?.allEntries ?? sharedPlaylistView?.entries ?? []
+  const sharedAllPlaylistEntries = useMemo(
+    () => sharedPlaylistView?.allEntries ?? sharedPlaylistView?.entries ?? [],
+    [sharedPlaylistView],
+  )
   const activePlaylistEntries = sharedPlaylistView ? sharedAllPlaylistEntries : playlistEntries
   const fallbackSharedUpNextEntry = useMemo(
     () => sharedAllPlaylistEntries[playlistIndex] ?? activePlaylistEntries[playlistIndex] ?? null,
@@ -3450,7 +3504,6 @@ function App() {
     ),
     [
       activeLyricsDocUndoStack.length,
-      activeLyricsDocState.strokes.length,
       applyLyricsHighlightSelection,
       baseLyricsText,
       beginLyricsPanelDrag,
@@ -3501,6 +3554,7 @@ function App() {
     if (!visiblePlaylistEntries.length) return
     const selectedEntry = visiblePlaylistEntries[index]
     if (!selectedEntry) return
+    const selectedUrl = (selectedEntry.audioUrl ?? '').trim()
     flushSync(() => {
       setPlaylistIndex(index)
       if (isPlaylistEntryPlayable(selectedEntry)) {
@@ -3508,9 +3562,14 @@ function App() {
       }
     })
     if (isPlaylistEntryPlayable(selectedEntry)) {
-      if (isYouTubeUrl(selectedEntry.audioUrl ?? null) && selectedEntry.audioUrl) {
-        sharedPublicYtHandleRef.current?.loadAndPlayUrl(selectedEntry.audioUrl)
-        playlistModalYtHandleRef.current?.loadAndPlayUrl(selectedEntry.audioUrl)
+      if (isYouTubeUrl(selectedUrl)) {
+        const activeYtHandle = sharedPlaylistView
+          ? sharedPublicYtHandleRef.current
+          : playlistModalYtHandleRef.current
+        activeYtHandle?.loadAndPlayUrl(selectedUrl)
+      } else if (!isAudioFileUrl(selectedUrl) && selectedUrl) {
+        // Non-embedded sources (Spotify/external links) should start immediately on selection.
+        openExternalUrlSafely(selectedUrl)
       }
     }
   }
@@ -3524,16 +3583,6 @@ function App() {
     }
     setPlaylistPlayNonce((current) => current + 1)
   }
-  const playPlaylistFromFirstYoutube = () => {
-    if (!visiblePlaylistEntries.length) return
-    const idx = visiblePlaylistEntries.findIndex((entry) => isYouTubeUrl(entry.audioUrl ?? null))
-    if (idx >= 0) {
-      setPlaylistIndex(idx)
-      setPlaylistPlayNonce((current) => current + 1)
-    } else {
-      playPlaylistFromStart()
-    }
-  }
   const resolveFirstYoutubeInPlaylist = () => {
     if (!visiblePlaylistEntries.length) return null
     const idx = visiblePlaylistEntries.findIndex((entry) => isYouTubeUrl(entry.audioUrl ?? null))
@@ -3541,24 +3590,6 @@ function App() {
     const url = visiblePlaylistEntries[idx]?.audioUrl?.trim()
     if (!url || !isYouTubeUrl(url)) return null
     return { idx, url }
-  }
-  const handleModalYoutubeOverlayPlay = () => {
-    const resolved = resolveFirstYoutubeInPlaylist()
-    const modalSetlistId = selectedSetlistId
-    flushSync(() => {
-      setPlaylistModalYoutubeGateActive(false)
-      if (resolved) {
-        setPlaylistIndex(resolved.idx)
-      } else {
-        playPlaylistFromStart()
-      }
-    })
-    if (modalSetlistId) {
-      dismissedModalYtGateBySetlistIdRef.current.add(modalSetlistId)
-    }
-    if (resolved) {
-      playlistModalYtHandleRef.current?.loadAndPlayUrl(resolved.url)
-    }
   }
   /** Shared “Audio” tab: switching from Setlist counts as the user gesture for YouTube playback (no overlay). */
   const handleSharedPublicAudioTabClick = () => {
@@ -3790,6 +3821,19 @@ function App() {
     return entries
       .map((entry) => `${entry.singer}: ${entry.key}`)
       .join(' · ')
+  }
+
+  const getGigKeySummary = (songId: string, gigId: string) => {
+    const song = appState.songs.find((item) => item.id === songId)
+    if (!song) return ''
+    const keys = Array.from(
+      new Set(
+        song.keys
+          .map((key) => (key.gigOverrides[gigId] ?? '').trim())
+          .filter(Boolean),
+      ),
+    )
+    return keys.join(', ')
   }
 
   const getPlaylistAssignmentText = (entry: PlaylistEntry) => {
@@ -4031,7 +4075,6 @@ function App() {
         return
       }
     }
-    setBuildPanelDirty(true)
     setBuildCompleteOverrides((prev) => {
       const next = {
         ...prev,
@@ -4461,12 +4504,24 @@ function App() {
           return currentOrigin
         }
         const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(currentOrigin)
-        if (import.meta.env.PROD || isLocalOrigin) {
+        const isConfiguredLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(
+          configuredOrigin,
+        )
+        // Safety: never generate localhost verification links in production.
+        if (import.meta.env.PROD) {
+          return isConfiguredLocal ? currentOrigin : configuredOrigin
+        }
+        if (isLocalOrigin) {
           return configuredOrigin
         }
         return currentOrigin
       }
       if (authMode === 'signup') {
+        if (isSharedLinkAuthContext) {
+          setAuthError('Account signup is disabled from shared gig links. Please ask the band leader for access.')
+          setAuthLoading(false)
+          return
+        }
         const signUpPromise = supabase.auth.signUp({
           email: authEmail.trim().toLowerCase(),
           password: authPassword,
@@ -4807,7 +4862,6 @@ function App() {
       setSelectedSongIds([])
       return
     }
-    setBuildPanelDirty(true)
     commitChange('Add songs', (prev) => ({
       ...prev,
       setlists: prev.setlists.map((setlist) =>
@@ -4925,7 +4979,6 @@ function App() {
         })),
     )
 
-    setBuildPanelDirty(true)
     commitChange('Add songs to setlists', (prev) => ({
       ...prev,
       songs: prev.songs.map((song) =>
@@ -5003,7 +5056,8 @@ function App() {
         return {
           ...song,
           keys: song.keys.map((key) => {
-            const { [currentSetlist.id]: _removed, ...remainingGigOverrides } = key.gigOverrides
+            const remainingGigOverrides = { ...key.gigOverrides }
+            delete remainingGigOverrides[currentSetlist.id]
             return { ...key, gigOverrides: remainingGigOverrides }
           }),
         }
@@ -5078,7 +5132,8 @@ function App() {
           ...song,
           keys: song.keys.map((key) => {
             if (key.singer.trim().toLowerCase() !== normalizedSinger) return key
-            const { [currentSetlist.id]: _removed, ...remainingGigOverrides } = key.gigOverrides
+            const remainingGigOverrides = { ...key.gigOverrides }
+            delete remainingGigOverrides[currentSetlist.id]
             return { ...key, gigOverrides: remainingGigOverrides }
           }),
         }
@@ -5198,7 +5253,6 @@ function App() {
     if (!source || !currentSetlist) return false
     const normalizedSection = normalizeSetlistSectionLabel(section)
     if (!normalizedSection) return false
-    setBuildPanelDirty(true)
     const activeSingerNames = new Set(
       appState.gigMusicians
         .filter((entry) => entry.gigId === currentSetlist.id && entry.status !== 'out')
@@ -5248,8 +5302,8 @@ function App() {
           const sourceKey = key.gigOverrides[gigId]
           const isActiveSinger = activeSingerNames.has(key.singer.trim().toLowerCase())
           if (!isActiveSinger) {
-            const { [currentSetlist.id]: _removedCurrentGigKey, ...remainingGigOverrides } =
-              key.gigOverrides
+            const remainingGigOverrides = { ...key.gigOverrides }
+            delete remainingGigOverrides[currentSetlist.id]
             return {
               ...key,
               gigOverrides: remainingGigOverrides,
@@ -5397,7 +5451,6 @@ function App() {
       .map((line) => line.trim())
       .filter(Boolean)
     if (!lines.length) return
-    setBuildPanelDirty(true)
     const normalize = (value: string) =>
       value.toLowerCase().replace(/[’']/g, '').replace(/\s+/g, ' ').trim()
     const entries = lines
@@ -5566,7 +5619,6 @@ function App() {
     })
     const dedupedNextSongIds = Array.from(new Set(nextSongIds))
 
-    setBuildPanelDirty(true)
     commitChange(`Reorder ${section} songs`, (prev) => ({
       ...prev,
       setlists: prev.setlists.map((setlist) =>
@@ -5665,7 +5717,6 @@ function App() {
     const nextSongIds = [...withoutSong]
     nextSongIds.splice(insertionIndex, 0, songId)
 
-    setBuildPanelDirty(true)
     commitChange(`Move song to ${normalizedToSection}`, (prev) => ({
       ...prev,
       setlists: prev.setlists.map((setlist) =>
@@ -5701,7 +5752,6 @@ function App() {
     reordered.splice(toIndex, 0, moved)
     const reorderedIds = reordered.map((request) => request.id)
 
-    setBuildPanelDirty(true)
     setSpecialRequestOrderByGig((prev) => ({
       ...prev,
       [gigId]: reorderedIds,
@@ -5817,7 +5867,6 @@ function App() {
       (section) => section.toLowerCase() === normalized.toLowerCase(),
     )
     if (existing) return
-    setBuildPanelDirty(true)
     setGigSetlistSections((prev) => {
       const next = {
         ...prev,
@@ -5856,7 +5905,6 @@ function App() {
     const reordered = [...orderedSetSections]
     const [moved] = reordered.splice(fromIndex, 1)
     reordered.splice(toIndex, 0, moved)
-    setBuildPanelDirty(true)
     setGigSetlistSections((prev) => ({
       ...prev,
       [currentSetlist.id]: reordered,
@@ -6001,7 +6049,6 @@ function App() {
     const section = pendingDeleteSetlistSection
     const normalized = section.trim().toLowerCase()
     if (normalized === 'special request' || normalized === 'special requests') {
-      setBuildPanelDirty(true)
       setGigHiddenSpecialSection((prev) => ({
         ...prev,
         [currentSetlist.id]: true,
@@ -6013,7 +6060,6 @@ function App() {
       setShowDeleteSetlistSectionConfirm(false)
       return
     }
-    setBuildPanelDirty(true)
     const sectionSongIds = getSectionSongIds(section)
     const sectionSongIdSet = new Set(sectionSongIds)
     if (sectionSongIds.length > 0) {
@@ -6222,7 +6268,6 @@ function App() {
 
   const importRosterToGig = () => {
     if (!activeGigId) return
-    setBuildPanelDirty(true)
     const coreMusicians = appState.musicians.filter((musician) => musician.roster === 'core')
     commitChange('Import roster', (prev) => ({
       ...prev,
@@ -6261,7 +6306,6 @@ function App() {
 
   const toggleGigMusicianStatus = (musicianId: string) => {
     if (!activeGigId) return
-    setBuildPanelDirty(true)
     commitChange('Toggle musician', (prev) => ({
       ...prev,
       gigMusicians: prev.gigMusicians.map((gm) =>
@@ -6287,7 +6331,6 @@ function App() {
 
   const addMusicianToGig = (musicianId: string) => {
     if (!activeGigId) return
-    setBuildPanelDirty(true)
     commitChange('Add musician to gig', (prev) => ({
       ...prev,
       gigMusicians: prev.gigMusicians.some(
@@ -6318,7 +6361,6 @@ function App() {
 
   const removeMusicianFromGig = (musicianId: string) => {
     if (!activeGigId) return
-    setBuildPanelDirty(true)
     commitChange('Remove musician from gig', (prev) => ({
       ...prev,
       gigMusicians: prev.gigMusicians.filter(
@@ -6340,7 +6382,6 @@ function App() {
     const name = newSubName.trim()
     if (!name || !activeGigId) return
     if (!canCreateMusicians()) return
-    setBuildPanelDirty(true)
     const id = createId()
     commitChange('Add sub to gig', (prev) => ({
       ...prev,
@@ -7003,7 +7044,6 @@ function App() {
   const deleteSpecialRequest = (requestId: string) => {
     if (!currentSetlist) return
     const targetRequest = appState.specialRequests.find((request) => request.id === requestId)
-    setBuildPanelDirty(true)
     commitChange('Delete special request', (prev) => ({
       ...prev,
       specialRequests: prev.specialRequests.filter((request) => request.id !== requestId),
@@ -7060,7 +7100,6 @@ function App() {
     if (!currentSetlist || !editingSpecialRequestId) return
     const existingRequest =
       appState.specialRequests.find((request) => request.id === editingSpecialRequestId) ?? null
-    setBuildPanelDirty(true)
     setSpecialRequestError('')
     const type = pendingSpecialType.trim()
     const customSong = pendingSpecialSong.trim()
@@ -7204,6 +7243,20 @@ function App() {
               )
               .eq('id', editingSpecialRequestId)
             if (updateSpecialError) return { error: updateSpecialError }
+            if (nextSongId) {
+              const { error: upsertSongError } = await supabase.from('SetlistSongs').upsert(
+                withBandId({
+                  id: nextSongId,
+                  title: customSong,
+                  artist: normalizedArtist || matchingSong?.artist || existingRequest?.artist || '',
+                  audio_url: pendingSpecialExternalUrl.trim() || matchingSong?.youtubeUrl || null,
+                  original_key: matchingSong?.originalKey ?? null,
+                  deleted_at: null,
+                }),
+                { onConflict: 'id' },
+              )
+              if (upsertSongError) return { error: upsertSongError }
+            }
             return syncSpecialRequestSingerKeys(
               currentSetlist.id,
               nextSongId ?? existingRequest?.songId,
@@ -7228,7 +7281,6 @@ function App() {
 
   const addSpecialRequest = () => {
     if (!currentSetlist) return
-    setBuildPanelDirty(true)
     setSpecialRequestError('')
     const type = pendingSpecialType.trim()
     const customSong = pendingSpecialSong.trim()
@@ -7384,8 +7436,8 @@ function App() {
             withBandId({
               id: createdSongId,
               title: songTitle,
-              artist: existingSong?.artist ?? '',
-              audio_url: existingSong?.youtubeUrl ?? null,
+              artist: normalizedArtist || existingSong?.artist || '',
+              audio_url: pendingSpecialExternalUrl.trim() || existingSong?.youtubeUrl || null,
               original_key: existingSong?.originalKey ?? null,
               deleted_at: null,
             }),
@@ -7982,7 +8034,14 @@ function App() {
       setSelectedSetlistId((current) => current || setlists[0].id)
       setActiveGigId((current) => current || setlists[0].id)
     }
-  }, [activeBandId, parseDocumentInstruments])
+  }, [
+    activeBandId,
+    getSectionDeleteKey,
+    normalizeInstrumentName,
+    parseDocumentInstruments,
+    parseGigSectionDeletedTag,
+    parseGigSectionTag,
+  ])
 
   const loadNowPlaying = useCallback(async () => {
     if (!supabase || !activeBandId) return
@@ -8667,18 +8726,44 @@ function App() {
     setAccountSaveStatus('Band name updated.')
   }
 
-  const restoreSharedViewFromSignup = (_skipWelcome: boolean) => {
-    if (!sharedSignupReturnView) return
+  const clearSharedSignupReturnView = useCallback(() => {
+    setSharedSignupReturnView(null)
+    try {
+      localStorage.removeItem(SHARED_SIGNUP_RETURN_KEY)
+    } catch {
+      // ignore storage errors
+    }
+  }, [])
+
+  const invalidateSharedSignupReturnView = useCallback(
+    (message?: string) => {
+      clearSharedSignupReturnView()
+      if (message) {
+        setSharedImportStatus(message)
+      }
+    },
+    [clearSharedSignupReturnView],
+  )
+
+  const restoreSharedViewFromSignup = () => {
+    const sanitizedView = sanitizeSharedPlaylistView(sharedSignupReturnView)
+    if (!sanitizedView) {
+      invalidateSharedSignupReturnView('This shared gig data is invalid. Please open a fresh shared link.')
+      return
+    }
     setSharedPlaylistLoading(false)
     setSharedPlaylistError(null)
-    setSharedPlaylistView(sharedSignupReturnView)
-    setSharedSignupReturnView(null)
-    localStorage.removeItem(SHARED_SIGNUP_RETURN_KEY)
+    setSharedPlaylistView(sanitizedView)
+    invalidateSharedSignupReturnView()
   }
 
   const saveSharedGigToAccount = async () => {
-    const sourceView = sharedSignupReturnView
-    if (!sourceView || !supabase || !authUserId) return
+    const sourceView = sanitizeSharedPlaylistView(sharedSignupReturnView)
+    if (!sourceView) {
+      invalidateSharedSignupReturnView('This shared gig data is invalid. Please open a fresh shared link.')
+      return
+    }
+    if (!supabase || !authUserId) return
     setSharedImportSaving(true)
     setSharedImportStatus('')
     try {
@@ -8925,8 +9010,7 @@ function App() {
       }))
       setSelectedSetlistId(newGigId)
       setActiveGigId(newGigId)
-      setSharedSignupReturnView(null)
-      localStorage.removeItem(SHARED_SIGNUP_RETURN_KEY)
+      clearSharedSignupReturnView()
       setSharedImportStatus('Saved to your account.')
       setScreen('setlists')
     } catch (error) {
@@ -8947,10 +9031,33 @@ function App() {
   }
 
   useEffect(() => {
+    try {
+      if (!sharedSignupReturnView) {
+        localStorage.removeItem(SHARED_SIGNUP_RETURN_KEY)
+        return
+      }
+      const sanitized = sanitizeSharedPlaylistView(sharedSignupReturnView)
+      if (!sanitized) {
+        clearSharedSignupReturnView()
+        return
+      }
+      localStorage.setItem(SHARED_SIGNUP_RETURN_KEY, JSON.stringify(sanitized))
+    } catch {
+      // ignore storage errors
+    }
+  }, [clearSharedSignupReturnView, sharedSignupReturnView])
+
+  useEffect(() => {
     if (!supabase || !authUserId) return
     const params = new URLSearchParams(window.location.search)
-    const inviteToken = params.get('invite')
+    const inviteToken = (params.get('invite') ?? '').trim()
     if (!inviteToken) return
+    if (inviteToken.length > 512) {
+      params.delete('invite')
+      replaceHistorySearchParams(params)
+      setSupabaseError('Invite link is invalid. Please request a fresh invite.')
+      return
+    }
     void (async () => {
       const { error } = await supabase.rpc('accept_band_invite', { p_token: inviteToken })
       if (error) {
@@ -8958,25 +9065,16 @@ function App() {
         return
       }
       params.delete('invite')
-      const next = params.toString()
-      const newUrl = `${window.location.pathname}${next ? `?${next}` : ''}${window.location.hash}`
-      window.history.replaceState({}, '', newUrl)
+      replaceHistorySearchParams(params)
       await loadBandContext(authUserId)
     })()
   }, [authUserId, loadBandContext])
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    if (params.get('playlist') !== '1') return
-    const setlistId = params.get('setlist')
-    if (!setlistId) return
-    const requestedIndexRaw = Number.parseInt(params.get('item') ?? '0', 10)
-    const requestedIndex =
-      Number.isFinite(requestedIndexRaw) && requestedIndexRaw >= 0 ? requestedIndexRaw : 0
-    const sharedBandNameParam = safeDecodeURIComponent(params.get('band') ?? '').trim()
-    const sharedMusiciansParam = parseSharedMusiciansPayload(params.get('musicians'))
-    const payloadEncoded = params.get('data')
-    const parsedPayload = payloadEncoded ? parseSharedPlaylistPayload(payloadEncoded) : null
+    const parsedShareQuery = parseSharedPlaylistQuery(window.location.search)
+    if (!parsedShareQuery) return
+    const { setlistId, requestedIndex, sharedBandNameParam, sharedMusiciansParam, parsedPayload } =
+      parsedShareQuery
     if (parsedPayload) {
       const payloadDisplayMap: Record<string, { title: string; singers: string[]; keys: string[] }> = {}
       parsedPayload.entries.forEach((entry) => {
@@ -9010,21 +9108,20 @@ function App() {
     }
     const targetSetlist = appState.setlists.find((setlist) => setlist.id === setlistId)
     if (targetSetlist) {
+      const params = new URLSearchParams(window.location.search)
       setSharedPlaylistView(null)
       setSharedPlaylistError(null)
       setSharedPlaylistLoading(false)
       setSelectedSetlistId(setlistId)
       setScreen('builder')
-      setPlaylistIndex(requestedIndex)
+      setPlaylistIndex(Math.min(requestedIndex, Math.max(0, targetSetlist.songIds.length - 1)))
       setPlaylistAutoAdvance(true)
       setPlaylistModalTab('playlist')
       setShowPlaylistModal(true)
       params.delete('playlist')
       params.delete('setlist')
       params.delete('item')
-      const next = params.toString()
-      const newUrl = `${window.location.pathname}${next ? `?${next}` : ''}${window.location.hash}`
-      window.history.replaceState({}, '', newUrl)
+      replaceHistorySearchParams(params)
       return
     }
     if (!supabase) {
@@ -9326,7 +9423,13 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [activeBandName, appState.setlists, isSetlistTypeTag, normalizePlaylistSection, supabase])
+  }, [
+    activeBandName,
+    appState.setlists,
+    isSetlistTypeTag,
+    normalizePlaylistSection,
+    parseGigSectionTag,
+  ])
 
   useEffect(() => {
     if (!sharedPlaylistView) {
@@ -9382,7 +9485,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [parseDocumentInstruments, sharedPlaylistView, supabase])
+  }, [parseDocumentInstruments, sharedPlaylistView])
 
   useEffect(() => {
     if (!sharedPlaylistView) {
@@ -9450,20 +9553,13 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [normalizeSharedMusicians, sharedPlaylistView, supabase])
+  }, [normalizeSharedMusicians, sharedPlaylistView])
 
   useEffect(() => {
     if (!sharedPlaylistView || !sharedNowPlayingSongId || !supabase) {
-      if (sharedPlaylistView && !sharedNowPlayingSongId) {
-        console.log('[Shared Up Next] No now playing song id yet.')
-      }
       setSharedNowPlayingFallback(null)
       return
     }
-    console.log('[Shared Up Next] Starting fallback lookup', {
-      sharedNowPlayingSongId,
-      setlistId: sharedPlaylistView.setlistId,
-    })
     let cancelled = false
     void (async () => {
       let resolvedSongId = sharedNowPlayingSongId
@@ -9480,10 +9576,6 @@ function App() {
           .eq('id', sharedNowPlayingSongId)
           .maybeSingle()
         const mappedSongId = (gigSongLookup.data?.song_id ?? '').trim()
-        console.log('[Shared Up Next] Direct song lookup missed, gig-song mapping result', {
-          sourceId: sharedNowPlayingSongId,
-          mappedSongId,
-        })
         if (mappedSongId) {
           resolvedSongId = mappedSongId
           songRes = await supabase
@@ -9515,26 +9607,15 @@ function App() {
         ),
       )
       if (!title && singers.length === 0 && keys.length === 0) {
-        console.log('[Shared Up Next] Fallback lookup returned no metadata', {
-          requestedSongId: sharedNowPlayingSongId,
-          resolvedSongId,
-        })
         setSharedNowPlayingFallback(null)
         return
       }
-      console.log('[Shared Up Next] Fallback lookup resolved metadata', {
-        requestedSongId: sharedNowPlayingSongId,
-        resolvedSongId,
-        title,
-        singers,
-        keys,
-      })
       setSharedNowPlayingFallback({ title, singers, keys })
     })()
     return () => {
       cancelled = true
     }
-  }, [sharedNowPlayingSongId, sharedPlaylistView, supabase])
+  }, [sharedNowPlayingSongId, sharedPlaylistView])
 
   useEffect(() => {
     if (lastAppliedLyricsViewerIdRef.current === lyricsViewerId) return
@@ -9599,7 +9680,6 @@ function App() {
     const client = supabase
     const gigId = sharedPlaylistView.setlistId
     const applySharedNowPlaying = (songId: string | null) => {
-      console.log('[Shared Up Next] applySharedNowPlaying received', { songId, gigId })
       if (!songId) {
         sharedNowPlayingSongIdRef.current = null
         setSharedNowPlayingSongId(null)
@@ -9635,11 +9715,9 @@ function App() {
         .limit(1)
       if (cancelled) return
       if (error) {
-        console.log('[Shared Up Next] fetchLatestNowPlaying error', error)
         return
       }
       const row = (data?.[0] ?? null) as { song_id?: string | null } | null
-      console.log('[Shared Up Next] fetchLatestNowPlaying row', row)
       const directSongId = (row?.song_id ?? '').trim() || null
       if (directSongId) {
         applySharedNowPlaying(directSongId)
@@ -9653,13 +9731,10 @@ function App() {
         .limit(1)
       if (cancelled) return
       if (playedError) {
-        console.log('[Shared Up Next] played songs fallback error', playedError)
-        applySharedNowPlaying(null)
         return
       }
       const playedRow = (playedRows?.[0] ?? null) as { song_id?: string | null } | null
       const playedSongId = (playedRow?.song_id ?? '').trim() || null
-      console.log('[Shared Up Next] played songs fallback row', playedRow)
       applySharedNowPlaying(playedSongId)
     }
     void fetchLatestNowPlaying()
@@ -9670,7 +9745,6 @@ function App() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'SetlistGigNowPlaying', filter: `gig_id=eq.${gigId}` },
         (payload) => {
-          console.log('[Shared Up Next] realtime payload', payload)
           const nextSongId =
             payload.eventType === 'DELETE'
               ? null
@@ -9684,21 +9758,26 @@ function App() {
       )
       .subscribe()
 
-    // Fallback for mobile browsers that occasionally miss realtime events.
+    // Fallback poll keeps clients healthy after offline/online transitions.
     const pollIntervalId = window.setInterval(() => {
       void fetchLatestNowPlaying()
-    }, 1800)
+    }, 20000)
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         void fetchLatestNowPlaying()
       }
     }
+    const handleNetworkOnline = () => {
+      void fetchLatestNowPlaying()
+    }
     window.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('online', handleNetworkOnline)
 
     return () => {
       cancelled = true
       window.clearInterval(pollIntervalId)
       window.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('online', handleNetworkOnline)
       void client.removeChannel(channel)
     }
   }, [
@@ -9706,28 +9785,7 @@ function App() {
     playlistSingerFilter,
     sharedAllPlaylistEntries,
     sharedPlaylistView,
-    supabase,
     visiblePlaylistEntries,
-  ])
-
-  useEffect(() => {
-    if (!sharedPlaylistView) return
-    console.log('[Shared Up Next] Banner computed values', {
-      sharedNowPlayingSongId,
-      title: sharedNowPlayingTitle,
-      key: sharedNowPlayingKeyLabel,
-      singer: sharedNowPlayingSingerLabel,
-      fallback: sharedNowPlayingFallback,
-      resolvedEntry: sharedResolvedUpNextEntry,
-    })
-  }, [
-    sharedNowPlayingFallback,
-    sharedNowPlayingKeyLabel,
-    sharedNowPlayingSingerLabel,
-    sharedNowPlayingSongId,
-    sharedNowPlayingTitle,
-    sharedPlaylistView,
-    sharedResolvedUpNextEntry,
   ])
 
   useEffect(() => {
@@ -9784,12 +9842,6 @@ function App() {
     setPlaylistDrawerOverlay(false)
     setSharedPlaylistDrawerOverlay(false)
   }, [widePlaylistUi])
-
-  /** Playlist modal: one gate per setlist until dismiss, for this page load only. */
-  useEffect(() => {
-    if (!showPlaylistModal || !selectedSetlistId) return
-    setPlaylistModalYoutubeGateActive(!dismissedModalYtGateBySetlistIdRef.current.has(selectedSetlistId))
-  }, [showPlaylistModal, selectedSetlistId])
 
   useEffect(() => {
     if (!playlistDrawerOverlay) {
@@ -9897,10 +9949,6 @@ function App() {
   useEffect(() => {
     localStorage.setItem(GIG_LAST_LOCKED_SONG_KEY, JSON.stringify(gigLastLockedSongByGig))
   }, [gigLastLockedSongByGig])
-
-  useEffect(() => {
-    setBuildPanelDirty(false)
-  }, [activeBuildPanel])
 
   useEffect(() => {
     if (!activeGigId) return
@@ -10071,13 +10119,67 @@ function App() {
     setNewDocUrl(matchingInstrument.url ?? '')
     setNewDocLyrics(matchingInstrument.content ?? '')
     setNewDocFile(null)
-  }, [appState.documents, newDocInstruments, newDocSongId, newDocType, parseDocumentInstruments])
+  }, [
+    appState.documents,
+    newDocInstruments,
+    newDocSongId,
+    newDocType,
+    normalizeInstrumentName,
+    parseDocumentInstruments,
+  ])
 
   const isAuthScreen =
     ((!supabase && !role) || (supabase && !authUserId)) &&
     !sharedPlaylistView &&
     !sharedPlaylistLoading &&
     !sharedPlaylistError
+  const isSharedLinkAuthContext = Boolean(sharedSignupReturnView)
+  const authRedirectDiagnostics = useMemo(() => {
+    const currentOrigin = window.location.origin
+    const configuredAppUrl = String(import.meta.env.VITE_APP_URL ?? '').trim()
+    if (!configuredAppUrl) {
+      return {
+        currentOrigin,
+        configuredOrigin: '',
+        resolvedOrigin: currentOrigin,
+        missingConfig: true,
+        invalidConfig: false,
+        isConfiguredLocal: false,
+      }
+    }
+    let configuredOrigin = ''
+    try {
+      configuredOrigin = new URL(configuredAppUrl).origin
+    } catch {
+      return {
+        currentOrigin,
+        configuredOrigin: '',
+        resolvedOrigin: currentOrigin,
+        missingConfig: false,
+        invalidConfig: true,
+        isConfiguredLocal: false,
+      }
+    }
+    const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(currentOrigin)
+    const isConfiguredLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(configuredOrigin)
+    const resolvedOrigin = import.meta.env.PROD
+      ? (isConfiguredLocal ? currentOrigin : configuredOrigin)
+      : (isLocalOrigin ? configuredOrigin : currentOrigin)
+    return {
+      currentOrigin,
+      configuredOrigin,
+      resolvedOrigin,
+      missingConfig: false,
+      invalidConfig: false,
+      isConfiguredLocal,
+    }
+  }, [])
+  const isIOSStandaloneMode = useMemo(() => {
+    const platform = window.navigator.platform ?? ''
+    const ua = window.navigator.userAgent ?? ''
+    const isIOSDevice = /iPad|iPhone|iPod/.test(ua) || (platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+    return isIOSDevice && isStandaloneDisplayMode
+  }, [isStandaloneDisplayMode])
   const showLegacyPanels = useMemo(() => false, [])
 
   useEffect(() => {
@@ -10187,9 +10289,27 @@ function App() {
     showPrintPreview,
   ])
 
+  useEffect(() => {
+    if (!isSharedLinkAuthContext) return
+    if (authMode === 'signup') {
+      setAuthMode('login')
+    }
+  }, [authMode, isSharedLinkAuthContext])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('ios-standalone-mode', isIOSStandaloneMode)
+    return () => {
+      document.documentElement.classList.remove('ios-standalone-mode')
+    }
+  }, [isIOSStandaloneMode])
+
   if (sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) {
     return (
-      <div className="shared-public-mode fixed inset-0 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-4 text-white sm:px-4 sm:pt-5">
+      <div
+        className={`shared-public-mode relative min-h-dvh overflow-y-auto overflow-x-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-4 text-white sm:px-4 sm:pt-5 ${
+          isIOSStandaloneMode ? 'shared-ios-standalone' : ''
+        }`}
+      >
         {showSharedInstrumentPrompt && (
           <div
             className="fixed inset-0 z-[110] flex items-end justify-center bg-slate-950/80 pb-[env(safe-area-inset-bottom)] pt-6 sm:items-center sm:pb-6"
@@ -10460,32 +10580,6 @@ function App() {
                             : 'opacity-100'
                         }`}
                       >
-                        {visiblePlaylistEntries.length > 0 &&
-                          (!currentPlaylistEntry ||
-                            !isYouTubeUrl(currentPlaylistEntry.audioUrl ?? null)) && (
-                          <div className="mb-1 shrink-0 rounded-2xl border border-teal-400/25 bg-gradient-to-br from-slate-800/90 to-slate-950 p-3 ring-1 ring-white/10 sm:mb-2 sm:p-4">
-                            <div className="flex items-center justify-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                              <span className="text-lg" aria-hidden>
-                                🎵
-                              </span>
-                              Music player
-                            </div>
-                            <div className="mt-2 flex flex-col items-center gap-2 sm:mt-3">
-                              <button
-                                type="button"
-                                className="flex h-14 w-14 items-center justify-center rounded-full bg-teal-400 text-slate-950 shadow-lg ring-2 ring-teal-300/35 disabled:opacity-40"
-                                disabled={visiblePlaylistEntries.length === 0}
-                                onClick={playPlaylistFromFirstYoutube}
-                                aria-label="Play from the first YouTube song"
-                              >
-                                <span className="text-2xl leading-none">▶</span>
-                              </button>
-                              <p className="px-2 text-center text-[11px] text-slate-500">
-                                Tap play to start the first YouTube track.
-                              </p>
-                            </div>
-                          </div>
-                        )}
                           {currentPlaylistEntry ? (
                             <div className="min-h-0 w-full shrink-0 overflow-visible md:flex-1">
                             <div
@@ -10629,7 +10723,7 @@ function App() {
                             </button>
                           </div>
                           <div
-                            className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 pb-2 md:h-full md:max-h-none"
+                            className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 pb-[calc(7.75rem+env(safe-area-inset-bottom))] md:h-full md:max-h-none md:pb-2"
                           >
                             <div className="sticky top-0 z-10 mb-2 bg-slate-900/95 pb-2 pt-1 backdrop-blur">
                               <select
@@ -10712,7 +10806,11 @@ function App() {
           </div>
         </div>
         {(sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) && (
-          <nav className="fixed bottom-0 left-0 right-0 z-[320] bg-transparent px-3 pb-[env(safe-area-inset-bottom)]">
+          <nav
+            className={`shared-bottom-nav fixed inset-x-0 bottom-0 z-[320] border-t border-white/10 bg-slate-950 px-3 pb-[env(safe-area-inset-bottom)] ${
+              isIOSStandaloneMode ? 'shared-bottom-nav-ios' : ''
+            }`}
+          >
             <div
               className={`mx-auto flex w-full items-center justify-between gap-2 py-3 ${
                 sharedPublicTab === 'playlist' ? 'max-w-[980px]' : 'max-w-3xl'
@@ -11121,16 +11219,18 @@ function App() {
                 >
                   Get started
                 </button>
-                <button
-                  type="button"
-                  className="rounded-xl border border-white/15 px-5 py-2.5 text-sm font-semibold text-slate-100"
-                  onClick={() => {
-                    setAuthMode('signup')
-                    setAuthEntryView('auth')
-                  }}
-                >
-                  Create account
-                </button>
+                {!isSharedLinkAuthContext && (
+                  <button
+                    type="button"
+                    className="rounded-xl border border-white/15 px-5 py-2.5 text-sm font-semibold text-slate-100"
+                    onClick={() => {
+                      setAuthMode('signup')
+                      setAuthEntryView('auth')
+                    }}
+                  >
+                    Create account
+                  </button>
+                )}
                 <button
                   type="button"
                   className="rounded-xl border border-cyan-300/30 bg-cyan-400/10 px-5 py-2.5 text-sm font-semibold text-cyan-100"
@@ -11244,7 +11344,7 @@ function App() {
                       ? 'Create account'
                       : 'Login'}
                   </button>
-                  {supabase && (
+                  {supabase && !isSharedLinkAuthContext && (
                     <button
                       type="button"
                       className="mt-3 w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
@@ -11272,14 +11372,14 @@ function App() {
                       <button
                         type="button"
                         className="w-full rounded-xl border border-white/10 py-2 text-sm font-semibold text-slate-200"
-                        onClick={() => restoreSharedViewFromSignup(false)}
+                        onClick={() => restoreSharedViewFromSignup()}
                       >
                         Go back to previous view
                       </button>
                       <button
                         type="button"
                         className="w-full rounded-xl border border-emerald-300/40 bg-emerald-400/10 py-2 text-sm font-semibold text-emerald-100"
-                        onClick={() => restoreSharedViewFromSignup(true)}
+                        onClick={() => restoreSharedViewFromSignup()}
                       >
                         Skip and go to gig view
                       </button>
@@ -13044,6 +13144,42 @@ function App() {
                     </a>
                   </div>
                 </div>
+
+                <div className="rounded-2xl border border-cyan-300/25 bg-cyan-400/10 p-4">
+                  <div className="text-[10px] uppercase tracking-wide text-cyan-200">Auth redirect diagnostics</div>
+                  <p className="mt-2 text-xs text-cyan-100/90">
+                    Shows where signup verification emails will return users after they click the link.
+                  </p>
+                  <div className="mt-3 space-y-2 text-xs text-slate-200">
+                    <div>
+                      Current origin: <span className="font-semibold">{authRedirectDiagnostics.currentOrigin}</span>
+                    </div>
+                    <div>
+                      VITE_APP_URL origin:{' '}
+                      <span className="font-semibold">
+                        {authRedirectDiagnostics.configuredOrigin || '(not configured)'}
+                      </span>
+                    </div>
+                    <div>
+                      Resolved signup redirect:{' '}
+                      <span className="font-semibold text-cyan-100">
+                        {authRedirectDiagnostics.resolvedOrigin}
+                      </span>
+                    </div>
+                  </div>
+                  {(authRedirectDiagnostics.missingConfig || authRedirectDiagnostics.invalidConfig) && (
+                    <div className="mt-3 rounded-xl border border-amber-300/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+                      {authRedirectDiagnostics.invalidConfig
+                        ? 'VITE_APP_URL is invalid. Set a full URL (for example https://yourdomain.com).'
+                        : 'VITE_APP_URL is not set. Verification links may resolve to the current origin.'}
+                    </div>
+                  )}
+                  {import.meta.env.PROD && authRedirectDiagnostics.isConfiguredLocal && (
+                    <div className="mt-3 rounded-xl border border-amber-300/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+                      Production is using localhost in VITE_APP_URL. Update it to your production URL.
+                    </div>
+                  )}
+                </div>
               </div>
               )}
             </div>
@@ -14000,8 +14136,7 @@ function App() {
           className="fixed inset-0 z-[112] flex items-center justify-center bg-slate-950/85 px-4 py-6"
           onClick={() => {
             if (sharedImportSaving) return
-            setSharedSignupReturnView(null)
-            localStorage.removeItem(SHARED_SIGNUP_RETURN_KEY)
+            clearSharedSignupReturnView()
           }}
         >
           <div
@@ -14036,8 +14171,7 @@ function App() {
                 className="rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={() => {
                   if (sharedImportSaving) return
-                  setSharedSignupReturnView(null)
-                  localStorage.removeItem(SHARED_SIGNUP_RETURN_KEY)
+                  clearSharedSignupReturnView()
                 }}
                 disabled={sharedImportSaving}
               >
@@ -16071,6 +16205,7 @@ function App() {
                         {sectionSongs.map((song) => {
                           const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
                           const singers = assignments.map((entry) => entry.singer)
+                          const keySummary = getGigKeySummary(song.id, currentSetlist.id)
                           const isLocked = isGigSongLocked(song.id)
                           const isQueuedOrPlayed = isLocked || appState.currentSongId === song.id
                           return (
@@ -16169,6 +16304,13 @@ function App() {
                                   >
                                     {singers.length ? formatSingerFirstNames(singers) : 'No singers'}
                                   </div>
+                                  <div
+                                    className={`gig-sheet-singer-line ${
+                                      isQueuedOrPlayed ? 'line-through decoration-2 opacity-70' : ''
+                                    }`}
+                                  >
+                                    Key: {keySummary || '—'}
+                                  </div>
                                 </div>
                                 {isAdmin && !isQueuedOrPlayed && (
                                   <button
@@ -16204,7 +16346,9 @@ function App() {
 
       {showPlaylistModal && currentSetlist && (
         <div
-          className="fixed inset-0 z-[98] overflow-y-auto overflow-x-hidden bg-slate-950/90 pb-[calc(5.5rem+env(safe-area-inset-bottom))] backdrop-blur-sm md:overflow-hidden"
+          className={`playlist-modal-shell fixed inset-0 z-[98] overflow-y-auto overflow-x-hidden bg-slate-950/90 pb-[calc(7.25rem+env(safe-area-inset-bottom))] backdrop-blur-sm md:overflow-hidden ${
+            isIOSStandaloneMode ? 'playlist-modal-ios-standalone' : ''
+          }`}
         >
           <div
             className="flex min-h-dvh w-full flex-col overflow-visible bg-slate-900 md:h-full md:min-h-0 md:overflow-hidden"
@@ -16278,7 +16422,7 @@ function App() {
 
             <div className="min-h-0 flex-1 overflow-visible md:overflow-hidden">
               {playlistModalTab === 'setlist' ? (
-                <div className="min-h-0 overflow-visible px-3 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pt-3 md:h-full md:overflow-y-auto md:overflow-x-hidden">
+                <div className="min-h-0 overflow-visible px-3 pb-[calc(7.25rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pt-3 md:h-full md:overflow-y-auto md:overflow-x-hidden md:pb-4">
                   {isAdmin && (
                     <div className="mb-3 flex flex-wrap items-center gap-2">
                       <button
@@ -16459,7 +16603,7 @@ function App() {
                   </div>
                 </div>
               ) : (
-            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-visible px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-3 sm:px-5 sm:pt-4 md:flex-row md:gap-4 md:overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-visible px-4 pb-[calc(7.25rem+env(safe-area-inset-bottom))] pt-3 sm:px-5 sm:pt-4 md:h-full md:flex-row md:gap-4 md:overflow-hidden md:pb-4">
               <div
                 ref={playlistPlayerBlockRef}
                 className={`relative z-10 flex min-h-0 w-full flex-col md:min-h-0 md:flex-1 ${
@@ -16468,32 +16612,6 @@ function App() {
                     : 'opacity-100'
                 }`}
               >
-              {visiblePlaylistEntries.length > 0 &&
-                (!currentPlaylistEntry ||
-                  !isYouTubeUrl(currentPlaylistEntry.audioUrl ?? null)) && (
-                <div className="mb-2 shrink-0 rounded-2xl border border-teal-400/25 bg-gradient-to-br from-slate-800/90 to-slate-950 p-4 ring-1 ring-white/10">
-                  <div className="flex items-center justify-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                    <span className="text-xl" aria-hidden>
-                      🎵
-                    </span>
-                    Music player
-                  </div>
-                  <div className="mt-3 flex flex-col items-center gap-2">
-                    <button
-                      type="button"
-                      className="flex h-14 w-14 items-center justify-center rounded-full bg-teal-400 text-slate-950 shadow-lg ring-2 ring-teal-300/35 disabled:opacity-40"
-                      disabled={visiblePlaylistEntries.length === 0}
-                      onClick={playPlaylistFromFirstYoutube}
-                      aria-label="Play from the first YouTube song, then auto-advance YouTube tracks"
-                    >
-                      <span className="text-2xl leading-none">▶</span>
-                    </button>
-                    <p className="px-2 text-center text-[11px] text-slate-500">
-                      First YouTube (after singer filter); with Auto-next, goes to the next YouTube
-                    </p>
-                  </div>
-                </div>
-              )}
               {currentPlaylistEntry ? (
                 <div className="min-h-0 max-h-[min(50vh,440px)] w-full shrink-0 overflow-y-auto overflow-x-hidden md:max-h-none md:shrink">
                 <div className="rounded-2xl bg-gradient-to-b from-slate-900/70 to-slate-950/60 p-4 shadow-[0_12px_36px_rgba(2,6,23,0.45)] ring-1 ring-white/10 transition-all duration-150">
@@ -16558,35 +16676,9 @@ function App() {
                             playNonce={playlistPlayNonce}
                             className="h-full w-full"
                             onEnded={handlePlaylistYoutubeEnded}
-                            autoplay={!playlistModalYoutubeGateActive}
+                            autoplay
                           />
                         </div>
-                        {playlistModalYoutubeGateActive ? (
-                          <div
-                            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-xl bg-slate-950/90 px-4 py-6 backdrop-blur-[2px]"
-                            aria-hidden={false}
-                          >
-                            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                              <span className="text-xl" aria-hidden>
-                                🎵
-                              </span>
-                              Music player
-                            </div>
-                            <button
-                              type="button"
-                              className="flex h-16 w-16 items-center justify-center rounded-full bg-teal-400 text-slate-950 shadow-lg ring-2 ring-teal-300/40 disabled:opacity-40"
-                              disabled={visiblePlaylistEntries.length === 0}
-                              onClick={handleModalYoutubeOverlayPlay}
-                              aria-label="Play from the first YouTube song, then auto-advance YouTube tracks"
-                            >
-                              <span className="text-3xl leading-none">▶</span>
-                            </button>
-                            <p className="max-w-[260px] text-center text-[11px] leading-snug text-slate-400">
-                              Tap play to start. First YouTube (after singer filter); Auto-next goes to the next
-                              YouTube.
-                            </p>
-                          </div>
-                        ) : null}
                       </div>
                     ) : (
                       <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-900/70 p-3 ring-1 ring-white/10">
@@ -16632,7 +16724,7 @@ function App() {
               </div>
 
               <div
-                className={`z-20 overflow-visible rounded-2xl border border-white/10 bg-slate-900 shadow-xl transition-all duration-150 md:h-full md:w-[300px] md:shrink-0 md:overflow-hidden ${
+                className={`z-20 min-h-0 overflow-visible rounded-2xl border border-white/10 bg-slate-900 shadow-xl transition-all duration-150 md:h-full md:w-[300px] md:shrink-0 md:overflow-hidden ${
                   widePlaylistUi
                     ? 'absolute inset-x-0 bottom-0 shadow-2xl md:static md:inset-auto'
                     : 'flex min-h-[36vh] flex-1 flex-col'
@@ -16650,7 +16742,7 @@ function App() {
                   <div className="h-1 w-12 rounded-full bg-white/25" />
                 </div>
                 <div
-                  className={`min-h-0 overflow-visible px-2 pb-2 md:h-full md:max-h-none md:overflow-y-auto ${
+                  className={`min-h-0 overflow-visible px-2 pb-[calc(7.75rem+env(safe-area-inset-bottom))] md:h-full md:max-h-full md:overflow-y-auto md:pb-2 ${
                     widePlaylistUi ? 'max-h-full' : 'flex-1'
                   }`}
                   onScroll={handlePlaylistDrawerScroll}
@@ -16718,7 +16810,9 @@ function App() {
               )}
             </div>
             <nav
-              className="fixed bottom-0 left-0 right-0 z-[120] bg-slate-950/80 px-3 pb-[env(safe-area-inset-bottom)] backdrop-blur"
+              className={`playlist-modal-bottom-nav fixed inset-x-0 bottom-0 z-[120] border-t border-white/10 bg-slate-950 px-3 pb-[env(safe-area-inset-bottom)] backdrop-blur ${
+                isIOSStandaloneMode ? 'playlist-modal-bottom-nav-ios' : ''
+              }`}
               aria-label="Active Setlist views"
             >
               <div className="mx-auto flex w-full max-w-3xl items-stretch justify-between gap-2 py-3">
@@ -17571,7 +17665,7 @@ function App() {
                               return
                             }
                             if (doc.url) {
-                              window.open(doc.url, '_blank')
+                              openExternalUrlSafely(doc.url)
                             }
                           }}
                         >
@@ -18697,6 +18791,12 @@ function safeDecodeURIComponent(value: string) {
   }
 }
 
+function replaceHistorySearchParams(params: URLSearchParams) {
+  const next = params.toString()
+  const newUrl = `${window.location.pathname}${next ? `?${next}` : ''}${window.location.hash}`
+  window.history.replaceState({}, '', newUrl)
+}
+
 function encodeSharePayloadBase64Url(payload: unknown) {
   const json = JSON.stringify(payload)
   const bytes = new TextEncoder().encode(json)
@@ -18719,19 +18819,202 @@ function decodeSharePayloadBase64Url(raw: string) {
   return new TextDecoder().decode(bytes)
 }
 
+function parseSharedPlaylistQuery(search: string) {
+  const params = new URLSearchParams(search)
+  if (params.get('playlist') !== '1') return null
+  const setlistId = sanitizeSharedText(params.get('setlist'), MAX_SHARED_ID_LENGTH)
+  if (!setlistId) return null
+  const requestedIndexRaw = Number.parseInt(params.get('item') ?? '0', 10)
+  const requestedIndex =
+    Number.isFinite(requestedIndexRaw) && requestedIndexRaw >= 0 ? requestedIndexRaw : 0
+  const sharedBandNameParam = sanitizeSharedText(
+    safeDecodeURIComponent(params.get('band') ?? ''),
+    MAX_SHARED_BAND_NAME_LENGTH,
+  )
+  const sharedMusiciansParam = parseSharedMusiciansPayload(params.get('musicians'))
+  const payloadEncoded = params.get('data')
+  const parsedPayload = payloadEncoded ? parseSharedPlaylistPayload(payloadEncoded) : null
+  return {
+    setlistId,
+    requestedIndex,
+    sharedBandNameParam,
+    sharedMusiciansParam,
+    parsedPayload,
+  }
+}
+
+const MAX_SHARED_PAYLOAD_PARAM_LENGTH = 200_000
+const MAX_SHARED_MUSICIANS_PARAM_LENGTH = 60_000
+const MAX_SHARED_PLAYLIST_ENTRIES = 1500
+const MAX_SHARED_MUSICIANS = 300
+const MAX_SHARED_ID_LENGTH = 120
+const MAX_SHARED_TITLE_LENGTH = 200
+const MAX_SHARED_ARTIST_LENGTH = 160
+const MAX_SHARED_URL_LENGTH = 4096
+const MAX_SHARED_TAGS_PER_ENTRY = 24
+const MAX_SHARED_ASSIGNMENTS_PER_ENTRY = 24
+const MAX_SHARED_BAND_NAME_LENGTH = 160
+const MAX_SHARED_GIG_NAME_LENGTH = 180
+const MAX_SHARED_DATE_LENGTH = 40
+const MAX_SHARED_VENUE_LENGTH = 240
+const MAX_SHARED_MUSICIAN_NAME_LENGTH = 140
+const MAX_SHARED_EMAIL_LENGTH = 254
+const MAX_SHARED_PHONE_LENGTH = 48
+const MAX_SHARED_INSTRUMENTS_PER_MUSICIAN = 16
+const MAX_SHARED_INSTRUMENT_LENGTH = 64
+
+function sanitizeSharedText(value: unknown, maxLength: number): string {
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  return trimmed.slice(0, maxLength)
+}
+
+function sanitizeSharedUrl(value: unknown, maxLength: number): string {
+  const trimmed = sanitizeSharedText(value, maxLength)
+  if (!trimmed) return ''
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    return trimmed
+  } catch {
+    return ''
+  }
+}
+
+function sanitizeSharedStringArray(values: unknown, maxItems: number, maxItemLength: number): string[] {
+  if (!Array.isArray(values)) return []
+  const seen = new Set<string>()
+  const next: string[] = []
+  values.forEach((value) => {
+    if (next.length >= maxItems) return
+    const sanitized = sanitizeSharedText(value, maxItemLength)
+    if (!sanitized) return
+    const key = sanitized.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    next.push(sanitized)
+  })
+  return next
+}
+
+function sanitizePlaylistEntry(entry: unknown, index: number): PlaylistEntry | null {
+  if (!entry || typeof entry !== 'object') return null
+  const source = entry as Partial<PlaylistEntry>
+  const key = sanitizeSharedText(source.key, MAX_SHARED_ID_LENGTH) || `entry:${index}`
+  const title = sanitizeSharedText(source.title, MAX_SHARED_TITLE_LENGTH) || 'Untitled Song'
+  const artist = sanitizeSharedText(source.artist, MAX_SHARED_ARTIST_LENGTH)
+  const audioUrl = sanitizeSharedUrl(source.audioUrl, MAX_SHARED_URL_LENGTH)
+  const songId = sanitizeSharedText(source.songId, MAX_SHARED_ID_LENGTH)
+  const tags = sanitizeSharedStringArray(source.tags, MAX_SHARED_TAGS_PER_ENTRY, MAX_SHARED_TITLE_LENGTH)
+  const assignmentSingers = sanitizeSharedStringArray(
+    source.assignmentSingers,
+    MAX_SHARED_ASSIGNMENTS_PER_ENTRY,
+    MAX_SHARED_TITLE_LENGTH,
+  )
+  const assignmentKeys = sanitizeSharedStringArray(
+    source.assignmentKeys,
+    MAX_SHARED_ASSIGNMENTS_PER_ENTRY,
+    MAX_SHARED_TITLE_LENGTH,
+  )
+  return {
+    key,
+    title,
+    ...(artist ? { artist } : {}),
+    ...(audioUrl ? { audioUrl } : {}),
+    tags: tags.length ? tags : ['Setlist'],
+    ...(songId ? { songId } : {}),
+    ...(assignmentSingers.length ? { assignmentSingers } : {}),
+    ...(assignmentKeys.length ? { assignmentKeys } : {}),
+  }
+}
+
+function sanitizeMusician(entry: unknown, index: number): Musician | null {
+  if (!entry || typeof entry !== 'object') return null
+  const source = entry as Partial<Musician>
+  const id = sanitizeSharedText(source.id, MAX_SHARED_ID_LENGTH) || `musician:${index}`
+  const name = sanitizeSharedText(source.name, MAX_SHARED_MUSICIAN_NAME_LENGTH)
+  if (!name) return null
+  const roster = source.roster === 'sub' ? 'sub' : 'core'
+  const instruments = sanitizeSharedStringArray(
+    source.instruments,
+    MAX_SHARED_INSTRUMENTS_PER_MUSICIAN,
+    MAX_SHARED_INSTRUMENT_LENGTH,
+  )
+  const singer =
+    source.singer === 'male' || source.singer === 'female' || source.singer === 'other'
+      ? source.singer
+      : undefined
+  const email = sanitizeSharedText(source.email, MAX_SHARED_EMAIL_LENGTH)
+  const phone = sanitizeSharedText(source.phone, MAX_SHARED_PHONE_LENGTH)
+  return {
+    id,
+    name,
+    roster,
+    ...(email ? { email } : {}),
+    ...(phone ? { phone } : {}),
+    instruments,
+    ...(singer ? { singer } : {}),
+  }
+}
+
+function sanitizeMusiciansList(entries: unknown[]): Musician[] {
+  const cappedEntries = entries.length > MAX_SHARED_MUSICIANS ? entries.slice(0, MAX_SHARED_MUSICIANS) : entries
+  const deduped = new Map<string, Musician>()
+  cappedEntries.forEach((entry, index) => {
+    const sanitized = sanitizeMusician(entry, index)
+    if (!sanitized) return
+    const key = sanitized.id.toLowerCase()
+    if (deduped.has(key)) return
+    deduped.set(key, sanitized)
+  })
+  return Array.from(deduped.values())
+}
+
+function sanitizeSharedPlaylistView(view: SharedPlaylistView | null): SharedPlaylistView | null {
+  if (!view || typeof view !== 'object') return null
+  const setlistId = sanitizeSharedText(view.setlistId, MAX_SHARED_ID_LENGTH)
+  if (!setlistId) return null
+  const entriesRaw = Array.isArray(view.entries) ? view.entries : []
+  if (entriesRaw.length === 0 || entriesRaw.length > MAX_SHARED_PLAYLIST_ENTRIES) return null
+  const entries = entriesRaw
+    .map((entry, index) => sanitizePlaylistEntry(entry, index))
+    .filter((entry): entry is PlaylistEntry => Boolean(entry))
+  if (entries.length === 0) return null
+  const allEntriesRaw =
+    Array.isArray(view.allEntries) && view.allEntries.length > 0 ? view.allEntries : entriesRaw
+  const allEntries = allEntriesRaw
+    .map((entry, index) => sanitizePlaylistEntry(entry, index))
+    .filter((entry): entry is PlaylistEntry => Boolean(entry))
+  return {
+    setlistId,
+    bandName: sanitizeSharedText(view.bandName, MAX_SHARED_BAND_NAME_LENGTH) || undefined,
+    gigName: sanitizeSharedText(view.gigName, MAX_SHARED_GIG_NAME_LENGTH) || 'Shared Gig',
+    date: sanitizeSharedText(view.date, MAX_SHARED_DATE_LENGTH),
+    venueAddress: sanitizeSharedText(view.venueAddress, MAX_SHARED_VENUE_LENGTH) || undefined,
+    musicians: Array.isArray(view.musicians) ? sanitizeMusiciansList(view.musicians) : undefined,
+    entries,
+    allEntries: allEntries.length ? allEntries : entries,
+  }
+}
+
 function parseSharedPlaylistPayload(raw: string) {
+  if (!raw || raw.length > MAX_SHARED_PAYLOAD_PARAM_LENGTH) return null
   const candidates = [raw, safeDecodeURIComponent(raw)]
   for (const candidate of candidates) {
+    if (!candidate || candidate.length > MAX_SHARED_PAYLOAD_PARAM_LENGTH) continue
     try {
       const parsed = JSON.parse(candidate) as SharedPlaylistView
-      if (parsed && Array.isArray(parsed.entries)) return parsed
+      const sanitized = sanitizeSharedPlaylistView(parsed)
+      if (sanitized) return sanitized
     } catch {
       // Continue to base64 decode attempts.
     }
     try {
       const decoded = decodeSharePayloadBase64Url(candidate)
       const parsed = JSON.parse(decoded) as SharedPlaylistView
-      if (parsed && Array.isArray(parsed.entries)) return parsed
+      const sanitized = sanitizeSharedPlaylistView(parsed)
+      if (sanitized) return sanitized
     } catch {
       // Continue to next candidate.
     }
@@ -18741,18 +19024,20 @@ function parseSharedPlaylistPayload(raw: string) {
 
 function parseSharedMusiciansPayload(raw: string | null) {
   if (!raw) return []
+  if (raw.length > MAX_SHARED_MUSICIANS_PARAM_LENGTH) return []
   const candidates = [raw, safeDecodeURIComponent(raw)]
   for (const candidate of candidates) {
+    if (!candidate || candidate.length > MAX_SHARED_MUSICIANS_PARAM_LENGTH) continue
     try {
       const parsed = JSON.parse(candidate) as Musician[]
-      if (Array.isArray(parsed)) return parsed
+      if (Array.isArray(parsed)) return sanitizeMusiciansList(parsed)
     } catch {
       // Continue to base64 decode attempts.
     }
     try {
       const decoded = decodeSharePayloadBase64Url(candidate)
       const parsed = JSON.parse(decoded) as Musician[]
-      if (Array.isArray(parsed)) return parsed
+      if (Array.isArray(parsed)) return sanitizeMusiciansList(parsed)
     } catch {
       // Continue to next candidate.
     }
@@ -18760,36 +19045,10 @@ function parseSharedMusiciansPayload(raw: string | null) {
   return []
 }
 
-function getYouTubeEmbedUrl(url: string | null) {
-  try {
-    if (!url) return ''
-    const parsed = new URL(url)
-    if (parsed.hostname.includes('youtube.com')) {
-      const id = parsed.searchParams.get('v')
-      if (id) return `https://www.youtube.com/embed/${id}?autoplay=1`
-    }
-    if (parsed.hostname.includes('youtu.be')) {
-      const id = parsed.pathname.replace('/', '')
-      if (id) return `https://www.youtube.com/embed/${id}?autoplay=1`
-    }
-  } catch {
-    return url ?? ''
-  }
-  return url ?? ''
-}
-
-function isYouTubeUrl(url: string | null) {
-  try {
-    if (!url) return false
-    const parsed = new URL(url)
-    return (
-      parsed.hostname.includes('youtube.com') ||
-      parsed.hostname.includes('youtu.be') ||
-      parsed.hostname.includes('music.youtube.com')
-    )
-  } catch {
-    return false
-  }
+function openExternalUrlSafely(url: string) {
+  const sanitized = sanitizeSharedUrl(url, MAX_SHARED_URL_LENGTH)
+  if (!sanitized) return
+  window.open(sanitized, '_blank', 'noopener,noreferrer')
 }
 
 function getSpotifyEmbedUrl(url: string | null) {

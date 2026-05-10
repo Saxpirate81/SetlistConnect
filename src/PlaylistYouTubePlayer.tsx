@@ -4,33 +4,7 @@ import {
   useImperativeHandle,
   useRef,
 } from 'react'
-
-/** Extract watch URL video id for youtube.com, youtu.be, music.youtube.com, shorts, embed. */
-export function getYouTubeVideoId(url: string | null): string | null {
-  if (!url) return null
-  try {
-    const parsed = new URL(url)
-    if (parsed.hostname.includes('youtube.com')) {
-      const v = parsed.searchParams.get('v')
-      if (v) return v
-      const parts = parsed.pathname.split('/').filter(Boolean)
-      if (parts[0] === 'shorts' && parts[1]) return parts[1]
-      if (parts[0] === 'embed' && parts[1]) return parts[1]
-      if (parts[0] === 'live' && parts[1]) return parts[1]
-    }
-    if (parsed.hostname.includes('youtu.be')) {
-      const id = parsed.pathname.replace(/^\//, '').split('/')[0]
-      return id || null
-    }
-    if (parsed.hostname.includes('music.youtube.com')) {
-      const v = parsed.searchParams.get('v')
-      if (v) return v
-    }
-  } catch {
-    return null
-  }
-  return null
-}
+import { getYouTubeVideoId } from './lib/youtube'
 
 type YtPlayerApi = {
   destroy: () => void
@@ -91,7 +65,9 @@ export const PlaylistYouTubePlayer = forwardRef<PlaylistYouTubePlayerHandle, Pro
     const onEndedRef = useRef(onEnded)
     const pendingUserPlayUrlRef = useRef<string | null>(null)
     const prevPlayNonceRef = useRef<number | null>(null)
-    onEndedRef.current = onEnded
+    useEffect(() => {
+      onEndedRef.current = onEnded
+    }, [onEnded])
 
     const tryPlayPending = () => {
       const pending = pendingUserPlayUrlRef.current

@@ -8145,6 +8145,7 @@ function App() {
     const songIdSet = new Set(songs.map((song) => song.id))
 
     const gigSongsByGig = new Map<string, string[]>()
+    const gigSongSortOrderMaxByGig = new Map<string, number>()
     ;[...(gigSongsRes.data ?? [])]
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
       .forEach((row) => {
@@ -8152,6 +8153,11 @@ function App() {
       const list = gigSongsByGig.get(row.gig_id) ?? []
       list.push(row.song_id)
       gigSongsByGig.set(row.gig_id, list)
+      const currentMax = gigSongSortOrderMaxByGig.get(row.gig_id) ?? -1
+      const rowSortOrder = row.sort_order ?? 0
+      if (rowSortOrder > currentMax) {
+        gigSongSortOrderMaxByGig.set(row.gig_id, rowSortOrder)
+      }
       })
     // Recovery path: if gig-song rows were partially lost, preserve known gig membership
     // from singer assignments so songs still appear for affected gigs.
@@ -8163,6 +8169,38 @@ function App() {
         gigSongsByGig.set(row.gig_id, list)
       }
     })
+    // Recovery path: if songs have explicit gig-section assignments but lost gig-song rows,
+    // restore membership so section playlists stay intact.
+    const recoveredGigSongRows: Array<{
+      id: string
+      gig_id: string
+      song_id: string
+      sort_order: number
+    }> = []
+    gigSectionOverrideMap.forEach((bySong, gigId) => {
+      Object.entries(bySong).forEach(([songId, assignedSections]) => {
+        if (!songIdSet.has(songId)) return
+        if (!assignedSections?.length) return
+        const list = gigSongsByGig.get(gigId) ?? []
+        if (list.includes(songId)) return
+        list.push(songId)
+        gigSongsByGig.set(gigId, list)
+        const nextSortOrder = (gigSongSortOrderMaxByGig.get(gigId) ?? list.length - 2) + 1
+        gigSongSortOrderMaxByGig.set(gigId, nextSortOrder)
+        recoveredGigSongRows.push({
+          id: createId(),
+          gig_id: gigId,
+          song_id: songId,
+          sort_order: nextSortOrder,
+        })
+      })
+    })
+    if (recoveredGigSongRows.length > 0) {
+      const { error: recoveredGigSongsError } = await supabase
+        .from('SetlistGigSongs')
+        .insert(recoveredGigSongRows.map((row) => withBandId(row)))
+      reportSupabaseError(recoveredGigSongsError)
+    }
 
     const setlists: Setlist[] =
       gigsRes.data?.map((row) => ({

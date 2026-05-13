@@ -1508,16 +1508,23 @@ function App() {
     [gigSetlistSections, normalizeSetlistSectionLabel],
   )
   const songMatchesGigSection = useCallback(
-    (song: Song, section: string, gigId: string) => {
+    (
+      song: Song,
+      section: string,
+      gigId: string,
+      options: { ignoreOverride?: boolean } = {},
+    ) => {
       const normalizedSection = normalizeSetlistSectionLabel(section).toLowerCase()
       if (!normalizedSection) return false
-      const override = getGigSongSectionOverride(gigId, song.id)
-      if (override) {
-        const overrideLower = override.toLowerCase()
-        if (overrideLower === normalizedSection) return true
-        // Ignore stale overrides that point to a section that no longer exists on this gig
-        // (e.g. legacy "Dance" after splitting into "Dance Set 1/2").
-        if (isExplicitGigSetlistSection(gigId, override)) return false
+      if (!options.ignoreOverride) {
+        const override = getGigSongSectionOverride(gigId, song.id)
+        if (override) {
+          const overrideLower = override.toLowerCase()
+          if (overrideLower === normalizedSection) return true
+          // Ignore stale overrides that point to a section that no longer exists on this gig
+          // (e.g. legacy "Dance" after splitting into "Dance Set 1/2").
+          if (isExplicitGigSetlistSection(gigId, override)) return false
+        }
       }
       if (isExplicitGigSetlistSection(gigId, section)) {
         // For explicit per-gig sections, prefer direct section tags if present.
@@ -5188,7 +5195,17 @@ function App() {
   const removeSongFromSetlist = (songId: string) => {
     if (!currentSetlist) return
     const activeSection = getSectionFromPanel(activeBuildPanel)
+    let shouldOnlyRemoveFromSection = false
     if (activeSection) {
+      const song = appState.songs.find((item) => item.id === songId)
+      if (song) {
+        const remainingSections = orderedSetSections.filter(
+          (section) => section.trim().toLowerCase() !== activeSection.trim().toLowerCase(),
+        )
+        shouldOnlyRemoveFromSection = remainingSections.some((section) =>
+          songMatchesGigSection(song, section, currentSetlist.id, { ignoreOverride: true }),
+        )
+      }
       const deleteKey = getSectionDeleteKey(activeSection)
       setGigDeletedSectionSongs((prev) => {
         const bySection = prev[currentSetlist.id] ?? {}
@@ -5211,6 +5228,23 @@ function App() {
           [currentSetlist.id]: nextBySong,
         }
       })
+      if (supabase) {
+        runSupabase(
+          supabase.from('SetlistSongTags').insert(withBandId({
+            id: createId(),
+            song_id: songId,
+            tag: makeGigSectionDeletedTag(currentSetlist.id, activeSection),
+          })),
+        )
+        runSupabase(
+          supabase
+            .from('SetlistSongTags')
+            .delete()
+            .eq('song_id', songId)
+            .eq('tag', makeGigSectionTag(currentSetlist.id, activeSection)),
+        )
+      }
+      if (shouldOnlyRemoveFromSection) return
     }
     commitChange('Remove song', (prev) => ({
       ...prev,
@@ -5246,22 +5280,6 @@ function App() {
           .eq('gig_id', currentSetlist.id)
           .eq('song_id', songId),
       )
-      if (activeSection) {
-        runSupabase(
-          supabase.from('SetlistSongTags').insert(withBandId({
-            id: createId(),
-            song_id: songId,
-            tag: makeGigSectionDeletedTag(currentSetlist.id, activeSection),
-          })),
-        )
-        runSupabase(
-          supabase
-            .from('SetlistSongTags')
-            .delete()
-            .eq('song_id', songId)
-            .eq('tag', makeGigSectionTag(currentSetlist.id, activeSection)),
-        )
-      }
     }
   }
 

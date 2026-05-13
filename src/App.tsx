@@ -4234,19 +4234,40 @@ function App() {
     if (!currentSetlist) return
     const sectionPanel = getSectionFromPanel(panel)
     if (value && (panel === 'special' || Boolean(sectionPanel))) {
+      const hasRawSongAssignment = (song: Song) =>
+        song.keys.some((key) => Boolean((key.gigOverrides[currentSetlist.id] ?? key.defaultKey ?? '').trim())) ||
+        appState.specialRequests.some(
+          (request) =>
+            request.gigId === currentSetlist.id &&
+            request.songId === song.id &&
+            !request.djOnly &&
+            normalizeTagList(request.singers ?? []).length > 0 &&
+            Boolean((request.key ?? '').trim()),
+        )
+      const hasRawSpecialRequestAssignment = (request: SpecialRequest) =>
+        request.djOnly ||
+        (normalizeTagList(request.singers ?? []).length > 0 && Boolean((request.key ?? '').trim())) ||
+        (request.songId
+          ? (() => {
+              const song = appState.songs.find((item) => item.id === request.songId)
+              if (!song) return false
+              return song.keys.some((key) =>
+                Boolean((key.gigOverrides[currentSetlist.id] ?? key.defaultKey ?? '').trim()),
+              )
+            })()
+          : false)
       const hasMissingSingers =
         panel === 'special'
           ? appState.specialRequests.some(
               (request) =>
                 request.gigId === currentSetlist.id &&
-                !request.djOnly &&
-                getSpecialRequestDisplayAssignments(request).singers.length === 0,
+                !hasRawSpecialRequestAssignment(request),
             )
           : currentSetlist.songIds
               .map((songId) => appState.songs.find((song) => song.id === songId))
               .filter((song): song is Song => Boolean(song))
               .filter((song) => songMatchesGigSection(song, sectionPanel ?? '', currentSetlist.id))
-              .some((song) => getGigSingerAssignments(song.id, currentSetlist.id).length === 0)
+              .some((song) => !hasRawSongAssignment(song))
       if (hasMissingSingers) {
         setShowMissingSingerWarning(true)
         return

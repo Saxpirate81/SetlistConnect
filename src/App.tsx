@@ -952,6 +952,8 @@ function App() {
   const [playlistSingerFilter, setPlaylistSingerFilter] = useState('__all__')
   const [playlistShareStatus, setPlaylistShareStatus] = useState('')
   const playlistShareTimerRef = useRef<number | null>(null)
+  const [setlistCopyStatus, setSetlistCopyStatus] = useState<string | null>(null)
+  const setlistCopyTimerRef = useRef<number | null>(null)
   const [playlistDrawerOverlay, setPlaylistDrawerOverlay] = useState(false)
   const [sharedPlaylistDrawerOverlay, setSharedPlaylistDrawerOverlay] = useState(false)
   const [collapsedSharedAudioSections, setCollapsedSharedAudioSections] = useState<Record<string, boolean>>({})
@@ -1784,25 +1786,9 @@ function App() {
   ])
   const printableSetSections = useMemo(() => {
     if (!currentSetlist) return []
-    const seen = new Set<string>()
-    const sections: string[] = []
-    const addSection = (value: string) => {
-      const normalized = normalizeSetlistSectionLabel(value)
-      if (!normalized) return
-      const lower = normalized.toLowerCase()
-      if (!isSetlistTypeTag(normalized)) return
-      if (seen.has(lower)) return
-      seen.add(lower)
-      sections.push(normalized)
-    }
-    orderedSetSections.forEach(addSection)
-    currentSetlist.songIds
-      .map((songId) => appState.songs.find((song) => song.id === songId))
-      .filter((song): song is Song => Boolean(song))
-      .flatMap((song) => song.tags)
-      .forEach(addSection)
-    return sections
-  }, [appState.songs, currentSetlist, isSetlistTypeTag, normalizeSetlistSectionLabel, orderedSetSections])
+    // Printable view should mirror the setup setlist sections exactly.
+    return [...orderedSetSections]
+  }, [currentSetlist, orderedSetSections])
   const orderedPrintableSongSections = useMemo(() => {
     if (!currentSetlist) return []
     return [...printableSetSections]
@@ -1896,8 +1882,7 @@ function App() {
       ? PRINT_DANCE_SONGS_PER_SECTION
       : PRINT_DEFAULT_SONGS_PER_SECTION
   const getPrintableSectionTitle = (section: string, continued = false) => {
-    const sectionTitle = section.toLowerCase().includes('set') ? section : `${section} Set`
-    return continued ? `${sectionTitle} (continued)` : sectionTitle
+    return continued ? `${section} (continued)` : section
   }
   const normalizePlaylistSection = useCallback((value: string) => {
     const normalized = normalizeSetlistSectionLabel(value)
@@ -4304,6 +4289,56 @@ function App() {
     if (!currentSetlist) return
     setPdfDownloadStatus(null)
     setShowPrintPreview(true)
+  }
+  const copySetlistForExcel = async () => {
+    if (!currentSetlist) return
+    const rows: string[] = ['Section\tTitle\tArtist\tKey\tSingers']
+    orderedSetSections.forEach((section) => {
+      const sectionSongs = currentSetlist.songIds
+        .map((songId) => appState.songs.find((song) => song.id === songId))
+        .filter((song): song is Song => Boolean(song))
+        .filter((song) => songMatchesGigSection(song, section, currentSetlist.id))
+      if (sectionSongs.length === 0) {
+        rows.push(`${section}\t\t\t\t`)
+        return
+      }
+      sectionSongs.forEach((song) => {
+        const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
+        const singers = assignments.map((entry) => entry.singer)
+        const keys = Array.from(new Set(assignments.map((entry) => entry.key).filter(Boolean)))
+        const keyLabel = keys.length === 0 ? '' : keys.length === 1 ? keys[0] : keys.join(', ')
+        rows.push(
+          [
+            section,
+            song.title ?? '',
+            song.artist ?? '',
+            keyLabel,
+            singers.length ? formatSingerAssignmentNames(singers) : '',
+          ].join('\t'),
+        )
+      })
+    })
+    const payload = rows.join('\n')
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(payload)
+      } else {
+        const textArea = document.createElement('textarea')
+        textArea.value = payload
+        textArea.style.position = 'fixed'
+        textArea.style.opacity = '0'
+        document.body.appendChild(textArea)
+        textArea.focus()
+        textArea.select()
+        document.execCommand('copy')
+        textArea.remove()
+      }
+      setSetlistCopyStatus('Setlist copied for Excel.')
+      if (setlistCopyTimerRef.current) window.clearTimeout(setlistCopyTimerRef.current)
+      setlistCopyTimerRef.current = window.setTimeout(() => setSetlistCopyStatus(null), 2600)
+    } catch {
+      setSupabaseError('Unable to copy setlist. Please try again.')
+    }
   }
 
   const logPlayedSong = (songId: string) => {
@@ -16925,6 +16960,13 @@ function App() {
                       <button
                         type="button"
                         className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-white/15 bg-slate-900/70 px-4 text-sm font-semibold text-slate-200"
+                        onClick={() => void copySetlistForExcel()}
+                      >
+                        Copy for Excel
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-white/15 bg-slate-900/70 px-4 text-sm font-semibold text-slate-200"
                         onClick={handleDownloadOfflineGig}
                       >
                         Save Offline Copy
@@ -16934,6 +16976,9 @@ function App() {
                       ) : null}
                       {offlineExportStatus ? (
                         <span className="text-xs text-teal-200">{offlineExportStatus}</span>
+                      ) : null}
+                      {setlistCopyStatus ? (
+                        <span className="text-xs text-teal-200">{setlistCopyStatus}</span>
                       ) : null}
                     </div>
                   )}

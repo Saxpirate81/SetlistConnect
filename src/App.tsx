@@ -16278,6 +16278,14 @@ function App() {
                               <div>
                                 <div className="text-base font-semibold md:text-lg">
                                   {song.title}
+                                  {getGigSongSections(currentSetlist.id, song.id).length > 1 && (
+                                    <span
+                                      className="ml-2 inline-flex rounded-full border border-cyan-300/45 bg-cyan-400/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-cyan-100"
+                                      title="In multiple playlists"
+                                    >
+                                      M
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-xs text-slate-400">{song.artist}</div>
                                 {currentSetlist && (() => {

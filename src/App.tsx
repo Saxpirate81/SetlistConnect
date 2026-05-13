@@ -1876,6 +1876,7 @@ function App() {
     if (!normalized) return ''
     const lower = normalized.toLowerCase()
     if (lower === 'special request' || lower === 'special requests') return 'Special Requests'
+    if (lower === 'additional request' || lower === 'additional requests') return 'Additional Requests'
     if (lower === 'dj only') return 'DJ Only'
     return normalized
   }, [normalizeSetlistSectionLabel])

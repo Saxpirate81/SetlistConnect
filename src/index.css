@@ -76,6 +76,29 @@ body {
   overscroll-behavior-y: contain;
 }
 
+@media (max-width: 767px) {
+  /* Keep bottom nav anchored on phones; sit slightly above browser chrome. */
+  .shared-bottom-nav,
+  .playlist-modal-bottom-nav {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: calc(env(safe-area-inset-bottom) + 0.45rem) !important;
+    z-index: 380 !important;
+  }
+}
+
+@media (min-width: 768px) {
+  /* On desktop/tablet, place controls closer to the true bottom. */
+  .shared-bottom-nav,
+  .playlist-modal-bottom-nav {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+  }
+}
+
 .ios-standalone-mode .shared-public-mode.shared-ios-standalone {
   padding-top: calc(0.75rem + env(safe-area-inset-top));
   padding-bottom: calc(9.25rem + env(safe-area-inset-bottom));
@@ -1639,6 +1662,14 @@ button[aria-label="Print chart or lyrics"] {
 .pdf-export-mode .print-dj,
 .pdf-export-mode .print-special {
   grid-column: 1 / -1;
+}
+
+/* After full-width DJ/Special rows, keep all setlist sections in 3 columns. */
+.pdf-export-mode .print-latin,
+.pdf-export-mode .print-dinner,
+.pdf-export-mode .print-dance,
+.pdf-export-mode .print-generic-set {
+  grid-column: span 1;
 }
 
 .pdf-export-mode .print-section-title {

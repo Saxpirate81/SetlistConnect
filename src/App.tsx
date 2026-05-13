@@ -727,6 +727,7 @@ function App() {
   const [pendingDeleteGigId, setPendingDeleteGigId] = useState<string | null>(null)
   const [showRemoveSongConfirm, setShowRemoveSongConfirm] = useState(false)
   const [pendingRemoveSongId, setPendingRemoveSongId] = useState<string | null>(null)
+  const [pendingRemoveSongSection, setPendingRemoveSongSection] = useState<string | null>(null)
   const [singerModalSongId, setSingerModalSongId] = useState<string | null>(null)
   const [showAddSongModal, setShowAddSongModal] = useState(false)
   const [songLibraryTags, setSongLibraryTags] = useState<string[]>([])
@@ -5192,9 +5193,11 @@ function App() {
     setShowSectionAddSongsModal(false)
   }
 
-  const removeSongFromSetlist = (songId: string) => {
+  const removeSongFromSetlist = (songId: string, sectionOverride?: string) => {
     if (!currentSetlist) return
-    const activeSection = getSectionFromPanel(activeBuildPanel)
+    const activeSection = normalizeSetlistSectionLabel(
+      sectionOverride || getSectionFromPanel(activeBuildPanel) || '',
+    )
     let shouldOnlyRemoveFromSection = false
     if (activeSection) {
       const song = appState.songs.find((item) => item.id === songId)
@@ -5283,8 +5286,9 @@ function App() {
     }
   }
 
-  const requestRemoveSong = (songId: string) => {
+  const requestRemoveSong = (songId: string, section?: string) => {
     setPendingRemoveSongId(songId)
+    setPendingRemoveSongSection(section ? normalizeSetlistSectionLabel(section) : null)
     setShowRemoveSongConfirm(true)
   }
 
@@ -5344,13 +5348,15 @@ function App() {
 
   const confirmRemoveSong = () => {
     if (!pendingRemoveSongId) return
-    removeSongFromSetlist(pendingRemoveSongId)
+    removeSongFromSetlist(pendingRemoveSongId, pendingRemoveSongSection ?? undefined)
     setPendingRemoveSongId(null)
+    setPendingRemoveSongSection(null)
     setShowRemoveSongConfirm(false)
   }
 
   const cancelRemoveSong = () => {
     setPendingRemoveSongId(null)
+    setPendingRemoveSongSection(null)
     setShowRemoveSongConfirm(false)
   }
 
@@ -16638,7 +16644,7 @@ function App() {
                                     className="gig-sheet-remove-inline"
                                     onClick={(event) => {
                                       event.stopPropagation()
-                                      requestRemoveSong(song.id)
+                                      requestRemoveSong(song.id, section)
                                     }}
                                     aria-label="Remove song"
                                     title="Remove song"
@@ -19018,7 +19024,7 @@ function App() {
                                         className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[12px] text-red-200"
                                         onClick={(event) => {
                                           event.stopPropagation()
-                                          requestRemoveSong(song.id)
+                                          requestRemoveSong(song.id, section)
                                         }}
                                         aria-label="Remove song"
                                         title="Remove song"

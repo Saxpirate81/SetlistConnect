@@ -1084,7 +1084,7 @@ function App() {
   const [showGigLockedSongWarning, setShowGigLockedSongWarning] = useState(false)
   const [pendingResendGigSongId, setPendingResendGigSongId] = useState<string | null>(null)
   const [gigSongSectionOverrides, setGigSongSectionOverrides] = useState<
-    Record<string, Record<string, string>>
+    Record<string, Record<string, string[]>>
   >({})
   const [gigDeletedSectionSongs, setGigDeletedSectionSongs] = useState<
     Record<string, Record<string, string[]>>
@@ -1486,12 +1486,26 @@ function App() {
     },
     [normalizeSetlistSectionLabel],
   )
-  const getGigSongSectionOverride = useCallback(
+  const getGigSongSections = useCallback(
     (gigId: string, songId: string) => {
-      const override = gigSongSectionOverrides[gigId]?.[songId]
-      return override ? normalizeSetlistSectionLabel(override) : ''
+      const overrides = gigSongSectionOverrides[gigId]?.[songId] ?? []
+      const seen = new Set<string>()
+      const normalized: string[] = []
+      overrides.forEach((override) => {
+        const value = normalizeSetlistSectionLabel(override)
+        if (!value) return
+        const key = value.toLowerCase()
+        if (seen.has(key)) return
+        seen.add(key)
+        normalized.push(value)
+      })
+      return normalized
     },
     [gigSongSectionOverrides, normalizeSetlistSectionLabel],
+  )
+  const getGigSongSectionOverride = useCallback(
+    (gigId: string, songId: string) => getGigSongSections(gigId, songId)[0] ?? '',
+    [getGigSongSections],
   )
   const getDeletedSectionSongIds = useCallback(
     (gigId: string, section: string) =>
@@ -1518,13 +1532,18 @@ function App() {
       const normalizedSection = normalizeSetlistSectionLabel(section).toLowerCase()
       if (!normalizedSection) return false
       if (!options.ignoreOverride) {
-        const override = getGigSongSectionOverride(gigId, song.id)
-        if (override) {
-          const overrideLower = override.toLowerCase()
-          if (overrideLower === normalizedSection) return true
-          // Ignore stale overrides that point to a section that no longer exists on this gig
-          // (e.g. legacy "Dance" after splitting into "Dance Set 1/2").
-          if (isExplicitGigSetlistSection(gigId, override)) return false
+        const overrideSections = getGigSongSections(gigId, song.id)
+        if (
+          overrideSections.some(
+            (overrideSection) => overrideSection.trim().toLowerCase() === normalizedSection,
+          )
+        ) {
+          return true
+        }
+        // If explicit gig-section assignments exist and this section wasn't one of them,
+        // keep the song scoped to only those assigned sections.
+        if (overrideSections.some((overrideSection) => isExplicitGigSetlistSection(gigId, overrideSection))) {
+          return false
         }
       }
       if (isExplicitGigSetlistSection(gigId, section)) {
@@ -1556,7 +1575,7 @@ function App() {
       }
       return hasSongTag(song, section)
     },
-    [getGigSongSectionOverride, isExplicitGigSetlistSection, normalizeSetlistSectionLabel],
+    [getGigSongSections, isExplicitGigSetlistSection, normalizeSetlistSectionLabel],
   )
   const normalizeTagIdentity = (value: string) =>
     value
@@ -4934,11 +4953,13 @@ function App() {
         }
 
         const sectionOverrideTagRows = Object.entries(sourceGigSectionOverrides)
-          .map(([songId, section]) => ({
-            id: createId(),
-            song_id: songId,
-            tag: makeGigSectionTag(newId, section),
-          }))
+          .flatMap(([songId, sections]) =>
+            (sections ?? []).map((section) => ({
+              id: createId(),
+              song_id: songId,
+              tag: makeGigSectionTag(newId, section),
+            })),
+          )
           .filter((row) => row.song_id && row.tag)
         if (sectionOverrideTagRows.length) {
           const { error: sectionTagInsertError } = await supabase.from('SetlistSongTags').insert(
@@ -5090,7 +5111,15 @@ function App() {
       ...prev,
       [gigId]: {
         ...(prev[gigId] ?? {}),
-        ...Object.fromEntries(uniqueSongIds.map((songId) => [songId, normalizedSection])),
+        ...Object.fromEntries(
+          uniqueSongIds.map((songId) => {
+            const currentSections = (prev[gigId]?.[songId] ?? []).map(normalizeSetlistSectionLabel)
+            const mergedSections = Array.from(
+              new Set([...currentSections.filter(Boolean), normalizedSection]),
+            )
+            return [songId, mergedSections]
+          }),
+        ),
       },
     }))
     const deleteKey = getSectionDeleteKey(normalizedSection)
@@ -5108,30 +5137,32 @@ function App() {
     })
     if (options.persist === false || !supabase) return
     const client = supabase
-    const tagPrefix = `${GIG_SECTION_TAG_PREFIX}${gigId}::%`
     const deletedTag = makeGigSectionDeletedTag(gigId, normalizedSection)
     uniqueSongIds.forEach((songId) => {
       runSupabase(
         (async () => {
-          const clearQuery = client
-            .from('SetlistSongTags')
-            .delete()
-            .eq('song_id', songId)
-            .like('tag', tagPrefix)
-          const { error: clearError } = activeBandId
-            ? await clearQuery.eq('band_id', activeBandId)
-            : await clearQuery
-          if (clearError) return { error: clearError }
           const { error: clearDeletedError } = await client
             .from('SetlistSongTags')
             .delete()
             .eq('song_id', songId)
             .eq('tag', deletedTag)
           if (clearDeletedError) return { error: clearDeletedError }
+          const sectionTag = makeGigSectionTag(gigId, normalizedSection)
+          const existingTagQuery = client
+            .from('SetlistSongTags')
+            .select('id')
+            .eq('song_id', songId)
+            .eq('tag', sectionTag)
+            .limit(1)
+          const existingTagRes = activeBandId
+            ? await existingTagQuery.eq('band_id', activeBandId)
+            : await existingTagQuery
+          if (existingTagRes.error) return { error: existingTagRes.error }
+          if ((existingTagRes.data ?? []).length > 0) return { error: null }
           const { error: insertError } = await client.from('SetlistSongTags').insert(withBandId({
             id: createId(),
             song_id: songId,
-            tag: makeGigSectionTag(gigId, normalizedSection),
+            tag: sectionTag,
           }))
           return { error: insertError }
         })(),
@@ -5206,7 +5237,7 @@ function App() {
           (section) => section.trim().toLowerCase() !== activeSection.trim().toLowerCase(),
         )
         shouldOnlyRemoveFromSection = remainingSections.some((section) =>
-          songMatchesGigSection(song, section, currentSetlist.id, { ignoreOverride: true }),
+          songMatchesGigSection(song, section, currentSetlist.id),
         )
       }
       const deleteKey = getSectionDeleteKey(activeSection)
@@ -5223,9 +5254,18 @@ function App() {
       })
       setGigSongSectionOverrides((prev) => {
         const bySong = prev[currentSetlist.id]
-        if (!bySong?.[songId]) return prev
+        const normalizedActiveSection = normalizeSetlistSectionLabel(activeSection)
+        if (!bySong?.[songId] || !normalizedActiveSection) return prev
+        const existingSections = (bySong[songId] ?? []).map(normalizeSetlistSectionLabel).filter(Boolean)
+        const nextSections = existingSections.filter(
+          (section) => section.trim().toLowerCase() !== normalizedActiveSection.trim().toLowerCase(),
+        )
         const nextBySong = { ...bySong }
-        delete nextBySong[songId]
+        if (nextSections.length === 0) {
+          delete nextBySong[songId]
+        } else {
+          nextBySong[songId] = nextSections
+        }
         return {
           ...prev,
           [currentSetlist.id]: nextBySong,
@@ -5364,10 +5404,11 @@ function App() {
     const normalizedSection = normalizeSetlistSectionLabel(section)
     if (!normalizedSection) return []
     const normalizedSectionLower = normalizedSection.toLowerCase()
-    const sourceHasExplicitSectionSongs = source.songIds.some((songId) => {
-      const override = getGigSongSectionOverride(source.id, songId)
-      return override.trim().toLowerCase() === normalizedSectionLower
-    })
+    const sourceHasExplicitSectionSongs = source.songIds.some((songId) =>
+      getGigSongSections(source.id, songId).some(
+        (override) => override.trim().toLowerCase() === normalizedSectionLower,
+      ),
+    )
     const matchesLibrarySectionTag = (song: Song) => {
       if (normalizedSectionLower.startsWith('dance set ')) return hasSongTag(song, 'Dance')
       if (normalizedSectionLower.startsWith('dinner set ')) return hasSongTag(song, 'Dinner')
@@ -5845,23 +5886,28 @@ function App() {
       ...prev,
       [gigId]: {
         ...(prev[gigId] ?? {}),
-        [songId]: normalizedSection,
+        [songId]: Array.from(
+          new Set([...(prev[gigId]?.[songId] ?? []), normalizedSection]),
+        ),
       },
     }))
     if (!supabase) return
     const client = supabase
-    const tagPrefix = `${GIG_SECTION_TAG_PREFIX}${gigId}::%`
     void (async () => {
-      const { error: clearError } = await client
+      const sectionTag = makeGigSectionTag(gigId, normalizedSection)
+      const existingQuery = client
         .from('SetlistSongTags')
-        .delete()
+        .select('id')
         .eq('song_id', songId)
-        .like('tag', tagPrefix)
-      reportSupabaseError(clearError)
+        .eq('tag', sectionTag)
+        .limit(1)
+      const existingRes = activeBandId ? await existingQuery.eq('band_id', activeBandId) : await existingQuery
+      reportSupabaseError(existingRes.error)
+      if ((existingRes.data ?? []).length > 0) return
       const { error: insertError } = await client.from('SetlistSongTags').insert(withBandId({
         id: createId(),
         song_id: songId,
-        tag: makeGigSectionTag(gigId, normalizedSection),
+        tag: sectionTag,
       }))
       reportSupabaseError(insertError)
     })()
@@ -5910,6 +5956,36 @@ function App() {
         setlist.id === currentSetlist.id ? { ...setlist, songIds: nextSongIds } : setlist,
       ),
     }))
+    const normalizedFromSection = normalizeSetlistSectionLabel(fromSection)
+    setGigSongSectionOverrides((prev) => {
+      const gigOverrides = prev[currentSetlist.id] ?? {}
+      const currentSections = (gigOverrides[songId] ?? [])
+        .map(normalizeSetlistSectionLabel)
+        .filter(Boolean)
+      const withoutSource = normalizedFromSection
+        ? currentSections.filter(
+            (section) =>
+              section.trim().toLowerCase() !== normalizedFromSection.trim().toLowerCase(),
+          )
+        : currentSections
+      const nextSections = Array.from(new Set([...withoutSource, normalizedToSection]))
+      return {
+        ...prev,
+        [currentSetlist.id]: {
+          ...gigOverrides,
+          [songId]: nextSections,
+        },
+      }
+    })
+    if (supabase && normalizedFromSection) {
+      runSupabase(
+        supabase
+          .from('SetlistSongTags')
+          .delete()
+          .eq('song_id', songId)
+          .eq('tag', makeGigSectionTag(currentSetlist.id, normalizedFromSection)),
+      )
+    }
     assignGigSongSection(currentSetlist.id, songId, normalizedToSection)
     flashMovedSong(songId)
 
@@ -6141,9 +6217,11 @@ function App() {
       const bySong = prev[currentSetlist.id]
       if (!bySong) return prev
       const nextBySong = Object.fromEntries(
-        Object.entries(bySong).map(([songId, section]) => [
+        Object.entries(bySong).map(([songId, sections]) => [
           songId,
-          section.toLowerCase() === normalizedFrom.toLowerCase() ? normalizedTo : section,
+          (sections ?? []).map((section) =>
+            section.toLowerCase() === normalizedFrom.toLowerCase() ? normalizedTo : section,
+          ),
         ]),
       )
       return {
@@ -6308,12 +6386,15 @@ function App() {
       const bySong = prev[currentSetlist.id]
       if (!bySong) return prev
       const nextBySong = { ...bySong }
-      Object.entries(bySong).forEach(([songId, assignedSection]) => {
-        if (
-          sectionExclusiveSongIdSet.has(songId) ||
-          assignedSection.trim().toLowerCase() === section.trim().toLowerCase()
-        ) {
+      Object.entries(bySong).forEach(([songId, assignedSections]) => {
+        const remainingSections = (assignedSections ?? []).filter(
+          (assignedSection) =>
+            assignedSection.trim().toLowerCase() !== section.trim().toLowerCase(),
+        )
+        if (sectionExclusiveSongIdSet.has(songId) || remainingSections.length === 0) {
           delete nextBySong[songId]
+        } else {
+          nextBySong[songId] = remainingSections
         }
       })
       return {
@@ -7973,7 +8054,7 @@ function App() {
     }
 
     const tagsBySong = new Map<string, string[]>()
-    const gigSectionOverrideMap = new Map<string, Record<string, string>>()
+    const gigSectionOverrideMap = new Map<string, Record<string, string[]>>()
     const gigDeletedSectionSongMap = new Map<string, Record<string, string[]>>()
     tagsRes.data?.forEach((row) => {
       const deletedSectionTag = parseGigSectionDeletedTag(row.tag)
@@ -7987,7 +8068,11 @@ function App() {
       const gigSectionTag = parseGigSectionTag(row.tag)
       if (gigSectionTag) {
         const bySong = gigSectionOverrideMap.get(gigSectionTag.gigId) ?? {}
-        bySong[row.song_id] = gigSectionTag.section
+        const existingSections = bySong[row.song_id] ?? []
+        const normalizedSection = normalizeSetlistSectionLabel(gigSectionTag.section)
+        if (normalizedSection) {
+          bySong[row.song_id] = Array.from(new Set([...existingSections, normalizedSection]))
+        }
         gigSectionOverrideMap.set(gigSectionTag.gigId, bySong)
         return
       }
@@ -8226,7 +8311,7 @@ function App() {
       }, {}) ?? {}
     setNowPlayingByGig(nowPlayingMap)
     setGigSongSectionOverrides(
-      Array.from(gigSectionOverrideMap.entries()).reduce<Record<string, Record<string, string>>>(
+      Array.from(gigSectionOverrideMap.entries()).reduce<Record<string, Record<string, string[]>>>(
         (acc, [gigId, bySong]) => {
           acc[gigId] = bySong
           return acc
@@ -16622,6 +16707,14 @@ function App() {
                                     }`}
                                   >
                                     <span className="gig-sheet-title-inline">{song.title}</span>{' '}
+                                    {getGigSongSections(currentSetlist.id, song.id).length > 1 && (
+                                      <span
+                                        className="ml-1 inline-flex rounded-full border border-cyan-300/50 bg-cyan-400/20 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-cyan-100"
+                                        title="In multiple playlists"
+                                      >
+                                        M
+                                      </span>
+                                    )}
                                     <span className="gig-sheet-artist-inline">- {song.artist || 'Unknown'}</span>
                                   </div>
                                   <div
@@ -18945,6 +19038,14 @@ function App() {
                                   <div>
                                   <div className="text-base font-semibold md:text-lg">
                                     {song.title}
+                                    {getGigSongSections(currentSetlist.id, song.id).length > 1 && (
+                                      <span
+                                        className="ml-2 inline-flex rounded-full border border-cyan-300/45 bg-cyan-400/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-cyan-100"
+                                        title="In multiple playlists"
+                                      >
+                                        M
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="text-[10px] text-slate-400">
                                     {song.artist}

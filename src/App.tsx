@@ -1777,23 +1777,8 @@ function App() {
   }, [appState.songs, currentSetlist, isSetlistTypeTag, normalizeSetlistSectionLabel, orderedSetSections])
   const orderedPrintableSongSections = useMemo(() => {
     if (!currentSetlist) return []
-    const isDjOnlySection = (section: string) => section.trim().toLowerCase() === 'dj only'
-    const getSectionSongCount = (section: string) => {
-      return currentSetlist.songIds
-        .map((songId) => appState.songs.find((song) => song.id === songId))
-        .filter((song): song is Song => Boolean(song))
-        .filter((song) => {
-          return songMatchesGigSection(song, section, currentSetlist.id)
-        }).length
-    }
-    return [...printableSetSections].sort((a, b) => {
-      if (isDjOnlySection(a) && !isDjOnlySection(b)) return -1
-      if (!isDjOnlySection(a) && isDjOnlySection(b)) return 1
-      const countDiff = getSectionSongCount(a) - getSectionSongCount(b)
-      if (countDiff !== 0) return countDiff
-      return a.localeCompare(b)
-    })
-  }, [appState.songs, currentSetlist, printableSetSections, songMatchesGigSection])
+    return [...printableSetSections]
+  }, [currentSetlist, printableSetSections])
   const printableGigMusicians = useMemo(() => {
     if (!currentSetlist) return []
     const seen = new Set<string>()
@@ -16731,7 +16716,7 @@ function App() {
 
             <div className="min-h-0 flex-1 overflow-visible md:overflow-hidden">
               {playlistModalTab === 'setlist' ? (
-                <div className="min-h-0 overflow-visible px-3 pb-[calc(7.25rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pt-3 md:h-full md:overflow-y-auto md:overflow-x-hidden md:pb-4">
+                <div className="h-[calc(100dvh-11.5rem)] min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-[calc(7.25rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pt-3 md:h-full md:pb-4">
                   {isAdmin && (
                     <div className="mb-3 flex flex-wrap items-center gap-2">
                       <button

@@ -1664,6 +1664,14 @@ button[aria-label="Print chart or lyrics"] {
   grid-column: 1 / -1;
 }
 
+/* After full-width DJ/Special rows, keep all setlist sections in 3 columns. */
+.pdf-export-mode .print-latin,
+.pdf-export-mode .print-dinner,
+.pdf-export-mode .print-dance,
+.pdf-export-mode .print-generic-set {
+  grid-column: span 1;
+}
+
 .pdf-export-mode .print-section-title {
   position: static;
   break-after: avoid;

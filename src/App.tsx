@@ -1531,6 +1531,7 @@ function App() {
     ) => {
       const normalizedSection = normalizeSetlistSectionLabel(section).toLowerCase()
       if (!normalizedSection) return false
+      if (getDeletedSectionSongIds(gigId, section).has(song.id)) return false
       if (!options.ignoreOverride) {
         const overrideSections = getGigSongSections(gigId, song.id)
         if (
@@ -1575,7 +1576,7 @@ function App() {
       }
       return hasSongTag(song, section)
     },
-    [getGigSongSections, isExplicitGigSetlistSection, normalizeSetlistSectionLabel],
+    [getDeletedSectionSongIds, getGigSongSections, isExplicitGigSetlistSection, normalizeSetlistSectionLabel],
   )
   const normalizeTagIdentity = (value: string) =>
     value
@@ -5891,10 +5892,29 @@ function App() {
         ),
       },
     }))
+    const deleteKey = getSectionDeleteKey(normalizedSection)
+    setGigDeletedSectionSongs((prev) => {
+      const bySection = prev[gigId]
+      if (!bySection?.[deleteKey]) return prev
+      return {
+        ...prev,
+        [gigId]: {
+          ...bySection,
+          [deleteKey]: bySection[deleteKey].filter((id) => id !== songId),
+        },
+      }
+    })
     if (!supabase) return
     const client = supabase
     void (async () => {
       const sectionTag = makeGigSectionTag(gigId, normalizedSection)
+      const deletedTag = makeGigSectionDeletedTag(gigId, normalizedSection)
+      const { error: clearDeletedError } = await client
+        .from('SetlistSongTags')
+        .delete()
+        .eq('song_id', songId)
+        .eq('tag', deletedTag)
+      reportSupabaseError(clearDeletedError)
       const existingQuery = client
         .from('SetlistSongTags')
         .select('id')

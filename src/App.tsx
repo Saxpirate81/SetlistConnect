@@ -8169,6 +8169,7 @@ function App() {
         gigSongsByGig.set(row.gig_id, list)
       }
     })
+    const validGigIdSet = new Set((gigsRes.data ?? []).map((row) => row.id))
     // Recovery path: if songs have explicit gig-section assignments but lost gig-song rows,
     // restore membership so section playlists stay intact.
     const recoveredGigSongRows: Array<{
@@ -8178,6 +8179,7 @@ function App() {
       sort_order: number
     }> = []
     gigSectionOverrideMap.forEach((bySong, gigId) => {
+      if (!validGigIdSet.has(gigId)) return
       Object.entries(bySong).forEach(([songId, assignedSections]) => {
         if (!songIdSet.has(songId)) return
         if (!assignedSections?.length) return

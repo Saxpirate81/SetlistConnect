@@ -1514,16 +1514,6 @@ function App() {
       new Set(gigDeletedSectionSongs[gigId]?.[getSectionDeleteKey(section)] ?? []),
     [gigDeletedSectionSongs, getSectionDeleteKey],
   )
-  const isExplicitGigSetlistSection = useCallback(
-    (gigId: string, section: string) => {
-      const normalizedSection = normalizeSetlistSectionLabel(section).toLowerCase()
-      if (!normalizedSection) return false
-      return (gigSetlistSections[gigId] ?? []).some(
-        (item) => normalizeSetlistSectionLabel(item).toLowerCase() === normalizedSection,
-      )
-    },
-    [gigSetlistSections, normalizeSetlistSectionLabel],
-  )
   const songMatchesGigSection = useCallback(
     (
       song: Song,
@@ -1543,42 +1533,13 @@ function App() {
         ) {
           return true
         }
-        // If explicit gig-section assignments exist and this section wasn't one of them,
-        // keep the song scoped to only those assigned sections.
-        if (overrideSections.some((overrideSection) => isExplicitGigSetlistSection(gigId, overrideSection))) {
-          return false
-        }
-      }
-      if (isExplicitGigSetlistSection(gigId, section)) {
-        // For explicit per-gig sections, prefer direct section tags if present.
-        // This keeps songs visible even if override tags were not written yet.
-        if (hasSongTag(song, section)) return true
-        // Legacy/base-tag fallback: when sets are split (e.g. Dance -> Dance Set 1/2),
-        // unassigned base-tag songs should default into Set 1.
-        if (normalizedSection === 'dance set 1') return hasSongTag(song, 'Dance')
-        if (normalizedSection === 'dinner set 1') return hasSongTag(song, 'Dinner')
-        if (normalizedSection === 'latin set 1') return hasSongTag(song, 'Latin')
+        // Section membership is controlled by explicit gig assignments only.
+        // Song tags are reference metadata and should not route songs into sections.
         return false
       }
-      // Numbered sets: only Set 1 inherits legacy base tags.
-      if (normalizedSection.startsWith('dance set ')) {
-        return normalizedSection === 'dance set 1'
-          ? hasSongTag(song, 'Dance') || hasSongTag(song, section)
-          : hasSongTag(song, section)
-      }
-      if (normalizedSection.startsWith('dinner set ')) {
-        return normalizedSection === 'dinner set 1'
-          ? hasSongTag(song, 'Dinner') || hasSongTag(song, section)
-          : hasSongTag(song, section)
-      }
-      if (normalizedSection.startsWith('latin set ')) {
-        return normalizedSection === 'latin set 1'
-          ? hasSongTag(song, 'Latin') || hasSongTag(song, section)
-          : hasSongTag(song, section)
-      }
-      return hasSongTag(song, section)
+      return false
     },
-    [getDeletedSectionSongIds, getGigSongSections, isExplicitGigSetlistSection, normalizeSetlistSectionLabel],
+    [getDeletedSectionSongIds, getGigSongSections, normalizeSetlistSectionLabel],
   )
   const normalizeTagIdentity = (value: string) =>
     value
@@ -1758,9 +1719,7 @@ function App() {
     const fromSongs = currentSetlist.songIds.flatMap((songId) => {
       const song = appState.songs.find((item) => item.id === songId)
       if (!song) return []
-          const override = getGigSongSectionOverride(currentSetlist.id, song.id)
-          if (override) return [override]
-          return song.tags.filter((tag) => isSetlistTypeTag(tag))
+      return getGigSongSections(currentSetlist.id, song.id)
     })
     const seen = new Set<string>()
     const merged = [...saved, ...fromSongs]
@@ -1780,8 +1739,7 @@ function App() {
     currentSetlist,
     gigHiddenSetlistSections,
     gigSetlistSections,
-    getGigSongSectionOverride,
-    isSetlistTypeTag,
+    getGigSongSections,
     normalizeSetlistSectionLabel,
   ])
   const printableSetSections = useMemo(() => {
@@ -2305,11 +2263,13 @@ function App() {
   const filterSingersForGig = useCallback(
     (gigId: string, singers: string[]) => {
       const allowedSingers = getGigAllowedSingerSet(gigId)
+      if (allowedSingers.size === 0) {
+        return normalizeTagList(singers)
+      }
       return normalizeTagList(singers).filter((singer) => {
         const normalized = singer.trim().toLowerCase()
         if (!normalized) return false
         if (normalized === INSTRUMENTAL_LABEL.toLowerCase()) return true
-        if (allowedSingers.size === 0) return false
         return allowedSingers.has(normalized)
       })
     },
@@ -2318,8 +2278,12 @@ function App() {
   const getGigSingerAssignments = useCallback((songId: string, gigId: string) => {
     const song = appState.songs.find((item) => item.id === songId)
     if (!song) return []
-    const allowedSingers = new Set(filterSingersForGig(gigId, song.keys.map((key) => key.singer)))
-    const shouldKeepSinger = (singer: string) => allowedSingers.has(singer.trim())
+    const allowedSingers = new Set(
+      filterSingersForGig(gigId, song.keys.map((key) => key.singer)).map((name) =>
+        name.trim().toLowerCase(),
+      ),
+    )
+    const shouldKeepSinger = (singer: string) => allowedSingers.has(singer.trim().toLowerCase())
     const savedAssignments = song.keys
       .map((key) => ({
         singer: key.singer,
@@ -2444,12 +2408,7 @@ function App() {
           .concat(overrideSection ? [overrideSection] : [])
           .map(normalizePlaylistSection)
           .filter(Boolean)
-        const assignments = song.keys
-          .map((key) => ({
-            singer: key.singer,
-            key: key.gigOverrides[currentSetlist.id] ?? '',
-          }))
-          .filter((entry) => entry.key)
+        const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
         addOrMerge({
           key: `song:${song.id}`,
           title: song.title,
@@ -2579,27 +2538,20 @@ function App() {
     const singers = normalizeTagList(entry.assignmentSingers ?? [])
     const keys = normalizeTagList(entry.assignmentKeys ?? [])
     if (entry.songId && currentSetlist) {
-      const song = appState.songs.find((item) => item.id === entry.songId)
-      song?.keys
-        .map((key) => ({
-          singer: key.singer,
-          key: key.gigOverrides[currentSetlist.id] ?? '',
-        }))
-        .filter((assignment) => assignment.key)
-        .forEach((assignment) => {
-          if (
-            assignment.singer &&
-            !singers.some((item) => item.toLowerCase() === assignment.singer.toLowerCase())
-          ) {
-            singers.push(assignment.singer)
-          }
-          if (assignment.key && !keys.some((item) => item.toLowerCase() === assignment.key.toLowerCase())) {
-            keys.push(assignment.key)
-          }
-        })
+      getGigSingerAssignments(entry.songId, currentSetlist.id).forEach((assignment) => {
+        if (
+          assignment.singer &&
+          !singers.some((item) => item.toLowerCase() === assignment.singer.toLowerCase())
+        ) {
+          singers.push(assignment.singer)
+        }
+        if (assignment.key && !keys.some((item) => item.toLowerCase() === assignment.key.toLowerCase())) {
+          keys.push(assignment.key)
+        }
+      })
     }
     return { singers, keys }
-  }, [appState.songs, currentSetlist])
+  }, [currentSetlist, getGigSingerAssignments])
   const sharedNowPlayingAssignments = useMemo(() => {
     const display = sharedSongDisplayByAnyId[sharedNowPlayingSongId ?? '']
     if (display) {
@@ -8268,6 +8220,97 @@ function App() {
         venueAddress: row.venue_address ?? '',
       })) ?? []
 
+    // One-time compatibility backfill:
+    // Legacy gigs sometimes used Dance/Dinner/Latin tags to imply set membership.
+    // Now that tags are reference-only, convert those legacy hints into explicit
+    // per-gig section assignments so past gigs render consistently.
+    const songsByIdForBackfill = new Map(songs.map((song) => [song.id, song]))
+    const existingGigSectionTags = new Set(
+      (tagsRes.data ?? [])
+        .map((row) => `${row.song_id}::${row.tag}`)
+        .filter((value) => value.includes(`${GIG_SECTION_TAG_PREFIX}`)),
+    )
+    const backfillSectionRows: Array<{ id: string; song_id: string; tag: string }> = []
+    const ensureKnownLegacySection = (
+      knownSections: Map<string, string>,
+      family: 'dance' | 'dinner' | 'latin',
+      rawTag: string,
+    ) => {
+      const normalized = normalizeSetlistSectionLabel(rawTag)
+      if (!normalized) return
+      const normalizedLower = normalized.toLowerCase()
+      if (!new RegExp(`^${family}(?:\\s+set\\s+\\d+)?$`, 'i').test(normalized)) return
+      if (!knownSections.has(normalizedLower)) {
+        knownSections.set(normalizedLower, normalized)
+      }
+    }
+    setlists.forEach((setlist) => {
+      const existingBySong = gigSectionOverrideMap.get(setlist.id) ?? {}
+      const knownSections = new Map<string, string>()
+      Object.values(existingBySong).forEach((sections) => {
+        sections.forEach((section) => {
+          const normalized = normalizeSetlistSectionLabel(section)
+          if (!normalized) return
+          knownSections.set(normalized.toLowerCase(), normalized)
+        })
+      })
+      setlist.songIds.forEach((songId) => {
+        const song = songsByIdForBackfill.get(songId)
+        if (!song) return
+        song.tags.forEach((tag) => {
+          ensureKnownLegacySection(knownSections, 'dance', tag)
+          ensureKnownLegacySection(knownSections, 'dinner', tag)
+          ensureKnownLegacySection(knownSections, 'latin', tag)
+        })
+      })
+
+      setlist.songIds.forEach((songId) => {
+        if ((existingBySong[songId] ?? []).length > 0) return
+        const song = songsByIdForBackfill.get(songId)
+        if (!song) return
+        const inferredSections: string[] = []
+        const tagSet = new Set(song.tags.map((tag) => normalizeSetlistSectionLabel(tag).toLowerCase()))
+        const addInferred = (section: string) => {
+          const normalized = normalizeSetlistSectionLabel(section)
+          if (!normalized) return
+          if (inferredSections.some((value) => value.toLowerCase() === normalized.toLowerCase())) return
+          inferredSections.push(normalized)
+        }
+        const inferFamily = (family: 'dance' | 'dinner' | 'latin') => {
+          let matchedSpecific = false
+          tagSet.forEach((tagLower) => {
+            const match = tagLower.match(new RegExp(`^${family}\\s+set\\s+\\d+$`, 'i'))
+            if (!match) return
+            matchedSpecific = true
+            const known = knownSections.get(tagLower)
+            addInferred(known ?? normalizeSetlistSectionLabel(tagLower))
+          })
+          if (matchedSpecific) return
+          if (!tagSet.has(family)) return
+          const preferredSet1 = knownSections.get(`${family} set 1`)
+          const preferredBase = knownSections.get(family)
+          addInferred(preferredSet1 ?? preferredBase ?? family.charAt(0).toUpperCase() + family.slice(1))
+        }
+        inferFamily('dance')
+        inferFamily('dinner')
+        inferFamily('latin')
+        if (inferredSections.length === 0) return
+        existingBySong[songId] = inferredSections
+        inferredSections.forEach((section) => {
+          const sectionTag = makeGigSectionTag(setlist.id, section)
+          const dedupeKey = `${songId}::${sectionTag}`
+          if (existingGigSectionTags.has(dedupeKey)) return
+          existingGigSectionTags.add(dedupeKey)
+          backfillSectionRows.push({
+            id: createId(),
+            song_id: songId,
+            tag: sectionTag,
+          })
+        })
+      })
+      gigSectionOverrideMap.set(setlist.id, existingBySong)
+    })
+
     const songsById = new Map(songs.map((song) => [song.id, song]))
     const specialRequestsFromLegacy: SpecialRequest[] =
       [...(specialReqRes.data ?? [])].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)).map((row) => {
@@ -8424,6 +8467,10 @@ function App() {
       ),
     )
     setSpecialRequestOrderByGig(specialOrderFromSupabase)
+
+    if (backfillSectionRows.length > 0 && supabase && activeBandId) {
+      void supabase.from('SetlistSongTags').insert(backfillSectionRows.map((row) => withBandId(row)))
+    }
 
     if (pollutedTagValues.length > 0 && supabase && activeBandId) {
       void supabase

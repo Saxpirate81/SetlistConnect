@@ -479,6 +479,29 @@ const parseOriginFromUrl = (value: string) => {
     return ''
   }
 }
+const parseEmailRateLimitSeconds = (message: string) => {
+  const lower = message.toLowerCase()
+  const minuteMatch = lower.match(/(\d+)\s*minute/)
+  if (minuteMatch) {
+    const minutes = Number(minuteMatch[1] ?? 0)
+    if (Number.isFinite(minutes) && minutes > 0) return minutes * 60
+  }
+  const secondMatch = lower.match(/(\d+)\s*second/)
+  if (secondMatch) {
+    const seconds = Number(secondMatch[1] ?? 0)
+    if (Number.isFinite(seconds) && seconds > 0) return seconds
+  }
+  return 120
+}
+const isEmailRateLimitErrorMessage = (message: string) => {
+  const normalized = message.toLowerCase()
+  return (
+    normalized.includes('rate limit') ||
+    normalized.includes('too many requests') ||
+    normalized.includes('over_email_send_rate_limit') ||
+    (normalized.includes('security purposes') && normalized.includes('once every'))
+  )
+}
 const resolveAuthRedirectOrigin = (
   currentOrigin: string,
   configuredAppUrl: string,
@@ -611,6 +634,7 @@ function App() {
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
   const [authError, setAuthError] = useState<string | null>(null)
   const [authStatus, setAuthStatus] = useState<string | null>(null)
+  const [authEmailCooldownSeconds, setAuthEmailCooldownSeconds] = useState(0)
   const [authLoading, setAuthLoading] = useState(false)
   const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(false)
   const [recoveryPassword, setRecoveryPassword] = useState('')
@@ -1096,6 +1120,21 @@ function App() {
       return {}
     }
   })
+  useEffect(() => {
+    if (authEmailCooldownSeconds <= 0) return
+    const timer = window.setInterval(() => {
+      setAuthEmailCooldownSeconds((current) => (current <= 1 ? 0 : current - 1))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [authEmailCooldownSeconds])
+  const triggerAuthEmailCooldownFromMessage = useCallback((message: string) => {
+    if (!isEmailRateLimitErrorMessage(message)) return false
+    const seconds = parseEmailRateLimitSeconds(message)
+    setAuthEmailCooldownSeconds((current) => Math.max(current, seconds))
+    const waitMinutes = Math.max(1, Math.ceil(seconds / 60))
+    setAuthError(`Too many email requests. Please wait about ${waitMinutes} minute${waitMinutes === 1 ? '' : 's'} and try again.`)
+    return true
+  }, [])
   const [draggedSpecialRequestId, setDraggedSpecialRequestId] = useState<string | null>(null)
   const [dragOverSpecialRequestId, setDragOverSpecialRequestId] = useState<string | null>(null)
   const lastDocAutosaveRef = useRef('')
@@ -4753,6 +4792,7 @@ function App() {
           ),
         ])) as Awaited<typeof signUpPromise>
         if (error) {
+          if (triggerAuthEmailCooldownFromMessage(error.message ?? '')) return
           setAuthError(error.message)
           return
         }
@@ -4822,6 +4862,7 @@ function App() {
         redirectTo,
       })
       if (error) {
+        if (triggerAuthEmailCooldownFromMessage(error.message ?? '')) return
         setAuthError(error.message)
         return
       }
@@ -12018,6 +12059,7 @@ function App() {
                       type="button"
                       className="mt-3 w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
                       onClick={() => setAuthMode((current) => (current === 'login' ? 'signup' : 'login'))}
+                      disabled={authLoading || authEmailCooldownSeconds > 0}
                     >
                       {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
                     </button>
@@ -12027,9 +12069,11 @@ function App() {
                       type="button"
                       className="mt-3 w-full rounded-xl border border-amber-300/35 bg-amber-400/10 py-2 text-sm font-semibold text-amber-100"
                       onClick={() => void handleForgotPassword()}
-                      disabled={authLoading}
+                      disabled={authLoading || authEmailCooldownSeconds > 0}
                     >
-                      Forgot password
+                      {authEmailCooldownSeconds > 0
+                        ? `Forgot password (${Math.ceil(authEmailCooldownSeconds / 60)}m)`
+                        : 'Forgot password'}
                     </button>
                   )}
                   <button
@@ -12078,6 +12122,13 @@ function App() {
                   )}
                   {authError && <div className="mt-3 text-xs text-red-200">{authError}</div>}
                   {authStatus && <div className="mt-3 text-xs text-emerald-200">{authStatus}</div>}
+                  {authEmailCooldownSeconds > 0 && (
+                    <div className="mt-2 text-xs text-amber-200">
+                      Email actions are temporarily paused. Try again in about{' '}
+                      {Math.ceil(authEmailCooldownSeconds / 60)} minute
+                      {Math.ceil(authEmailCooldownSeconds / 60) === 1 ? '' : 's'}.
+                    </div>
+                  )}
                 </form>
               </div>
             </div>

@@ -9679,20 +9679,45 @@ function App() {
         tagsBySong.set(row.song_id, list)
       })
       const gigSingerKeyAssignments = new Map<string, Array<{ singer: string; key: string }>>()
+      const songDefaultKeysRes = orderedSongIds.length
+        ? await supabase
+            .from('SetlistSongKeys')
+            .select('song_id, singer_name, default_key')
+            .in('song_id', orderedSongIds)
+        : { data: [], error: null as { message?: string } | null }
       const singerKeysRes = await supabase
         .from('SetlistGigSingerKeys')
         .select('song_id, singer_name, gig_key')
         .eq('gig_id', setlistId)
       if (cancelled) return
-      if (!singerKeysRes.error) {
-        ;(singerKeysRes.data ?? []).forEach((row) => {
-          const cleanKey = (row.gig_key ?? '').trim()
-          if (!cleanKey) return
-          const list = gigSingerKeyAssignments.get(row.song_id) ?? []
-          list.push({ singer: row.singer_name, key: cleanKey })
-          gigSingerKeyAssignments.set(row.song_id, list)
+      const mergedAssignmentsBySong = new Map<
+        string,
+        Map<string, { singer: string; key: string }>
+      >()
+      if (!songDefaultKeysRes.error) {
+        ;(songDefaultKeysRes.data ?? []).forEach((row) => {
+          const singer = (row.singer_name ?? '').trim()
+          const cleanKey = (row.default_key ?? '').trim()
+          if (!singer || !cleanKey) return
+          const songMap = mergedAssignmentsBySong.get(row.song_id) ?? new Map()
+          songMap.set(singer.toLowerCase(), { singer, key: cleanKey })
+          mergedAssignmentsBySong.set(row.song_id, songMap)
         })
       }
+      if (!singerKeysRes.error) {
+        ;(singerKeysRes.data ?? []).forEach((row) => {
+          const singer = (row.singer_name ?? '').trim()
+          const cleanKey = (row.gig_key ?? '').trim()
+          if (!singer || !cleanKey) return
+          const songMap = mergedAssignmentsBySong.get(row.song_id) ?? new Map()
+          // Gig-specific key should win over song default assignment.
+          songMap.set(singer.toLowerCase(), { singer, key: cleanKey })
+          mergedAssignmentsBySong.set(row.song_id, songMap)
+        })
+      }
+      mergedAssignmentsBySong.forEach((singerMap, songId) => {
+        gigSingerKeyAssignments.set(songId, Array.from(singerMap.values()))
+      })
       const sharedDisplayMap: Record<string, { title: string; singers: string[]; keys: string[] }> = {}
       ;(gigSongsRes.data ?? []).forEach((row) => {
         const baseSongId = (row.song_id ?? '').trim()

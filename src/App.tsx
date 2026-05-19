@@ -469,6 +469,32 @@ const GIG_LOCKED_SONGS_KEY = 'setlist:gigLockedSongs'
 const GIG_LAST_LOCKED_SONG_KEY = 'setlist:gigLastLockedSong'
 const SHARED_LYRICS_THEME_KEY = 'setlist:sharedLyricsTheme'
 const SHARED_LYRICS_FONT_KEY = 'setlist:sharedLyricsFont'
+const DEFAULT_PRODUCTION_APP_ORIGIN = 'https://www.setlistconnect.com'
+const LOCALHOST_ORIGIN_REGEX = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i
+const isLocalhostOrigin = (origin: string) => LOCALHOST_ORIGIN_REGEX.test(origin)
+const parseOriginFromUrl = (value: string) => {
+  try {
+    return new URL(value).origin
+  } catch {
+    return ''
+  }
+}
+const resolveAuthRedirectOrigin = (
+  currentOrigin: string,
+  configuredAppUrl: string,
+  options: { isProd: boolean },
+) => {
+  const configuredOrigin = parseOriginFromUrl(configuredAppUrl)
+  const isConfiguredLocal = configuredOrigin ? isLocalhostOrigin(configuredOrigin) : false
+  const isCurrentLocal = isLocalhostOrigin(currentOrigin)
+  if (options.isProd) {
+    if (configuredOrigin && !isConfiguredLocal) return configuredOrigin
+    if (!isCurrentLocal) return currentOrigin
+    return DEFAULT_PRODUCTION_APP_ORIGIN
+  }
+  if (configuredOrigin && !isConfiguredLocal) return configuredOrigin
+  return currentOrigin
+}
 const LYRICS_DOC_STATE_KEY = 'setlist:lyricsDocState:v1'
 const LYRICS_USER_PREFS_KEY = 'setlist:lyricsUserPrefs:v1'
 const LYRICS_VIEWER_ID_KEY = 'setlist:lyricsViewerId'
@@ -584,6 +610,7 @@ function App() {
   const [authPassword, setAuthPassword] = useState('')
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
   const [authError, setAuthError] = useState<string | null>(null)
+  const [authStatus, setAuthStatus] = useState<string | null>(null)
   const [authLoading, setAuthLoading] = useState(false)
   const [authUserId, setAuthUserId] = useState<string | null>(null)
   const [authUserEmail, setAuthUserEmail] = useState<string | null>(null)
@@ -4684,6 +4711,7 @@ function App() {
       return
     }
     setAuthError(null)
+    setAuthStatus(null)
     setSupabaseError(null)
     if (!authEmail.trim() || !authPassword.trim()) {
       setAuthError('Enter email and password.')
@@ -4695,25 +4723,9 @@ function App() {
       const resolveAuthEmailRedirectUrl = () => {
         const currentOrigin = window.location.origin
         const configuredAppUrl = String(import.meta.env.VITE_APP_URL ?? '').trim()
-        if (!configuredAppUrl) return currentOrigin
-        let configuredOrigin = ''
-        try {
-          configuredOrigin = new URL(configuredAppUrl).origin
-        } catch {
-          return currentOrigin
-        }
-        const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(currentOrigin)
-        const isConfiguredLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(
-          configuredOrigin,
-        )
-        // Safety: never generate localhost verification links in production.
-        if (import.meta.env.PROD) {
-          return isConfiguredLocal ? currentOrigin : configuredOrigin
-        }
-        if (isLocalOrigin) {
-          return configuredOrigin
-        }
-        return currentOrigin
+        return resolveAuthRedirectOrigin(currentOrigin, configuredAppUrl, {
+          isProd: import.meta.env.PROD,
+        })
       }
       if (authMode === 'signup') {
         if (isSharedLinkAuthContext) {
@@ -4782,6 +4794,38 @@ function App() {
           ? 'Cannot reach Supabase. Check your internet/DNS connection or Supabase project URL, then try again.'
           : 'Authentication failed. Please try again.',
       )
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  const handleForgotPassword = async () => {
+    if (!supabase) return
+    const email = authEmail.trim().toLowerCase()
+    setAuthError(null)
+    setAuthStatus(null)
+    if (!email) {
+      setAuthError('Enter your email, then tap Forgot password.')
+      return
+    }
+    setAuthLoading(true)
+    try {
+      const redirectTo = resolveAuthRedirectOrigin(
+        window.location.origin,
+        String(import.meta.env.VITE_APP_URL ?? '').trim(),
+        { isProd: import.meta.env.PROD },
+      )
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo,
+      })
+      if (error) {
+        setAuthError(error.message)
+        return
+      }
+      setAuthStatus('Password reset email sent. Check your inbox.')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ''
+      setAuthError(message || 'Could not send reset email. Please try again.')
     } finally {
       setAuthLoading(false)
     }
@@ -10667,20 +10711,21 @@ function App() {
   const authRedirectDiagnostics = useMemo(() => {
     const currentOrigin = window.location.origin
     const configuredAppUrl = String(import.meta.env.VITE_APP_URL ?? '').trim()
+    const configuredOrigin = parseOriginFromUrl(configuredAppUrl)
     if (!configuredAppUrl) {
+      const resolvedOrigin = resolveAuthRedirectOrigin(currentOrigin, configuredAppUrl, {
+        isProd: import.meta.env.PROD,
+      })
       return {
         currentOrigin,
-        configuredOrigin: '',
-        resolvedOrigin: currentOrigin,
+        configuredOrigin,
+        resolvedOrigin,
         missingConfig: true,
         invalidConfig: false,
-        isConfiguredLocal: false,
+        isConfiguredLocal: configuredOrigin ? isLocalhostOrigin(configuredOrigin) : false,
       }
     }
-    let configuredOrigin = ''
-    try {
-      configuredOrigin = new URL(configuredAppUrl).origin
-    } catch {
+    if (!configuredOrigin) {
       return {
         currentOrigin,
         configuredOrigin: '',
@@ -10690,11 +10735,10 @@ function App() {
         isConfiguredLocal: false,
       }
     }
-    const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(currentOrigin)
-    const isConfiguredLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(configuredOrigin)
-    const resolvedOrigin = import.meta.env.PROD
-      ? (isConfiguredLocal ? currentOrigin : configuredOrigin)
-      : (isLocalOrigin ? configuredOrigin : currentOrigin)
+    const isConfiguredLocal = isLocalhostOrigin(configuredOrigin)
+    const resolvedOrigin = resolveAuthRedirectOrigin(currentOrigin, configuredAppUrl, {
+      isProd: import.meta.env.PROD,
+    })
     return {
       currentOrigin,
       configuredOrigin,
@@ -11895,6 +11939,16 @@ function App() {
                       {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
                     </button>
                   )}
+                  {supabase && authMode === 'login' && (
+                    <button
+                      type="button"
+                      className="mt-3 w-full rounded-xl border border-amber-300/35 bg-amber-400/10 py-2 text-sm font-semibold text-amber-100"
+                      onClick={() => void handleForgotPassword()}
+                      disabled={authLoading}
+                    >
+                      Forgot password
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="mt-3 w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
@@ -11928,6 +11982,7 @@ function App() {
                     </div>
                   )}
                   {authError && <div className="mt-3 text-xs text-red-200">{authError}</div>}
+                  {authStatus && <div className="mt-3 text-xs text-emerald-200">{authStatus}</div>}
                 </form>
               </div>
             </div>

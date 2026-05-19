@@ -612,6 +612,9 @@ function App() {
   const [authError, setAuthError] = useState<string | null>(null)
   const [authStatus, setAuthStatus] = useState<string | null>(null)
   const [authLoading, setAuthLoading] = useState(false)
+  const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(false)
+  const [recoveryPassword, setRecoveryPassword] = useState('')
+  const [recoveryPasswordConfirm, setRecoveryPasswordConfirm] = useState('')
   const [authUserId, setAuthUserId] = useState<string | null>(null)
   const [authUserEmail, setAuthUserEmail] = useState<string | null>(null)
   const [bands, setBands] = useState<Band[]>([])
@@ -4826,6 +4829,44 @@ function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : ''
       setAuthError(message || 'Could not send reset email. Please try again.')
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  const handleResetPasswordSubmit = async () => {
+    if (!supabase) return
+    setAuthError(null)
+    setAuthStatus(null)
+    const nextPassword = recoveryPassword.trim()
+    const confirmPassword = recoveryPasswordConfirm.trim()
+    if (!nextPassword || !confirmPassword) {
+      setAuthError('Enter and confirm your new password.')
+      return
+    }
+    if (nextPassword.length < 8) {
+      setAuthError('Password must be at least 8 characters.')
+      return
+    }
+    if (nextPassword !== confirmPassword) {
+      setAuthError('Passwords do not match.')
+      return
+    }
+    setAuthLoading(true)
+    try {
+      const { error } = await supabase.auth.updateUser({ password: nextPassword })
+      if (error) {
+        setAuthError(error.message)
+        return
+      }
+      setPasswordRecoveryMode(false)
+      setRecoveryPassword('')
+      setRecoveryPasswordConfirm('')
+      setAuthMode('login')
+      setAuthStatus('Password updated. You can now log in.')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ''
+      setAuthError(message || 'Could not reset password. Please try again.')
     } finally {
       setAuthLoading(false)
     }
@@ -9201,8 +9242,15 @@ function App() {
       void syncAuthState(data.session?.user ?? null)
     })
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (cancelled) return
+      if (event === 'PASSWORD_RECOVERY') {
+        setPasswordRecoveryMode(true)
+        setAuthEntryView('auth')
+        setAuthMode('login')
+        setAuthError(null)
+        setAuthStatus('Reset link verified. Set your new password.')
+      }
       void syncAuthState(session?.user ?? null)
     })
     return () => {
@@ -11861,9 +11909,13 @@ function App() {
                 <p className="text-sm uppercase tracking-[0.3em] text-teal-300/80">
                   Setlist Connect
                 </p>
-                <h1 className="mt-2 text-3xl font-semibold">Welcome back</h1>
+                <h1 className="mt-2 text-3xl font-semibold">
+                  {passwordRecoveryMode ? 'Reset your password' : 'Welcome back'}
+                </h1>
                 <p className="mt-2 text-sm text-slate-300">
-                  Sign in with your account to access your band workspace.
+                  {passwordRecoveryMode
+                    ? 'Enter your new password, then log in.'
+                    : 'Sign in with your account to access your band workspace.'}
                 </p>
                 <form
                   className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur"
@@ -11871,10 +11923,39 @@ function App() {
                   noValidate
                   onSubmit={(event) => {
                     event.preventDefault()
-                    void handleLogin()
+                    if (passwordRecoveryMode) {
+                      void handleResetPasswordSubmit()
+                    } else {
+                      void handleLogin()
+                    }
                   }}
                 >
-                  {supabase ? (
+                  {supabase && passwordRecoveryMode ? (
+                    <>
+                      <label className="text-xs uppercase tracking-wide text-slate-400">
+                        New password
+                      </label>
+                      <input
+                        className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
+                        placeholder="Enter new password"
+                        value={recoveryPassword}
+                        onChange={(event) => setRecoveryPassword(event.target.value)}
+                        type="password"
+                        autoComplete="new-password"
+                      />
+                      <label className="mt-3 block text-xs uppercase tracking-wide text-slate-400">
+                        Confirm password
+                      </label>
+                      <input
+                        className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
+                        placeholder="Confirm new password"
+                        value={recoveryPasswordConfirm}
+                        onChange={(event) => setRecoveryPasswordConfirm(event.target.value)}
+                        type="password"
+                        autoComplete="new-password"
+                      />
+                    </>
+                  ) : supabase ? (
                     <>
                       <label className="text-xs uppercase tracking-wide text-slate-400">
                         Email
@@ -11924,13 +12005,15 @@ function App() {
                   >
                     {authLoading
                       ? 'Please wait...'
+                      : passwordRecoveryMode
+                      ? 'Update password'
                       : !supabase
                       ? 'Login'
                       : authMode === 'signup'
                       ? 'Create account'
                       : 'Login'}
                   </button>
-                  {supabase && !isSharedLinkAuthContext && (
+                  {supabase && !passwordRecoveryMode && !isSharedLinkAuthContext && (
                     <button
                       type="button"
                       className="mt-3 w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
@@ -11939,7 +12022,7 @@ function App() {
                       {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
                     </button>
                   )}
-                  {supabase && authMode === 'login' && (
+                  {supabase && !passwordRecoveryMode && authMode === 'login' && (
                     <button
                       type="button"
                       className="mt-3 w-full rounded-xl border border-amber-300/35 bg-amber-400/10 py-2 text-sm font-semibold text-amber-100"
@@ -11952,18 +12035,30 @@ function App() {
                   <button
                     type="button"
                     className="mt-3 w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
-                    onClick={() => setAuthEntryView('home')}
+                    onClick={() => {
+                      if (passwordRecoveryMode) {
+                        setPasswordRecoveryMode(false)
+                        setRecoveryPassword('')
+                        setRecoveryPasswordConfirm('')
+                        setAuthStatus(null)
+                        setAuthMode('login')
+                      } else {
+                        setAuthEntryView('home')
+                      }
+                    }}
                   >
-                    Back to home
+                    {passwordRecoveryMode ? 'Back to login' : 'Back to home'}
                   </button>
-                  <button
-                    type="button"
-                    className="mt-3 w-full rounded-xl border border-cyan-300/30 bg-cyan-400/10 py-2 text-sm font-semibold text-cyan-100"
-                    onClick={() => setShowAuthLearnMore(true)}
-                  >
-                    Learn more
-                  </button>
-                  {authMode === 'signup' && sharedSignupReturnView && (
+                  {!passwordRecoveryMode && (
+                    <button
+                      type="button"
+                      className="mt-3 w-full rounded-xl border border-cyan-300/30 bg-cyan-400/10 py-2 text-sm font-semibold text-cyan-100"
+                      onClick={() => setShowAuthLearnMore(true)}
+                    >
+                      Learn more
+                    </button>
+                  )}
+                  {!passwordRecoveryMode && authMode === 'signup' && sharedSignupReturnView && (
                     <div className="mt-3 grid grid-cols-1 gap-2">
                       <button
                         type="button"

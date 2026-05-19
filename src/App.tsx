@@ -9598,7 +9598,7 @@ function App() {
     setSharedPlaylistLoading(true)
     setSharedPlaylistError(null)
     void (async () => {
-      const [gigRes, gigSongsRes, songsRes, specialReqRes, djTracksRes] = await Promise.all([
+      const [gigRes, gigSongsRes, songsRes, specialReqRes, djTracksRes, gigMusiciansRes] = await Promise.all([
         supabase
           .from('SetlistGigs')
           .select('id, band_id, gig_name, gig_date, venue_address')
@@ -9622,6 +9622,10 @@ function App() {
           .select('id, title, artist, notes, source_type, source_url, sort_order, status, metadata')
           .eq('gig_id', setlistId)
           .order('sort_order', { ascending: true }),
+        supabase
+          .from('SetlistGigMusicians')
+          .select('musician_id, status')
+          .eq('gig_id', setlistId),
       ])
       if (cancelled) return
       const firstError = gigRes.error || gigSongsRes.error || songsRes.error
@@ -9694,11 +9698,48 @@ function App() {
         string,
         Map<string, { singer: string; key: string }>
       >()
+      const sharedAllowedSingerSet = new Set<string>()
+      const activeGigMusicianIds = Array.from(
+        new Set(
+          (gigMusiciansRes.error ? [] : (gigMusiciansRes.data ?? []))
+            .filter((row) => (row.status ?? 'active') !== 'out')
+            .map((row) => row.musician_id)
+            .filter(Boolean),
+        ),
+      )
+      if (activeGigMusicianIds.length > 0) {
+        const { data: sharedMusicianRows, error: sharedMusiciansError } = await supabase
+          .from('SetlistMusicians')
+          .select('name, singer, instruments, deleted_at')
+          .in('id', activeGigMusicianIds)
+          .is('deleted_at', null)
+        if (!sharedMusiciansError) {
+          ;(sharedMusicianRows ?? []).forEach((row) => {
+            const instruments = Array.isArray(row.instruments) ? row.instruments : []
+            const hasVocalsInstrument = instruments.some(
+              (instrument): boolean =>
+                typeof instrument === 'string' && instrument.trim().toLowerCase() === 'vocals',
+            )
+            if (!row.singer && !hasVocalsInstrument) return
+            const normalizedName = (row.name ?? '').trim().toLowerCase()
+            if (!normalizedName) return
+            sharedAllowedSingerSet.add(normalizedName)
+          })
+        }
+      }
+      const shouldKeepSharedSinger = (singerName: string) => {
+        const normalizedSinger = singerName.trim().toLowerCase()
+        if (!normalizedSinger) return false
+        if (normalizedSinger === INSTRUMENTAL_LABEL.toLowerCase()) return true
+        if (sharedAllowedSingerSet.size === 0) return true
+        return sharedAllowedSingerSet.has(normalizedSinger)
+      }
       if (!songDefaultKeysRes.error) {
         ;(songDefaultKeysRes.data ?? []).forEach((row) => {
           const singer = (row.singer_name ?? '').trim()
           const cleanKey = (row.default_key ?? '').trim()
           if (!singer || !cleanKey) return
+          if (!shouldKeepSharedSinger(singer)) return
           const songMap = mergedAssignmentsBySong.get(row.song_id) ?? new Map()
           songMap.set(singer.toLowerCase(), { singer, key: cleanKey })
           mergedAssignmentsBySong.set(row.song_id, songMap)
@@ -9709,6 +9750,7 @@ function App() {
           const singer = (row.singer_name ?? '').trim()
           const cleanKey = (row.gig_key ?? '').trim()
           if (!singer || !cleanKey) return
+          if (!shouldKeepSharedSinger(singer)) return
           const songMap = mergedAssignmentsBySong.get(row.song_id) ?? new Map()
           // Gig-specific key should win over song default assignment.
           songMap.set(singer.toLowerCase(), { singer, key: cleanKey })

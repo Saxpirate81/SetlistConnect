@@ -90,6 +90,8 @@ body {
   /* Ensure setlist body can scroll above fixed bottom controls. */
   .shared-public-setlist-scroll {
     padding-bottom: calc(8.5rem + env(safe-area-inset-bottom)) !important;
+    max-height: calc(100dvh - 11.25rem) !important;
+    overflow-y: auto !important;
   }
 }
 
@@ -132,12 +134,20 @@ body {
   max-height: none;
   min-height: 0;
   overscroll-behavior: contain;
+  position: relative;
+  z-index: 1;
 }
 
 @media (min-width: 901px) {
   .shared-public-setlist-scroll {
     max-height: calc(100dvh - 12.5rem);
   }
+}
+
+/* Keep fixed bottom tabs visually opaque over content on phones. */
+.shared-bottom-nav,
+.playlist-modal-bottom-nav {
+  background-color: rgba(2, 6, 23, 0.98);
 }
 
 #root,

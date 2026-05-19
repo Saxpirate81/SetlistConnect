@@ -10906,7 +10906,7 @@ function App() {
           }`}
         >
           <div
-            className="flex min-h-[calc(100dvh-9rem)] flex-col overflow-visible p-3 md:pb-[calc(3rem+env(safe-area-inset-bottom))] sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4"
+            className="flex min-h-0 flex-1 flex-col overflow-visible p-3 md:pb-[calc(3rem+env(safe-area-inset-bottom))] sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 pr-2">
@@ -10952,7 +10952,7 @@ function App() {
             {sharedPlaylistView && (
               <>
                 {sharedPublicTab === 'setlist' ? (
-                  <div className="shared-public-setlist-scroll mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain rounded-none bg-transparent p-0 pb-[calc(2rem+env(safe-area-inset-bottom))] md:mb-4 md:h-[calc(100dvh-14rem)] md:max-h-[calc(100dvh-14rem)] sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4 sm:pb-[calc(2rem+env(safe-area-inset-bottom))]">
+                  <div className="shared-public-setlist-scroll mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain rounded-none bg-transparent p-0 pb-[calc(8.5rem+env(safe-area-inset-bottom))] md:mb-4 md:h-[calc(100dvh-14rem)] md:max-h-[calc(100dvh-14rem)] md:pb-4 sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4 sm:pb-[calc(2rem+env(safe-area-inset-bottom))]">
                     {sharedDocsLoading && (
                       <div className="mb-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
                         Loading charts and lyrics...
@@ -11273,7 +11273,7 @@ function App() {
                             </select>
                           </div>
                           <div
-                            className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 pb-[calc(7.75rem+env(safe-area-inset-bottom))] md:h-0 md:min-h-0 md:flex-1 md:overflow-y-auto md:pb-2"
+                            className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 pb-[calc(7.75rem+env(safe-area-inset-bottom))] md:h-full md:min-h-0 md:flex-1 md:max-h-full md:overflow-y-auto md:pb-2"
                           >
                             <div className="space-y-3 py-2">
                               {groupedPlaylistSections.map((group) => (
@@ -17051,7 +17051,7 @@ function App() {
 
             <div className="min-h-0 flex-1 overflow-visible md:overflow-hidden">
               {playlistModalTab === 'setlist' ? (
-                <div className="h-[calc(100dvh-11.5rem)] min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-[calc(7.25rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pt-3 md:h-full md:pb-4">
+                <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 pb-[calc(8.5rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pt-3 md:h-full md:pb-4">
                   {isAdmin && (
                     <div className="mb-3 flex flex-wrap items-center gap-2">
                       <button
@@ -17381,7 +17381,7 @@ function App() {
                   <div className="h-1 w-12 rounded-full bg-white/25" />
                 </div>
                 <div
-                  className={`min-h-0 overflow-visible px-2 pb-[calc(7.75rem+env(safe-area-inset-bottom))] md:h-full md:max-h-full md:overflow-y-auto md:pb-2 ${
+                  className={`min-h-0 overflow-visible px-2 pb-[calc(7.75rem+env(safe-area-inset-bottom))] md:h-full md:max-h-full md:overflow-y-auto md:overscroll-contain md:pb-2 ${
                     widePlaylistUi ? 'max-h-full' : 'flex-1'
                   }`}
                   onScroll={handlePlaylistDrawerScroll}

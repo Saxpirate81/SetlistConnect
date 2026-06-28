@@ -1,0 +1,223 @@
+/**
+ * QuickAddSong
+ *
+ * A floating "+ Quick Add" button always visible during gig mode / builder.
+ * Opens a minimal bottom sheet: Song Name + Artist.
+ * On submit → instantly creates the song and adds to the current setlist.
+ * YouTube search runs in the background — no blocking.
+ *
+ * Usage in builder screen:
+ *   <QuickAddSong
+ *     gigId={currentSetlist.id}
+ *     onSongAdded={(song) => { ... add to setlist state ... }}
+ *   />
+ */
+
+import { useRef, useState } from 'react'
+import { supabase } from '../lib/supabaseClient'
+import { searchYouTube } from '../lib/youtubeSearch'
+import { getYouTubeVideoId } from '../lib/youtube'
+import { useAppContext } from '../context/AppContext'
+
+type QuickAddSongProps = {
+  gigId: string
+  /** Called after the song is created and added — lets parent update setlist state */
+  onSongAdded: (songId: string, title: string, artist: string) => void
+}
+
+type Phase = 'closed' | 'form' | 'saving' | 'done'
+
+export function QuickAddSong({ gigId, onSongAdded }: QuickAddSongProps) {
+  const { activeBandId, showToast } = useAppContext()
+  const [phase, setPhase] = useState<Phase>('closed')
+  const [title, setTitle] = useState('')
+  const [artist, setArtist] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const titleRef = useRef<HTMLInputElement>(null)
+
+  const open = () => {
+    setTitle('')
+    setArtist('')
+    setError(null)
+    setPhase('form')
+    // Focus title after paint
+    requestAnimationFrame(() => titleRef.current?.focus())
+  }
+
+  const close = () => {
+    setPhase('closed')
+    setTitle('')
+    setArtist('')
+    setError(null)
+  }
+
+  const handleSubmit = async () => {
+    const cleanTitle = title.trim()
+    const cleanArtist = artist.trim()
+    if (!cleanTitle) { setError('Song name is required'); return }
+    if (!cleanArtist) { setError('Artist is required'); return }
+    if (!supabase || !activeBandId) { setError('Not connected'); return }
+
+    setPhase('saving')
+
+    // 1. Create song in DB immediately (no YouTube yet — speed first)
+    const { data: songRow, error: insertErr } = await supabase
+      .from('songs')
+      .insert({
+        band_id: activeBandId,
+        title: cleanTitle,
+        artist: cleanArtist,
+        tags: [],
+        keys: [],
+        special_played_count: 0,
+        youtube_verified: false,
+      })
+      .select('id')
+      .single()
+
+    if (insertErr || !songRow) {
+      setError(insertErr?.message ?? 'Failed to create song')
+      setPhase('form')
+      return
+    }
+
+    const songId: string = songRow.id
+
+    // 2. Add song to gig setlist (append to end)
+    // Fetch current song IDs first
+    const { data: gigRow } = await supabase
+      .from('setlists')
+      .select('song_ids')
+      .eq('id', gigId)
+      .single()
+
+    const currentIds: string[] = gigRow?.song_ids ?? []
+    if (!currentIds.includes(songId)) {
+      await supabase
+        .from('setlists')
+        .update({ song_ids: [...currentIds, songId] })
+        .eq('id', gigId)
+    }
+
+    // 3. Tell parent immediately — UI updates before YouTube search completes
+    setPhase('done')
+    onSongAdded(songId, cleanTitle, cleanArtist)
+    showToast(`"${cleanTitle}" added to gig ✓`)
+    close()
+
+    // 4. Background: search YouTube and save result (no await in UI path)
+    void (async () => {
+      const videos = await searchYouTube(cleanTitle, cleanArtist, 1)
+      if (videos.length === 0) return
+      const best = videos[0]
+      const videoId = getYouTubeVideoId(best.url)
+      if (!videoId) return
+      await supabase
+        .from('songs')
+        .update({
+          audio_url: best.url,
+          youtube_video_id: videoId,
+          // Don't set youtube_verified — user still needs to confirm
+        })
+        .eq('id', songId)
+    })()
+  }
+
+  return (
+    <>
+      {/* Floating trigger button */}
+      <button
+        type="button"
+        className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] right-4 z-40 flex items-center gap-2 rounded-full bg-teal-400/90 px-4 py-3 text-sm font-semibold text-slate-950 shadow-[0_8px_24px_rgba(20,184,166,0.45)] active:scale-95 transition-transform"
+        onClick={open}
+        aria-label="Quick add song to gig"
+      >
+        <span className="text-lg leading-none">+</span>
+        <span>Quick Add</span>
+      </button>
+
+      {/* Bottom sheet */}
+      {phase !== 'closed' && (
+        <div
+          className="fixed inset-0 z-[160] flex items-end justify-center bg-slate-950/70"
+          onClick={close}
+        >
+          <div
+            className="w-full max-w-lg rounded-t-3xl border border-white/10 bg-slate-900 p-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.28em] text-teal-300/80">Live Gig</p>
+                <h3 className="text-lg font-semibold">Quick Add Song</h3>
+              </div>
+              <button
+                type="button"
+                className="rounded-xl border border-white/10 px-3 py-1.5 text-sm text-slate-300"
+                onClick={close}
+              >
+                Cancel
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs uppercase tracking-wide text-slate-400">
+                  Song Name <span className="text-red-400">*</span>
+                </label>
+                <input
+                  ref={titleRef}
+                  type="text"
+                  className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-800/80 px-4 py-3 text-white placeholder-slate-500 outline-none focus:border-teal-400"
+                  placeholder="e.g. September"
+                  value={title}
+                  onChange={(e) => { setTitle(e.target.value); setError(null) }}
+                  onKeyDown={(e) => e.key === 'Enter' && void handleSubmit()}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+              </div>
+
+              <div>
+                <label className="text-xs uppercase tracking-wide text-slate-400">
+                  Artist <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-800/80 px-4 py-3 text-white placeholder-slate-500 outline-none focus:border-teal-400"
+                  placeholder="e.g. Earth, Wind & Fire"
+                  value={artist}
+                  onChange={(e) => { setArtist(e.target.value); setError(null) }}
+                  onKeyDown={(e) => e.key === 'Enter' && void handleSubmit()}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+              </div>
+
+              {error && <p className="text-xs text-red-300">{error}</p>}
+
+              <p className="text-[11px] text-slate-500">
+                Added instantly to this gig. YouTube video matched in the background.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              disabled={phase === 'saving'}
+              className={`mt-4 w-full rounded-xl py-3.5 text-sm font-semibold transition-colors ${
+                phase === 'saving'
+                  ? 'cursor-not-allowed bg-slate-700 text-slate-400'
+                  : 'bg-teal-400/90 text-slate-950 active:bg-teal-300'
+              }`}
+              onClick={() => void handleSubmit()}
+            >
+              {phase === 'saving' ? 'Adding to gig…' : 'Add to Gig Now'}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}

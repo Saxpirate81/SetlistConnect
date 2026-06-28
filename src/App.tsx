@@ -12,536 +12,109 @@ import {
 import { flushSync } from 'react-dom'
 import { PlaylistYouTubePlayer, type PlaylistYouTubePlayerHandle } from './PlaylistYouTubePlayer'
 import { isSupabaseEnabled, supabase, supabaseEnvStatus } from './lib/supabaseClient'
+import { logger } from './lib/logger'
+import { useDebounce } from './hooks/useDebounce'
+import { CloseButton } from './components/ui/CloseButton'
+import { AppIcon } from './components/ui/AppIcon'
+import type { AppIconName } from './components/ui/AppIcon'
+import { SkeletonAppShell } from './components/ui/Skeleton'
+import { AuthScreen } from './screens/AuthScreen'
+import { CreateBandScreen } from './screens/CreateBandScreen'
+import { TierLimitModal } from './components/modals/TierLimitModal'
+import { InfoModal } from './components/modals/InfoModal'
+import { ConfirmModal } from './components/modals/ConfirmModal'
+import { AppProvider } from './context/AppContext'
+import { QuickAddSong } from './components/QuickAddSong'
+import { FreshSongBrowser } from './components/FreshSongBrowser'
+import { DuplicateSongMerger } from './components/DuplicateSongMerger'
+import { SongMetadataBackfill } from './components/SongMetadataBackfill'
+import {
+  SESSION_TIMEOUT_MS,
+  INSTRUMENTS,
+  INSTRUMENTAL_LABEL,
+  DEFAULT_TAGS,
+  DEFAULT_SPECIAL_TYPES,
+  REQUEST_TYPE_TAG_EXCLUSIONS,
+  SETLIST_PANEL_PREFIX,
+  GIG_SECTION_TAG_PREFIX,
+  GIG_SECTION_DELETED_TAG_PREFIX,
+  PRINT_SPECIAL_REQUESTS_PER_SECTION,
+  PRINT_DEFAULT_SONGS_PER_SECTION,
+  PRINT_DANCE_SONGS_PER_SECTION,
+  DEFAULT_PRODUCTION_APP_ORIGIN,
+  LOCALHOST_ORIGIN_REGEX,
+  BILLING_TEST_EMAILS,
+  BAND_TIER_DETAILS,
+  LYRICS_COLOR_SWATCHES,
+  DEFAULT_LYRICS_USER_PREFS,
+} from './lib/constants'
+import {
+  isAdminMembershipRole,
+  getPreferredMembership,
+  isMainNavScreen,
+  isLocalhostOrigin,
+  parseOriginFromUrl,
+  parseEmailRateLimitSeconds,
+  isEmailRateLimitErrorMessage,
+  resolveAuthRedirectOrigin,
+  getOperationalDateISO,
+  normalizeGigDateISO,
+  chunkList,
+} from './lib/utils'
+import type {
+  Role,
+  Screen,
+  QaViewPreset,
+  BandTier,
+  SongKey,
+  Song,
+  Setlist,
+  SpecialRequest,
+  Chart,
+  Musician,
+  GigMusician,
+  Band,
+  BandMembership,
+  Document,
+  PlaylistEntry,
+  SharedPlaylistView,
+  DocumentSelectionItem,
+  BeforeInstallPromptEvent,
+  LyricsHighlightRange,
+  LyricsStrokePoint,
+  LyricsStroke,
+  LyricsDocState,
+  LyricsUserPrefs,
+  LyricsUndoState,
+  LyricsToolPanelKey,
+  LyricsToolPanelPosition,
+  AppState,
+  HistoryEntry,
+} from './types'
 import { getYouTubeEmbedUrl, isYouTubeUrl } from './lib/youtube'
 import downloadPdfIcon from './assets/download-pdf-icon.png'
 import openPlaylistIcon from './assets/open-playlist-icon.png'
 import setlistConnectLogo from './assets/setlist-connect-logo.png'
 
-type Role = 'admin' | 'user' | null
-const isAdminMembershipRole = (value?: string | null) => {
-  const normalized = (value ?? '').trim().toLowerCase()
-  return normalized.includes('admin') || normalized.includes('owner') || normalized.includes('leader')
-}
-const getPreferredMembership = (memberships: BandMembership[], bandId: string) => {
-  const activeMemberships = memberships.filter(
-    (membership) => membership.bandId === bandId && membership.status === 'active',
-  )
-  return (
-    activeMemberships.find((membership) => isAdminMembershipRole(membership.role)) ??
-    activeMemberships[0] ??
-    null
-  )
-}
-type Screen = 'setlists' | 'builder' | 'song' | 'musicians' | 'account'
-type QaViewPreset = 'off' | 'master' | 'member' | 'newUser' | 'sharedGuest'
-const isMainNavScreen = (
-  value: string,
-): value is Extract<Screen, 'setlists' | 'song' | 'musicians' | 'account'> =>
-  value === 'setlists' || value === 'song' || value === 'musicians' || value === 'account'
-type BandTier = 'free' | 'pro'
+// isAdminMembershipRole, getPreferredMembership, isMainNavScreen imported from ./lib/utils
+// BILLING_TEST_EMAILS imported from ./lib/constants
 const SHARED_SIGNUP_RETURN_KEY = 'setlist:sharedSignupReturnView'
-const BILLING_TEST_EMAILS = new Set(
-  String(import.meta.env.VITE_BILLING_TEST_EMAILS ?? '')
-    .split(',')
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean),
-)
 
-type SongKey = {
-  singer: string
-  defaultKey: string
-  gigOverrides: Record<string, string>
-}
+// CloseButton and AppIcon imported from ./components/ui/
 
-type Song = {
-  id: string
-  title: string
-  artist: string
-  originalKey?: string
-  bpm?: number
-  youtubeUrl?: string
-  tags: string[]
-  keys: SongKey[]
-  lyrics?: string
-  specialPlayedCount: number
-}
-
-type Setlist = {
-  id: string
-  gigName: string
-  date: string
-  songIds: string[]
-  venueAddress?: string
-}
-
-type SpecialRequest = {
-  id: string
-  gigId: string
-  type: string
-  songTitle: string
-  artist?: string
-  songId?: string
-  singers: string[]
-  key: string
-  note?: string
-  djOnly?: boolean
-  externalAudioUrl?: string
-  sourceType?: 'spotify_playlist' | 'spotify_track' | 'youtube' | 'apple_music' | 'external'
-  origin?: 'special_request' | 'dj_track'
-}
-
-type Chart = {
-  id: string
-  songId: string
-  instrument: string
-  title: string
-  fileName?: string
-}
-
-type Musician = {
-  id: string
-  name: string
-  roster: 'core' | 'sub'
-  email?: string
-  phone?: string
-  instruments: string[]
-  singer?: 'male' | 'female' | 'other'
-}
-
-type GigMusician = {
-  gigId: string
-  musicianId: string
-  status: 'active' | 'out'
-  note?: string
-}
-
-type Band = {
-  id: string
-  name: string
-  createdBy?: string
-}
-
-type BandMembership = {
-  id: string
-  bandId: string
-  userId: string
-  role: 'admin' | 'member'
-  status: 'active' | 'invited' | 'revoked'
-  musicianId?: string
-}
-
-type Document = {
-  id: string
-  songId: string
-  type: 'Chart' | 'Lyrics' | 'Lead Sheet'
-  instrument: string
-  title: string
-  url?: string
-  content?: string
-}
-
-type PlaylistEntry = {
-  key: string
-  title: string
-  artist?: string
-  audioUrl?: string
-  tags: string[]
-  songId?: string
-  assignmentSingers?: string[]
-  assignmentKeys?: string[]
-}
-
-type SharedPlaylistView = {
-  setlistId: string
-  bandName?: string
-  gigName: string
-  date: string
-  venueAddress?: string
-  musicians?: Musician[]
-  entries: PlaylistEntry[]
-  allEntries?: PlaylistEntry[]
-}
-
-type DocumentSelectionItem = {
-  id: string
-  songId: string
-  type: 'Chart' | 'Lyrics' | 'Lead Sheet'
-  instrument: string
-  title: string
-  url?: string
-  content?: string
-  instruments: string[]
-  sourceDocIds: string[]
-}
-
-type BeforeInstallPromptEvent = Event & {
-  prompt: () => Promise<void>
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
-}
-
-type LyricsHighlightRange = {
-  id: string
-  start: number
-  end: number
-  color: string
-}
-
-type LyricsStrokePoint = {
-  x: number
-  y: number
-}
-
-type LyricsStroke = {
-  id: string
-  color: string
-  width: number
-  points: LyricsStrokePoint[]
-}
-
-type LyricsDocState = {
-  fontScale: number
-  highlights: LyricsHighlightRange[]
-  strokes: LyricsStroke[]
-  editedText?: string
-}
-
-type LyricsUserPrefs = {
-  theme: 'dark' | 'light'
-  font: 'sans' | 'serif' | 'mono'
-  fontScale: number
-  centered: boolean
-}
-
-type LyricsUndoState =
-  | {
-      kind: 'prefs'
-      viewerId: string
-      prev: LyricsUserPrefs
-    }
-
-type LyricsToolPanelKey = 'font' | 'edit' | 'draw'
-
-type LyricsToolPanelPosition = {
-  x: number
-  y: number
-}
-
-type AppState = {
-  songs: Song[]
-  setlists: Setlist[]
-  specialRequests: SpecialRequest[]
-  tagsCatalog: string[]
-  specialTypes: string[]
-  singersCatalog: string[]
-  charts: Chart[]
-  documents: Document[]
-  musicians: Musician[]
-  gigMusicians: GigMusician[]
-  instrument: string[] | null
-  currentSongId: string | null
-}
-
-type HistoryEntry = {
-  label: string
-  state: AppState
-  timestamp: string
-}
-
-type CloseButtonProps = {
-  onClick: (event: MouseEvent<HTMLButtonElement>) => void
-  onPointerDown?: (event: PointerEvent<HTMLButtonElement>) => void
-  ariaLabel?: string
-  title?: string
-  className?: string
-  alignRight?: boolean
-}
-
-const CloseButton = ({
-  onClick,
-  onPointerDown,
-  ariaLabel = 'Close',
-  title = 'Close',
-  className = '',
-  alignRight = true,
-}: CloseButtonProps) => {
-  const baseClasses = 'app-close-button icon-header-btn'
-  const alignmentClasses = alignRight ? 'ml-auto shrink-0' : ''
-  return (
-    <button
-      type="button"
-      className={`${baseClasses} ${alignmentClasses} ${className}`.trim()}
-      onClick={onClick}
-      onPointerDown={onPointerDown}
-      aria-label={ariaLabel}
-      title={title}
-    >
-      ✕
-    </button>
-  )
-}
-
-type AppIconName =
-  | 'home'
-  | 'songs'
-  | 'mic'
-  | 'account'
-  | 'setlist'
-  | 'sparkle'
-  | 'dinner'
-  | 'latin'
-  | 'dance'
-  | 'music'
-  | 'plus'
-
-function AppIcon({ name, className = '' }: { name: AppIconName; className?: string }) {
-  const common = {
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-    strokeWidth: 1.9,
-  }
-  return (
-    <svg
-      aria-hidden="true"
-      className={className}
-      viewBox="0 0 24 24"
-      width="1em"
-      height="1em"
-    >
-      {name === 'home' && (
-        <>
-          <path {...common} d="M3.5 10.7 12 4l8.5 6.7" />
-          <path {...common} d="M5.5 9.8V20h13V9.8" />
-          <path {...common} d="M9.5 20v-6h5v6" />
-        </>
-      )}
-      {name === 'songs' && (
-        <>
-          <path {...common} d="M9 18.5V5.2l10-2v13.2" />
-          <path {...common} d="M9 9.2l10-2" />
-          <ellipse {...common} cx="6.2" cy="18.5" rx="2.8" ry="2" />
-          <ellipse {...common} cx="16.2" cy="16.4" rx="2.8" ry="2" />
-        </>
-      )}
-      {name === 'mic' && (
-        <>
-          <rect {...common} x="9" y="3" width="6" height="11" rx="3" />
-          <path {...common} d="M5 11a7 7 0 0 0 14 0" />
-          <path {...common} d="M12 18v3" />
-          <path {...common} d="M8.5 21h7" />
-        </>
-      )}
-      {name === 'account' && (
-        <>
-          <circle {...common} cx="12" cy="8" r="4" />
-          <path {...common} d="M4.5 20a7.8 7.8 0 0 1 15 0" />
-        </>
-      )}
-      {name === 'setlist' && (
-        <>
-          <path {...common} d="M8 6h11" />
-          <path {...common} d="M8 12h11" />
-          <path {...common} d="M8 18h11" />
-          <path {...common} d="M4.5 6h.01" />
-          <path {...common} d="M4.5 12h.01" />
-          <path {...common} d="M4.5 18h.01" />
-        </>
-      )}
-      {name === 'sparkle' && (
-        <>
-          <path {...common} d="M12 3l1.7 5.1L19 10l-5.3 1.9L12 17l-1.7-5.1L5 10l5.3-1.9L12 3Z" />
-          <path {...common} d="M5 15l.8 2.2L8 18l-2.2.8L5 21l-.8-2.2L2 18l2.2-.8L5 15Z" />
-          <path {...common} d="M19 3l.6 1.7L21 5.3l-1.4.6L19 7.5l-.6-1.6L17 5.3l1.4-.6L19 3Z" />
-        </>
-      )}
-      {name === 'dinner' && (
-        <>
-          <path {...common} d="M7 3v8" />
-          <path {...common} d="M4.5 3v4.5a2.5 2.5 0 0 0 5 0V3" />
-          <path {...common} d="M7 11v10" />
-          <path {...common} d="M15 3v18" />
-          <path {...common} d="M15 3c3 1.3 4.5 4 4.5 7.5H15" />
-        </>
-      )}
-      {name === 'latin' && (
-        <>
-          <path {...common} d="M7 20c4.8-2.3 6.8-6.2 6-11.5" />
-          <path {...common} d="M13 8.5c2.2 1.2 4 3.6 4.8 7.5" />
-          <path {...common} d="M9.2 6.2c2.8-2.4 5.7-2.4 8.6 0" />
-          <path {...common} d="M8 9.5c2.5 1.8 5.3 1.8 8.4 0" />
-          <path {...common} d="M5.5 20h13" />
-        </>
-      )}
-      {name === 'dance' && (
-        <>
-          <circle {...common} cx="12" cy="5" r="2" />
-          <path {...common} d="M8 11.5 12 8l4 3.5" />
-          <path {...common} d="M12 8v6" />
-          <path {...common} d="M12 14l-4 6" />
-          <path {...common} d="M12 14l4 6" />
-          <path {...common} d="M6 14c2 .8 4 .8 6 0 2-.8 4-.8 6 0" />
-        </>
-      )}
-      {name === 'music' && (
-        <>
-          <path {...common} d="M9 18V5l10-2v13" />
-          <ellipse {...common} cx="6" cy="18" rx="3" ry="2" />
-          <ellipse {...common} cx="16" cy="16" rx="3" ry="2" />
-        </>
-      )}
-      {name === 'plus' && (
-        <>
-          <path {...common} d="M12 5v14" />
-          <path {...common} d="M5 12h14" />
-        </>
-      )}
-    </svg>
-  )
-}
-
-const ADMIN_PASSWORD = 'Signature'
-const USER_PASSWORD = 'Signature2026'
-const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000
+// Constants imported from ./lib/constants and ./lib/utils
+// Storage keys still used directly here (will move to storage.ts in later pass)
 const LAST_ACTIVE_KEY = 'setlist:lastActive'
 const LAST_MAIN_SCREEN_KEY = 'setlist:lastMainScreen'
-
-const INSTRUMENTS = ['Vocals', 'Guitar', 'Keys', 'Bass', 'Drums', 'Sax', 'Trumpet']
-const INSTRUMENTAL_LABEL = 'Instrumental'
-const DEFAULT_TAGS = ['Special Request', 'DJ Only', 'Dinner', 'Latin', 'Dance']
-const DEFAULT_SPECIAL_TYPES = ['First Dance', 'Last Dance', 'Parent Dance', 'Anniversary', 'DJ Only']
-const REQUEST_TYPE_TAG_EXCLUSIONS = [
-  'Special Request',
-  'Special Requests',
-  'Additional Request',
-  'Bride/Father',
-  'Bride/Father Dance',
-  'First Dance',
-  'Last Dance',
-  'Parent Dance',
-  'Wedding Party Intro',
-  'Anniversary',
-  'Anniversary Dance',
-  'Hora',
-  'HORA',
-  'HORA!',
-]
-const SETLIST_PANEL_PREFIX = 'set:'
 const ACTIVE_BAND_KEY = 'setlist:activeBandId'
-const BAND_TIER_DETAILS: Record<
-  BandTier,
-  {
-    name: string
-    summary: string
-    includes: string[]
-  }
-> = {
-  free: {
-    name: 'Beta Free',
-    summary: 'Free during the beta period',
-    includes: [
-      'Unlimited songs',
-      'Unlimited musicians during beta',
-      'Unlimited saved gigs during beta',
-      'Core setlist builder',
-      'Special request tracking',
-      'Shareable gig view',
-      'Paid storage and pro tools will come later',
-    ],
-  },
-  pro: {
-    name: 'Pro',
-    summary: 'Coming after beta',
-    includes: [
-      'Unlimited songs',
-      'Unlimited musicians',
-      'Unlimited saved gigs',
-      'Core setlist builder',
-      'Special request tracking',
-      'Shareable gig view',
-      'Advanced collaboration tools',
-      'Expanded storage',
-      'Priority workflow features',
-    ],
-  },
-}
 const GIG_LOCKED_SONGS_KEY = 'setlist:gigLockedSongs'
 const GIG_LAST_LOCKED_SONG_KEY = 'setlist:gigLastLockedSong'
 const SHARED_LYRICS_THEME_KEY = 'setlist:sharedLyricsTheme'
 const SHARED_LYRICS_FONT_KEY = 'setlist:sharedLyricsFont'
-const DEFAULT_PRODUCTION_APP_ORIGIN = 'https://www.setlistconnect.com'
-const LOCALHOST_ORIGIN_REGEX = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i
-const isLocalhostOrigin = (origin: string) => LOCALHOST_ORIGIN_REGEX.test(origin)
-const parseOriginFromUrl = (value: string) => {
-  try {
-    return new URL(value).origin
-  } catch {
-    return ''
-  }
-}
-const parseEmailRateLimitSeconds = (message: string) => {
-  const lower = message.toLowerCase()
-  const minuteMatch = lower.match(/(\d+)\s*minute/)
-  if (minuteMatch) {
-    const minutes = Number(minuteMatch[1] ?? 0)
-    if (Number.isFinite(minutes) && minutes > 0) return minutes * 60
-  }
-  const secondMatch = lower.match(/(\d+)\s*second/)
-  if (secondMatch) {
-    const seconds = Number(secondMatch[1] ?? 0)
-    if (Number.isFinite(seconds) && seconds > 0) return seconds
-  }
-  return 120
-}
-const isEmailRateLimitErrorMessage = (message: string) => {
-  const normalized = message.toLowerCase()
-  return (
-    normalized.includes('rate limit') ||
-    normalized.includes('too many requests') ||
-    normalized.includes('over_email_send_rate_limit') ||
-    (normalized.includes('security purposes') && normalized.includes('once every'))
-  )
-}
-const resolveAuthRedirectOrigin = (
-  currentOrigin: string,
-  configuredAppUrl: string,
-  options: { isProd: boolean },
-) => {
-  const configuredOrigin = parseOriginFromUrl(configuredAppUrl)
-  const isConfiguredLocal = configuredOrigin ? isLocalhostOrigin(configuredOrigin) : false
-  const isCurrentLocal = isLocalhostOrigin(currentOrigin)
-  if (options.isProd) {
-    if (configuredOrigin && !isConfiguredLocal) return configuredOrigin
-    if (!isCurrentLocal) return currentOrigin
-    return DEFAULT_PRODUCTION_APP_ORIGIN
-  }
-  if (configuredOrigin && !isConfiguredLocal) return configuredOrigin
-  return currentOrigin
-}
 const LYRICS_DOC_STATE_KEY = 'setlist:lyricsDocState:v1'
 const LYRICS_USER_PREFS_KEY = 'setlist:lyricsUserPrefs:v1'
 const LYRICS_VIEWER_ID_KEY = 'setlist:lyricsViewerId'
-const GIG_SECTION_TAG_PREFIX = '__gigsection__'
-const GIG_SECTION_DELETED_TAG_PREFIX = '__gigsectiondeleted__'
 const GIG_DELETED_SECTION_SONGS_KEY = 'setlist:gigDeletedSectionSongs:v1'
-const LYRICS_COLOR_SWATCHES = [
-  '#fde047',
-  '#facc15',
-  '#fb7185',
-  '#f97316',
-  '#34d399',
-  '#38bdf8',
-  '#a78bfa',
-  '#f472b6',
-  '#60a5fa',
-  '#ffffff',
-]
-const DEFAULT_LYRICS_USER_PREFS: LyricsUserPrefs = {
-  theme: 'dark',
-  font: 'sans',
-  fontScale: 1,
-  centered: false,
-}
 
 const initialState: AppState = {
   songs: [],
@@ -558,49 +131,40 @@ const initialState: AppState = {
   currentSongId: null,
 }
 
-const emptyState: AppState = {
-  songs: [],
-  setlists: [],
-  specialRequests: [],
-  tagsCatalog: DEFAULT_TAGS,
-  specialTypes: DEFAULT_SPECIAL_TYPES,
-  singersCatalog: [],
-  charts: [],
-  documents: [],
-  musicians: [],
-  gigMusicians: [],
-  instrument: null,
-  currentSongId: null,
+// chunkList, PRINT_* constants, getOperationalDateISO, normalizeGigDateISO
+// imported from ./lib/utils and ./lib/constants
+
+// ── OfflineBanner ──────────────────────────────────────────────────────────
+// Shows a sticky warning at the top of the screen when the device is offline.
+// Disappears automatically when connectivity is restored.
+function OfflineBanner() {
+  const [isOffline, setIsOffline] = useState(!navigator.onLine)
+
+  useEffect(() => {
+    const goOffline = () => setIsOffline(true)
+    const goOnline = () => setIsOffline(false)
+    window.addEventListener('offline', goOffline)
+    window.addEventListener('online', goOnline)
+    return () => {
+      window.removeEventListener('offline', goOffline)
+      window.removeEventListener('online', goOnline)
+    }
+  }, [])
+
+  if (!isOffline) return null
+
+  return (
+    <div
+      role="alert"
+      className="fixed left-0 right-0 top-0 z-[9999] flex items-center justify-center gap-2 bg-amber-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow-md"
+    >
+      <span>⚠</span>
+      <span>You&apos;re offline — changes won&apos;t be saved until you reconnect.</span>
+    </div>
+  )
 }
 
-const chunkList = <T,>(items: T[], size: number): T[][] => {
-  if (size <= 0) return [items]
-  const chunks: T[][] = []
-  for (let i = 0; i < items.length; i += size) {
-    chunks.push(items.slice(i, i + size))
-  }
-  return chunks.length ? chunks : [[]]
-}
-
-const PRINT_SPECIAL_REQUESTS_PER_SECTION = 8
-const PRINT_DEFAULT_SONGS_PER_SECTION = 18
-const PRINT_DANCE_SONGS_PER_SECTION = 20
-
-const getOperationalDateISO = (date = new Date()) => {
-  const shifted = new Date(date.getTime() - 5 * 60 * 60 * 1000)
-  return shifted.toISOString().slice(0, 10)
-}
-
-const normalizeGigDateISO = (raw: string | null | undefined) => {
-  const value = String(raw ?? '').trim()
-  if (!value) return ''
-  const directIso = value.slice(0, 10)
-  if (/^\d{4}-\d{2}-\d{2}$/.test(directIso)) return directIso
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return ''
-  return parsed.toISOString().slice(0, 10)
-}
-
+// ── App ────────────────────────────────────────────────────────────────────
 function App() {
   const [role, setRole] = useState<Role>(null)
   const [gigMode, setGigMode] = useState(false)
@@ -628,7 +192,6 @@ function App() {
     'male' | 'female' | 'other' | ''
   >('')
   const [musicianSearch, setMusicianSearch] = useState('')
-  const [loginInput, setLoginInput] = useState('')
   const [authEmail, setAuthEmail] = useState('')
   const [authPassword, setAuthPassword] = useState('')
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
@@ -673,7 +236,7 @@ function App() {
   })
   const [pastGigUnlockedByGigId, setPastGigUnlockedByGigId] = useState<Record<string, boolean>>({})
   const [appState, setAppState] = useState<AppState>(
-    isSupabaseEnabled ? emptyState : initialState,
+    isSupabaseEnabled ? { ...initialState } : initialState,
   )
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [showUndoToast, setShowUndoToast] = useState(false)
@@ -786,6 +349,15 @@ function App() {
   const [showAddSongModal, setShowAddSongModal] = useState(false)
   const [songLibraryTags, setSongLibraryTags] = useState<string[]>([])
   const [songLibrarySearch, setSongLibrarySearch] = useState('')
+
+  // Debounced search values — use these for filtering, not the raw state above.
+  // This prevents a re-render on every keystroke.
+  const debouncedSongSearch = useDebounce(songSearch, 200)
+  const debouncedMusicianSearch = useDebounce(musicianSearch, 200)
+  const debouncedGigSheetSongSearch = useDebounce(gigSheetSongSearch, 200)
+  const debouncedSongLibrarySearch = useDebounce(songLibrarySearch, 200)
+  const debouncedInstrumentFilter = useDebounce(instrumentFilter, 200)
+
   const [showDuplicateSongConfirm, setShowDuplicateSongConfirm] = useState(false)
   const [pendingSongDraft, setPendingSongDraft] = useState<{
     title: string
@@ -1319,6 +891,22 @@ function App() {
   }, [])
 
   const isAdmin = role === 'admin'
+
+  // ── General toast (used by context consumers) ──────────────────────────────
+  const [generalToast, setGeneralToast] = useState<string | null>(null)
+  const showToast = useCallback((message: string) => {
+    setGeneralToast(message)
+    window.setTimeout(() => setGeneralToast(null), 3000)
+  }, [])
+
+  // ── updateSong — patch a single song in appState ───────────────────────────
+  const updateSong = useCallback((songId: string, updates: Partial<import('./types').Song>) => {
+    setAppState((prev) => ({
+      ...prev,
+      songs: prev.songs.map((s) => (s.id === songId ? { ...s, ...updates } : s)),
+    }))
+  }, [])
+
   const withBandId = <T extends Record<string, unknown>>(payload: T): T & { band_id: string } => ({
     ...payload,
     band_id: activeBandId,
@@ -1327,9 +915,9 @@ function App() {
   const filteredInstruments = useMemo(
     () =>
       instrumentCatalog.filter((instrument) =>
-        instrument.toLowerCase().includes(instrumentFilter.toLowerCase()),
+        instrument.toLowerCase().includes(debouncedInstrumentFilter.toLowerCase()),
       ),
-    [instrumentCatalog, instrumentFilter],
+    [instrumentCatalog, debouncedInstrumentFilter],
   )
   const normalizeTagList = (tags: string[]) => {
     const seen = new Set<string>()
@@ -1676,7 +1264,7 @@ function App() {
     () => appState.songs.find((song) => song.id === appState.currentSongId) ?? null,
     [appState.currentSongId, appState.songs],
   )
-  const gigSheetSongSearchQuery = useMemo(() => gigSheetSongSearch.trim().toLowerCase(), [gigSheetSongSearch])
+  const gigSheetSongSearchQuery = useMemo(() => debouncedGigSheetSongSearch.trim().toLowerCase(), [debouncedGigSheetSongSearch])
   const activeBandName = useMemo(
     () => bands.find((band) => band.id === activeBandId)?.name ?? '',
     [bands, activeBandId],
@@ -1687,7 +1275,7 @@ function App() {
     return firstChunk ? firstChunk.charAt(0).toUpperCase() + firstChunk.slice(1).toLowerCase() : ''
   }, [authUserEmail])
   const visibleMusicians = useMemo(() => {
-    const terms = musicianSearch
+    const terms = debouncedMusicianSearch
       .trim()
       .toLowerCase()
       .split(/\s+/)
@@ -1710,7 +1298,7 @@ function App() {
           .toLowerCase()
         return terms.every((term) => searchable.includes(term))
       })
-  }, [appState.musicians, musicianSearch])
+  }, [appState.musicians, debouncedMusicianSearch])
   const editingMusicianOriginal = useMemo(
     () => appState.musicians.find((musician) => musician.id === editingMusicianId) ?? null,
     [appState.musicians, editingMusicianId],
@@ -2053,14 +1641,14 @@ function App() {
   const availableSongs = useMemo(() => {
     const setlistSongIds = new Set(currentSetlist?.songIds ?? [])
     const bySearch = appState.songs.filter((song) =>
-      `${song.title} ${song.artist}`.toLowerCase().includes(songSearch.toLowerCase()),
+      `${song.title} ${song.artist}`.toLowerCase().includes(debouncedSongSearch.toLowerCase()),
     )
     const byTag =
       activeTags.length === 0
         ? bySearch
         : bySearch.filter((song) => activeTags.some((tag) => hasSongTag(song, tag)))
     return byTag.filter((song) => !setlistSongIds.has(song.id))
-  }, [appState.songs, currentSetlist?.songIds, songSearch, activeTags])
+  }, [appState.songs, currentSetlist?.songIds, debouncedSongSearch, activeTags])
 
   const recentGigs = useMemo(() => {
     return [...appState.setlists]
@@ -2216,7 +1804,7 @@ function App() {
 
   const filteredSongLibrary = useMemo(() => {
     const base = appState.songs.filter((song) => {
-      const searchTerm = songLibrarySearch.trim().toLowerCase()
+      const searchTerm = debouncedSongLibrarySearch.trim().toLowerCase()
       if (searchTerm) {
         const haystack = `${song.title} ${song.artist} ${song.tags.join(' ')}`.toLowerCase()
         if (!haystack.includes(searchTerm)) return false
@@ -2225,7 +1813,7 @@ function App() {
       return songLibraryTags.some((tag) => hasSongTag(song, tag))
     })
     return [...base].sort((a, b) => a.title.localeCompare(b.title))
-  }, [appState.songs, songLibrarySearch, songLibraryTags])
+  }, [appState.songs, debouncedSongLibrarySearch, songLibraryTags])
 
   const sectionAddSongsActiveFilters = useMemo(() => {
     const selected = normalizeTagList(
@@ -4738,18 +4326,7 @@ function App() {
 
   const handleLogin = async () => {
     if (!supabase) {
-      setAuthError(null)
-      if (!loginInput.trim()) {
-        setAuthError('Enter password.')
-        return
-      }
-      if (loginInput === ADMIN_PASSWORD || loginInput === USER_PASSWORD) {
-        setRole(loginInput === ADMIN_PASSWORD ? 'admin' : 'user')
-        setScreen('setlists')
-        setLoginPhase('app')
-      } else {
-        setAuthError('Invalid password.')
-      }
+      setAuthError('Supabase is not configured. Check your environment setup.')
       return
     }
     setAuthError(null)
@@ -4827,6 +4404,8 @@ function App() {
       setAuthUserEmail(userEmail)
       setLoginPhase('app')
       if (userId) {
+        logger.setContext(userId, activeBandId || null)
+        logger.log('login', { email: userEmail ?? undefined })
         await loadBandContext(userId)
       }
     } catch (error) {
@@ -4914,6 +4493,8 @@ function App() {
   }
 
   const handleLogout = async () => {
+    logger.log('logout')
+    logger.clearContext()
     if (loginTimerRef.current) {
       window.clearTimeout(loginTimerRef.current)
       loginTimerRef.current = null
@@ -5095,6 +4676,7 @@ function App() {
   const createBlankSetlist = () => {
     if (!canCreateGigs()) return
     const newId = createId()
+    logger.log('gig_created', { gigId: newId })
     commitChange('Create setlist', (prev) => ({
       ...prev,
       setlists: [
@@ -7095,6 +6677,7 @@ function App() {
       keys: [],
       specialPlayedCount: 0,
     }
+    logger.log('song_added', { songId: id, title: draft.title, artist: draft.artist })
     commitChange('Add song', (prev) => ({
       ...prev,
       songs: [createdSong, ...prev.songs],
@@ -9171,10 +8754,14 @@ function App() {
     })
     .sort((a, b) => compareGigsByDateAsc(b, a))
 
+  const SESSION_WARNING_MS = SESSION_TIMEOUT_MS - 5 * 60 * 1000 // warn 5 min before expiry
+  const [showSessionExpiryWarning, setShowSessionExpiryWarning] = useState(false)
+
   useEffect(() => {
     if (!role) return
     const updateActivity = () => {
       localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()))
+      setShowSessionExpiryWarning(false)
     }
 
     const events = ['mousedown', 'keydown', 'touchstart', 'scroll']
@@ -9182,9 +8769,14 @@ function App() {
 
     const interval = window.setInterval(() => {
       const lastActive = Number(localStorage.getItem(LAST_ACTIVE_KEY) ?? 0)
-      if (Date.now() - lastActive > SESSION_TIMEOUT_MS) {
+      const elapsed = Date.now() - lastActive
+      if (elapsed > SESSION_TIMEOUT_MS) {
+        logger.log('session_expired')
+        logger.clearContext()
         setRole(null)
-        setLoginInput('')
+        setShowSessionExpiryWarning(false)
+      } else if (elapsed > SESSION_WARNING_MS) {
+        setShowSessionExpiryWarning(true)
       }
     }, 30_000)
 
@@ -9192,7 +8784,7 @@ function App() {
       events.forEach((event) => window.removeEventListener(event, updateActivity))
       window.clearInterval(interval)
     }
-  }, [role])
+  }, [role, SESSION_WARNING_MS])
 
   useEffect(() => {
     return () => {
@@ -9233,6 +8825,7 @@ function App() {
     if (!authUserId) return
     if (!isMainNavScreen(screen)) return
     localStorage.setItem(LAST_MAIN_SCREEN_KEY, screen)
+    logger.log('screen_viewed', { screen })
   }, [authUserId, screen])
 
   useEffect(() => {
@@ -11863,369 +11456,112 @@ function App() {
     )
   }
 
+  // Show skeleton shell while band context is loading to avoid blank screen
+  if (supabase && authUserId && bandContextLoading) {
+    return <SkeletonAppShell />
+  }
+
   if (isAuthScreen) {
     return (
-      <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white opacity-100">
-        <div className="pointer-events-none absolute -left-16 top-16 h-52 w-52 rounded-full bg-cyan-400/20 blur-3xl" />
-        <div className="pointer-events-none absolute -right-16 bottom-16 h-64 w-64 rounded-full bg-fuchsia-400/20 blur-3xl" />
-        <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col justify-center px-6 py-8">
-          {authEntryView === 'home' ? (
-            <div className="rounded-3xl border border-white/10 bg-white/5 p-7 shadow-[0_24px_90px_rgba(8,145,178,0.18)] backdrop-blur">
-              <img
-                src={setlistConnectLogo}
-                alt="Setlist Connect"
-                className="h-16 w-auto object-contain"
-              />
-              <p className="text-xs uppercase tracking-[0.32em] text-teal-300/85">Setlist Connect</p>
-              <h1 className="mt-3 text-4xl font-semibold leading-tight">
-                Your band&apos;s modern live setlist workspace
-              </h1>
-              <p className="mt-4 max-w-2xl text-sm text-slate-300">
-                Organize songs, assign musicians, handle special requests, and run performances from one clean app built for busy gig days.
-              </p>
-              <div className="mt-6 flex flex-wrap justify-center gap-3">
-                <button
-                  type="button"
-                  className="rounded-xl bg-teal-400/90 px-5 py-2.5 text-sm font-semibold text-slate-950"
-                  onClick={() => {
-                    setAuthMode('login')
-                    setAuthEntryView('auth')
-                  }}
-                >
-                  Get started
-                </button>
-                {!isSharedLinkAuthContext && (
-                  <button
-                    type="button"
-                    className="rounded-xl border border-white/15 px-5 py-2.5 text-sm font-semibold text-slate-100"
-                    onClick={() => {
-                      setAuthMode('signup')
-                      setAuthEntryView('auth')
-                    }}
-                  >
-                    Create account
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="rounded-xl border border-cyan-300/30 bg-cyan-400/10 px-5 py-2.5 text-sm font-semibold text-cyan-100"
-                  onClick={() => setShowAuthLearnMore(true)}
-                >
-                  Learn more
-                </button>
-              </div>
-              <div className="mt-8 grid gap-3 md:grid-cols-3">
-                <div className="relative overflow-visible rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-                  <span className="pointer-events-none absolute -right-3 -top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-200/60 bg-emerald-400 text-base font-extrabold text-slate-950 shadow-[0_10px_25px_rgba(16,185,129,0.45)]">
-                    ✓
-                  </span>
-                  <p className="text-xs uppercase tracking-wide text-teal-200">Build faster</p>
-                  <p className="mt-2 text-sm text-slate-300">Create and duplicate gigs with organized sections and drag-and-drop flow.</p>
-                </div>
-                <div className="relative overflow-visible rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-                  <span className="pointer-events-none absolute -right-3 -top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-cyan-200/60 bg-cyan-400 text-base font-extrabold text-slate-950 shadow-[0_10px_25px_rgba(34,211,238,0.45)]">
-                    ✓
-                  </span>
-                  <p className="text-xs uppercase tracking-wide text-teal-200">Stay in sync</p>
-                  <p className="mt-2 text-sm text-slate-300">Share musician-ready views and keep the whole team aligned in real time.</p>
-                </div>
-                <div className="relative overflow-visible rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-                  <span className="pointer-events-none absolute -right-3 -top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-fuchsia-200/60 bg-fuchsia-400 text-base font-extrabold text-slate-950 shadow-[0_10px_25px_rgba(232,121,249,0.45)]">
-                    ✓
-                  </span>
-                  <p className="text-xs uppercase tracking-wide text-teal-200">Run live gigs</p>
-                  <p className="mt-2 text-sm text-slate-300">Track songs, keys, and special requests without the usual show-day chaos.</p>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="mx-auto w-full max-w-md">
-              <div
-                className={`transition-all duration-200 ${
-                  authIntroPhase === 'login'
-                    ? 'pointer-events-auto translate-y-0 opacity-100'
-                    : 'pointer-events-none translate-y-4 opacity-0'
-                }`}
-              >
-                <p className="text-sm uppercase tracking-[0.3em] text-teal-300/80">
-                  Setlist Connect
-                </p>
-                <h1 className="mt-2 text-3xl font-semibold">
-                  {passwordRecoveryMode ? 'Reset your password' : 'Welcome back'}
-                </h1>
-                <p className="mt-2 text-sm text-slate-300">
-                  {passwordRecoveryMode
-                    ? 'Enter your new password, then log in.'
-                    : 'Sign in with your account to access your band workspace.'}
-                </p>
-                <form
-                  className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur"
-                  autoComplete="on"
-                  noValidate
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    if (passwordRecoveryMode) {
-                      void handleResetPasswordSubmit()
-                    } else {
-                      void handleLogin()
-                    }
-                  }}
-                >
-                  {supabase && passwordRecoveryMode ? (
-                    <>
-                      <label className="text-xs uppercase tracking-wide text-slate-400">
-                        New password
-                      </label>
-                      <input
-                        className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
-                        placeholder="Enter new password"
-                        value={recoveryPassword}
-                        onChange={(event) => setRecoveryPassword(event.target.value)}
-                        type="password"
-                        autoComplete="new-password"
-                      />
-                      <label className="mt-3 block text-xs uppercase tracking-wide text-slate-400">
-                        Confirm password
-                      </label>
-                      <input
-                        className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
-                        placeholder="Confirm new password"
-                        value={recoveryPasswordConfirm}
-                        onChange={(event) => setRecoveryPasswordConfirm(event.target.value)}
-                        type="password"
-                        autoComplete="new-password"
-                      />
-                    </>
-                  ) : supabase ? (
-                    <>
-                      <label className="text-xs uppercase tracking-wide text-slate-400">
-                        Email
-                      </label>
-                      <input
-                        className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
-                        placeholder="you@band.com"
-                        value={authEmail}
-                        onChange={(event) => setAuthEmail(event.target.value)}
-                        type="email"
-                        autoComplete="email"
-                        inputMode="email"
-                      />
-                      <label className="mt-3 block text-xs uppercase tracking-wide text-slate-400">
-                        Password
-                      </label>
-                      <input
-                        className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
-                        placeholder="Enter password"
-                        value={authPassword}
-                        onChange={(event) => setAuthPassword(event.target.value)}
-                        type="password"
-                        autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
-                      />
-                    </>
-                  ) : (
-                    <>
-                      <label className="text-xs uppercase tracking-wide text-slate-400">
-                        Password
-                      </label>
-                      <input
-                        className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
-                        placeholder="Enter shared password"
-                        value={loginInput}
-                        onChange={(event) => setLoginInput(event.target.value)}
-                        type="password"
-                        autoComplete="current-password"
-                      />
-                    </>
-                  )}
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className={`mt-4 w-full rounded-xl bg-teal-400/90 py-3 font-semibold text-slate-950 ${
-                      authLoading ? 'cursor-not-allowed opacity-70' : ''
-                    }`}
-                  >
-                    {authLoading
-                      ? 'Please wait...'
-                      : passwordRecoveryMode
-                      ? 'Update password'
-                      : !supabase
-                      ? 'Login'
-                      : authMode === 'signup'
-                      ? 'Create account'
-                      : 'Login'}
-                  </button>
-                  {supabase && !passwordRecoveryMode && !isSharedLinkAuthContext && (
-                    <button
-                      type="button"
-                      className="mt-3 w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
-                      onClick={() => setAuthMode((current) => (current === 'login' ? 'signup' : 'login'))}
-                      disabled={authLoading || authEmailCooldownSeconds > 0}
-                    >
-                      {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
-                    </button>
-                  )}
-                  {supabase && !passwordRecoveryMode && authMode === 'login' && (
-                    <button
-                      type="button"
-                      className="mt-3 w-full rounded-xl border border-amber-300/35 bg-amber-400/10 py-2 text-sm font-semibold text-amber-100"
-                      onClick={() => void handleForgotPassword()}
-                      disabled={authLoading || authEmailCooldownSeconds > 0}
-                    >
-                      {authEmailCooldownSeconds > 0
-                        ? `Forgot password (${Math.ceil(authEmailCooldownSeconds / 60)}m)`
-                        : 'Forgot password'}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="mt-3 w-full rounded-xl border border-white/10 py-2 text-sm text-slate-200"
-                    onClick={() => {
-                      if (passwordRecoveryMode) {
-                        setPasswordRecoveryMode(false)
-                        setRecoveryPassword('')
-                        setRecoveryPasswordConfirm('')
-                        setAuthStatus(null)
-                        setAuthMode('login')
-                      } else {
-                        setAuthEntryView('home')
-                      }
-                    }}
-                  >
-                    {passwordRecoveryMode ? 'Back to login' : 'Back to home'}
-                  </button>
-                  {!passwordRecoveryMode && (
-                    <button
-                      type="button"
-                      className="mt-3 w-full rounded-xl border border-cyan-300/30 bg-cyan-400/10 py-2 text-sm font-semibold text-cyan-100"
-                      onClick={() => setShowAuthLearnMore(true)}
-                    >
-                      Learn more
-                    </button>
-                  )}
-                  {!passwordRecoveryMode && authMode === 'signup' && sharedSignupReturnView && (
-                    <div className="mt-3 grid grid-cols-1 gap-2">
-                      <button
-                        type="button"
-                        className="w-full rounded-xl border border-white/10 py-2 text-sm font-semibold text-slate-200"
-                        onClick={() => restoreSharedViewFromSignup()}
-                      >
-                        Go back to previous view
-                      </button>
-                      <button
-                        type="button"
-                        className="w-full rounded-xl border border-emerald-300/40 bg-emerald-400/10 py-2 text-sm font-semibold text-emerald-100"
-                        onClick={() => restoreSharedViewFromSignup()}
-                      >
-                        Skip and go to gig view
-                      </button>
-                    </div>
-                  )}
-                  {authError && <div className="mt-3 text-xs text-red-200">{authError}</div>}
-                  {authStatus && <div className="mt-3 text-xs text-emerald-200">{authStatus}</div>}
-                  {authEmailCooldownSeconds > 0 && (
-                    <div className="mt-2 text-xs text-amber-200">
-                      Email actions are temporarily paused. Try again in about{' '}
-                      {Math.ceil(authEmailCooldownSeconds / 60)} minute
-                      {Math.ceil(authEmailCooldownSeconds / 60) === 1 ? '' : 's'}.
-                    </div>
-                  )}
-                </form>
-              </div>
-            </div>
-          )}
-
-          {authEntryView === 'auth' && (
-            <div
-              className={`absolute inset-0 flex items-center justify-center px-6 transition-all duration-200 ${
-                authIntroPhase === 'welcome'
-                  ? 'opacity-100'
-                  : authIntroPhase === 'fading'
-                  ? 'opacity-0'
-                  : 'pointer-events-none opacity-0'
-              }`}
-            >
-              <div className="w-full max-w-sm rounded-3xl border border-white/15 bg-slate-900/70 p-7 text-center shadow-[0_20px_80px_rgba(6,182,212,0.2)] backdrop-blur-xl">
-                <p className="text-[11px] uppercase tracking-[0.28em] text-teal-200/90">Setlist Connect</p>
-                <h2 className="mt-3 text-3xl font-semibold leading-tight">Welcome to your next gig flow</h2>
-                <p className="mt-3 text-sm text-slate-300">
-                  Build, organize, and run live setlists with your team in one clean workspace.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {showAuthLearnMore && (
-            <div
-              className="fixed inset-0 z-[170] flex items-center justify-center bg-slate-950/85 px-5"
-              onClick={() => setShowAuthLearnMore(false)}
-            >
-              <div
-                className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900/95 p-6 shadow-[0_22px_80px_rgba(14,116,144,0.3)]"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <p className="text-[10px] uppercase tracking-[0.28em] text-teal-300/80">Learn more</p>
-                <h3 className="mt-2 text-2xl font-semibold text-white">What Setlist Connect does</h3>
-                <p className="mt-3 text-sm text-slate-300">
-                  Setlist Connect is your live-performance command center. Build gigs, manage songs and charts, assign musicians, and share real-time setlists so everyone stays in sync on stage.
-                </p>
-                <div className="mt-4 space-y-2 text-sm text-slate-200">
-                  <p>• Plan and reorder songs fast for each event</p>
-                  <p>• Track special requests, keys, and singer assignments</p>
-                  <p>• Share mobile-friendly gig views with your team</p>
-                </div>
-                <button
-                  type="button"
-                  className="mt-5 w-full rounded-xl bg-teal-400/90 py-2.5 text-sm font-semibold text-slate-950"
-                  onClick={() => setShowAuthLearnMore(false)}
-                >
-                  Let&apos;s go
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+      <AuthScreen
+        authEntryView={authEntryView}
+        setAuthEntryView={setAuthEntryView}
+        authIntroPhase={authIntroPhase}
+        showAuthLearnMore={showAuthLearnMore}
+        setShowAuthLearnMore={setShowAuthLearnMore}
+        isSharedLinkAuthContext={isSharedLinkAuthContext}
+        sharedSignupReturnView={sharedSignupReturnView}
+        authMode={authMode}
+        setAuthMode={setAuthMode}
+        authEmail={authEmail}
+        setAuthEmail={setAuthEmail}
+        authPassword={authPassword}
+        setAuthPassword={setAuthPassword}
+        passwordRecoveryMode={passwordRecoveryMode}
+        setPasswordRecoveryMode={setPasswordRecoveryMode}
+        recoveryPassword={recoveryPassword}
+        setRecoveryPassword={setRecoveryPassword}
+        recoveryPasswordConfirm={recoveryPasswordConfirm}
+        setRecoveryPasswordConfirm={setRecoveryPasswordConfirm}
+        authLoading={authLoading}
+        authError={authError}
+        authStatus={authStatus}
+        setAuthStatus={setAuthStatus}
+        authEmailCooldownSeconds={authEmailCooldownSeconds}
+        onLogin={() => void handleLogin()}
+        onResetPasswordSubmit={() => void handleResetPasswordSubmit()}
+        onForgotPassword={() => void handleForgotPassword()}
+        onRestoreSharedView={restoreSharedViewFromSignup}
+      />
     )
   }
 
   if (supabase && authUserId && !activeBandId && !bandContextLoading && showCreateBandOnboarding) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
-        <div className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
-          <p className="text-sm uppercase tracking-[0.3em] text-teal-300/80">Setlist Connect</p>
-          <h1 className="mt-2 text-3xl font-semibold">Create your band</h1>
-          <p className="mt-2 text-sm text-slate-300">
-            Your account is ready. Create your first band workspace to continue.
-          </p>
-          <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
-            <label className="text-xs uppercase tracking-wide text-slate-400">Band name</label>
-            <input
-              className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none focus:border-teal-300"
-              placeholder="Your Band Name"
-              value={newBandName}
-              onChange={(event) => {
-                setNewBandName(event.target.value)
-                if (supabaseError) setSupabaseError(null)
-              }}
-            />
-            <button
-              disabled={authLoading}
-              className={`mt-4 w-full rounded-xl bg-teal-400/90 py-3 font-semibold text-slate-950 ${
-                authLoading ? 'cursor-not-allowed opacity-70' : ''
-              }`}
-              onClick={() => void createBandAsFirstAdmin()}
-            >
-              {authLoading ? 'Creating workspace...' : 'Create band admin workspace'}
-            </button>
-            {supabaseError && <div className="mt-3 text-xs text-red-200">{supabaseError}</div>}
-          </div>
-        </div>
-      </div>
+      <CreateBandScreen
+        newBandName={newBandName}
+        setNewBandName={setNewBandName}
+        supabaseError={supabaseError}
+        setSupabaseError={setSupabaseError}
+        authLoading={authLoading}
+        onCreateBand={() => void createBandAsFirstAdmin()}
+      />
     )
   }
 
+  // ── AppContext value ──────────────────────────────────────────────────────
+  const appContextValue = {
+    authUserId,
+    authUserEmail,
+    activeBandId,
+    role,
+    isAdmin,
+    activeBand: bands.find((b) => b.id === activeBandId) ?? null,
+    bandMemberships: memberships,
+    songs: appState.songs,
+    setlists: appState.setlists,
+    musicians: appState.musicians,
+    gigMusicians: appState.gigMusicians,
+    charts: appState.charts,
+    documents: appState.documents,
+    specialRequests: appState.specialRequests,
+    tagsCatalog: appState.tagsCatalog,
+    specialTypes: appState.specialTypes,
+    singersCatalog: appState.singersCatalog,
+    currentSetlist: currentSetlist ?? null,
+    currentSongId: appState.currentSongId,
+    appState,
+    showToast,
+    updateSong,
+  } as const
+
   return (
+    <AppProvider value={appContextValue}>
     <div className="relative min-h-screen bg-slate-950 text-white fade-in">
+      {/* ── Offline banner ── */}
+      <OfflineBanner />
+
+      {/* ── Session expiry warning ── */}
+      {showSessionExpiryWarning && (
+        <div
+          role="alert"
+          className="fixed bottom-20 left-1/2 z-[9998] -translate-x-1/2 flex items-center gap-3 rounded-2xl border border-amber-400/30 bg-slate-900/95 px-5 py-3 text-sm text-amber-100 shadow-xl backdrop-blur"
+        >
+          <span>⏱</span>
+          <span>Your session will expire in 5 minutes.</span>
+          <button
+            type="button"
+            className="ml-1 rounded-lg bg-teal-400/90 px-3 py-1 text-xs font-semibold text-slate-950"
+            onClick={() => {
+              localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()))
+              setShowSessionExpiryWarning(false)
+            }}
+          >
+            Stay logged in
+          </button>
+        </div>
+      )}
+
       {gigMode && (
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-slate-950 via-yellow-900/50 to-slate-950" />
       )}
@@ -13444,6 +12780,37 @@ function App() {
               </div>
             ) : null}
 
+            {/* ── Fresh Songs Browser ── */}
+            {isAdmin && (
+              <FreshSongBrowser
+                currentGigId={currentSetlist.id}
+                currentSetlistSongIds={currentSetlist.songIds}
+                onAddSong={(songId) => {
+                  if (currentSetlist.songIds.includes(songId)) return
+                  setAppState((prev) => ({
+                    ...prev,
+                    setlists: prev.setlists.map((sl) =>
+                      sl.id === currentSetlist.id
+                        ? { ...sl, songIds: [...sl.songIds, songId] }
+                        : sl,
+                    ),
+                  }))
+                  if (supabase) {
+                    runSupabase(
+                      supabase.from('SetlistGigSongs').insert(
+                        withBandId({
+                          id: createId(),
+                          gig_id: currentSetlist.id,
+                          song_id: songId,
+                          sort_order: currentSetlist.songIds.length,
+                        }),
+                      ),
+                    )
+                  }
+                }}
+              />
+            )}
+
             </div>
           </section>
         )}
@@ -13945,9 +13312,23 @@ function App() {
               </div>
               )}
             </div>
+
+            {/* ── AI & Admin Tools (admins only) ── */}
+            {isAdmin && (
+              <div className="flex flex-col gap-4">
+                <SongMetadataBackfill />
+                <DuplicateSongMerger />
+              </div>
+            )}
+
           </section>
         )}
       </main>
+
+      {/* Quick-add floating button — only in builder with an active setlist */}
+      {screen === 'builder' && currentSetlist && (
+        <QuickAddSong />
+      )}
 
       <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-white/10 bg-slate-950/90 backdrop-blur">
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-2 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 text-sm">
@@ -14945,38 +14326,14 @@ function App() {
       )}
 
       {showDeleteGigConfirm && (
-        <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
-          onClick={cancelDeleteGig}
-        >
-          <div
-            className="w-full max-w-sm max-h-[80vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
-              <h3 className="text-lg font-semibold">Delete this gig?</h3>
-            </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
-              <p className="mt-2 text-sm text-slate-300">
-                This will remove the gig, assignments, and special requests.
-              </p>
-              <div className="mt-4 flex items-center gap-2">
-                <button
-                  className="flex-1 rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-200"
-                  onClick={cancelDeleteGig}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="flex-1 rounded-xl bg-red-500/80 px-3 py-2 text-sm font-semibold text-red-100"
-                  onClick={confirmDeleteGig}
-                >
-                  Delete gig
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ConfirmModal
+          title="Delete this gig?"
+          message="This will remove the gig, assignments, and special requests."
+          onCancel={cancelDeleteGig}
+          onConfirm={confirmDeleteGig}
+          confirmLabel="Delete gig"
+          variant="danger"
+        />
       )}
 
       {showTierDetailsModal && selectedTierDetails && (
@@ -15058,183 +14415,56 @@ function App() {
       )}
 
       {showTierLimitModal && (
-        <div
-          className="fixed inset-0 z-[109] flex items-center justify-center bg-slate-950/80 px-4 py-6"
-          onClick={() => setShowTierLimitModal(null)}
-        >
-          <div
-            className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-900 p-5"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h3 className="text-lg font-semibold">Beta access is free</h3>
-            <p className="mt-2 text-sm text-slate-300">
-              Plan limits are paused during beta, so you can keep testing with more gigs and musicians.
-            </p>
-            <p className="mt-2 text-xs text-slate-400">
-              Paid storage and pro features will come later after the core app flow is ready.
-            </p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                onClick={() => setShowTierLimitModal(null)}
-              >
-                Got it
-              </button>
-            </div>
-          </div>
-        </div>
+        <TierLimitModal onClose={() => setShowTierLimitModal(null)} />
       )}
 
       {showGigLockedSongWarning && (
-        <div
-          className="fixed inset-0 z-[108] flex items-center justify-center bg-slate-950/80 px-4 py-6"
-          onClick={() => {
+        <ConfirmModal
+          title="Song already selected"
+          message="This song is already in the gig queue. Do you want to re-send it anyway?"
+          onCancel={() => { setShowGigLockedSongWarning(false); setPendingResendGigSongId(null) }}
+          onConfirm={() => {
+            if (pendingResendGigSongId) markGigSongAsSelected(pendingResendGigSongId, { forceResend: true })
             setShowGigLockedSongWarning(false)
             setPendingResendGigSongId(null)
           }}
-        >
-          <div
-            className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900 p-5"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h3 className="text-lg font-semibold">Song already selected</h3>
-            <p className="mt-2 text-sm text-slate-300">
-              This song is already in the gig queue. Do you want to re-send it anyway?
-            </p>
-            <div className="mt-4 flex items-center gap-2">
-              <button
-                className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200"
-                onClick={() => {
-                  setShowGigLockedSongWarning(false)
-                  setPendingResendGigSongId(null)
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                onClick={() => {
-                  if (pendingResendGigSongId) {
-                    markGigSongAsSelected(pendingResendGigSongId, { forceResend: true })
-                  }
-                  setShowGigLockedSongWarning(false)
-                  setPendingResendGigSongId(null)
-                }}
-              >
-                Re-send anyway
-              </button>
-            </div>
-          </div>
-        </div>
+          confirmLabel="Re-send anyway"
+          zClass="z-[108]"
+        />
       )}
 
       {showSingerWarning && (
-        <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
-          onClick={() => setShowSingerWarning(false)}
-        >
-          <div
-            className="w-full max-w-sm max-h-[80vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
-              <h3 className="text-lg font-semibold">Assign musicians first</h3>
-            </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
-              <p className="mt-2 text-sm text-slate-300">
-                Add musicians to this gig first. Singer assignment will use active assigned
-                musicians (vocalists preferred).
-              </p>
-              <div className="mt-4">
-                <button
-                  className="w-full rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                  onClick={() => setShowSingerWarning(false)}
-                >
-                  Got it
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <InfoModal
+          title="Assign musicians first"
+          message="Add musicians to this gig first. Singer assignment will use active assigned musicians (vocalists preferred)."
+          onClose={() => setShowSingerWarning(false)}
+        />
       )}
 
       {showMissingSingerWarning && (
-        <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 px-4 py-6"
-          onClick={() => setShowMissingSingerWarning(false)}
-        >
-          <div
-            className="w-full max-w-sm max-h-[80vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
-              <h3 className="text-lg font-semibold">Assign singers first</h3>
-            </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
-              <p className="mt-2 text-sm text-slate-300">
-                Add singer assignments for every song in this set before marking it complete.
-              </p>
-              <div className="mt-4">
-                <button
-                  className="w-full rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-                  onClick={() => setShowMissingSingerWarning(false)}
-                >
-                  Got it
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <InfoModal
+          title="Assign singers first"
+          message="Add singer assignments for every song in this set before marking it complete."
+          onClose={() => setShowMissingSingerWarning(false)}
+        />
       )}
 
       {showDocInstrumentWarning && (
-        <div
-          className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/80 px-4 py-6"
-          onClick={() => setShowDocInstrumentWarning(false)}
-        >
-          <div
-            className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900 p-5"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h3 className="text-lg font-semibold">Choose instrument(s)</h3>
-            <p className="mt-2 text-sm text-slate-300">
-              Charts require at least one instrument selection before saving.
-            </p>
-            <button
-              className="mt-4 w-full rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-              onClick={() => setShowDocInstrumentWarning(false)}
-            >
-              Got it
-            </button>
-          </div>
-        </div>
+        <InfoModal
+          title="Choose instrument(s)"
+          message="Charts require at least one instrument selection before saving."
+          onClose={() => setShowDocInstrumentWarning(false)}
+          zClass="z-[90]"
+        />
       )}
 
       {showDocUrlAccessWarning && (
-        <div
-          className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/80 px-4 py-6"
-          onClick={() => setShowDocUrlAccessWarning(false)}
-        >
-          <div
-            className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900 p-5"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h3 className="text-lg font-semibold">Shared URL check</h3>
-            <p className="mt-2 text-sm text-slate-300">
-              Please make sure the shared chart URL original source is viewable for everyone,
-              otherwise it will not load properly.
-            </p>
-            <p className="mt-2 text-sm text-slate-300">
-              Uploading a PDF is the most secure way for all musicians to see your chart.
-            </p>
-            <button
-              className="mt-4 w-full rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
-              onClick={() => setShowDocUrlAccessWarning(false)}
-            >
-              Got it
-            </button>
-          </div>
-        </div>
+        <InfoModal
+          title="Shared URL check"
+          message="Please make sure the shared chart URL original source is viewable for everyone, otherwise it will not load properly. Uploading a PDF is the most secure way for all musicians to see your chart."
+          onClose={() => setShowDocUrlAccessWarning(false)}
+          zClass="z-[90]"
+        />
       )}
 
       {importReview && currentSetlist && (
@@ -16244,38 +15474,15 @@ function App() {
       )}
 
       {showRemoveSongConfirm && (
-        <div
-          className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/80 px-4 py-6"
-          onClick={cancelRemoveSong}
-        >
-          <div
-            className="w-full max-w-sm max-h-[80vh] overflow-hidden rounded-3xl border border-white/10 bg-slate-900"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="sticky top-0 z-10 border-b border-white/10 bg-slate-900/95 px-5 py-4 backdrop-blur">
-              <h3 className="text-lg font-semibold">Remove this song?</h3>
-            </div>
-            <div className="max-h-[calc(80vh-64px)] overflow-auto px-5 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
-              <p className="mt-2 text-sm text-slate-300">
-                This will remove the song from the gig setlist.
-              </p>
-              <div className="mt-4 flex items-center gap-2">
-                <button
-                  className="flex-1 rounded-xl border border-white/10 px-3 py-2 text-sm text-slate-200"
-                  onClick={cancelRemoveSong}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="flex-1 rounded-xl bg-red-500/80 px-3 py-2 text-sm font-semibold text-white"
-                  onClick={confirmRemoveSong}
-                >
-                  Remove song
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ConfirmModal
+          title="Remove this song?"
+          message="This will remove the song from the gig setlist."
+          onCancel={cancelRemoveSong}
+          onConfirm={confirmRemoveSong}
+          confirmLabel="Remove song"
+          variant="danger"
+          zClass="z-[110]"
+        />
       )}
 
       {showDuplicateSongConfirm && (
@@ -19612,6 +18819,11 @@ function App() {
           </button>
         </div>
       )}
+      {generalToast && (
+        <div className="pointer-events-none fixed bottom-28 left-1/2 z-[9999] -translate-x-1/2 rounded-full bg-teal-400/90 px-4 py-2 text-xs font-semibold text-slate-950 shadow-lg">
+          {generalToast}
+        </div>
+      )}
       {sectionSaveStatus && (
         <div
           className={`pointer-events-none fixed bottom-32 left-1/2 z-[130] -translate-x-1/2 rounded-full px-4 py-2 text-xs font-semibold shadow-lg ${
@@ -19699,6 +18911,7 @@ function App() {
       )}
       </div>
     </div>
+    </AppProvider>
   )
 }
 

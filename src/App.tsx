@@ -1,10 +1,11 @@
 import {
   useCallback,
   useEffect,
+  type MouseEvent,
+  type PointerEvent,
   useMemo,
   useRef,
   useState,
-  type PointerEvent,
   type ReactNode,
   type TouchEvent,
 } from 'react'
@@ -571,6 +572,17 @@ function App() {
     offsetX: number
     offsetY: number
   } | null>(null)
+  const qaPanelDragStateRef = useRef<{
+    offsetX: number
+    offsetY: number
+    width: number
+    height: number
+  } | null>(null)
+  const qaPanelRef = useRef<HTMLDivElement | null>(null)
+  const qaPanelLivePositionRef = useRef<{ x: number; y: number } | null>(null)
+  const qaPanelRafRef = useRef<number | null>(null)
+  const qaPanelInitializedRef = useRef(false)
+  const qaPanelLastMoveLogTsRef = useRef(0)
   const [playlistSingerFilter, setPlaylistSingerFilter] = useState('__all__')
   const [playlistShareStatus, setPlaylistShareStatus] = useState('')
   const playlistShareTimerRef = useRef<number | null>(null)
@@ -2152,6 +2164,171 @@ function App() {
     clearSharedPlaylistQaState()
     setShowSharedInstrumentPrompt(false)
   }, [clearSharedPlaylistQaState])
+  const qaDragLog = useCallback((message: string, details?: Record<string, unknown>) => {
+    const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
+    if (params?.get('qaDebug') !== '1') return
+    console.log('[qa-drag]', message, details ?? {})
+  }, [])
+  const applyQaPanelPosition = useCallback((x: number, y: number) => {
+    const panelElement = qaPanelRef.current
+    if (!panelElement) {
+      qaDragLog('apply skipped: panel ref missing')
+      return
+    }
+    panelElement.style.left = `${x}px`
+    panelElement.style.top = `${y}px`
+    panelElement.style.right = 'auto'
+    panelElement.style.bottom = 'auto'
+  }, [qaDragLog])
+  const nudgeQaPanel = useCallback((dx: number, dy: number) => {
+    const panelElement = qaPanelRef.current
+    if (!panelElement) return
+    const rect = panelElement.getBoundingClientRect()
+    const width = rect.width
+    const height = rect.height
+    const current = qaPanelLivePositionRef.current ?? {
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+    }
+    const maxX = Math.max(8, Math.round(window.innerWidth - width - 8))
+    const maxY = Math.max(8, Math.round(window.innerHeight - height - 8))
+    const nextX = Math.min(maxX, Math.max(8, current.x + dx))
+    const nextY = Math.min(maxY, Math.max(8, current.y + dy))
+    qaPanelLivePositionRef.current = { x: nextX, y: nextY }
+    applyQaPanelPosition(nextX, nextY)
+    qaDragLog('nudge', { dx, dy, nextX, nextY })
+  }, [applyQaPanelPosition, qaDragLog])
+  const beginQaPanelDragFromPoint = useCallback((clientX: number, clientY: number) => {
+    const panelElement = qaPanelRef.current
+    if (!panelElement) {
+      qaDragLog('begin drag failed: panel ref missing', { clientX, clientY })
+      return
+    }
+    const rect = panelElement.getBoundingClientRect()
+    qaPanelDragStateRef.current = {
+      offsetX: clientX - rect.left,
+      offsetY: clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+    }
+    const initial = { x: Math.round(rect.left), y: Math.round(rect.top) }
+    qaPanelLivePositionRef.current = initial
+    qaDragLog('begin drag', {
+      clientX,
+      clientY,
+      rectLeft: rect.left,
+      rectTop: rect.top,
+      rectWidth: rect.width,
+      rectHeight: rect.height,
+      offsetX: qaPanelDragStateRef.current.offsetX,
+      offsetY: qaPanelDragStateRef.current.offsetY,
+      computedCursor: window.getComputedStyle(panelElement).cursor,
+    })
+    applyQaPanelPosition(initial.x, initial.y)
+  }, [applyQaPanelPosition, qaDragLog])
+  const handleQaPanelMouseDown = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    const target = event.target as HTMLElement | null
+    if (target?.closest('button, a, input, select, textarea, label')) return
+    qaDragLog('mousedown', {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      targetTag: (event.target as HTMLElement | null)?.tagName,
+      currentTargetTag: event.currentTarget.tagName,
+    })
+    beginQaPanelDragFromPoint(event.clientX, event.clientY)
+    event.stopPropagation()
+    event.preventDefault()
+  }, [beginQaPanelDragFromPoint, qaDragLog])
+  const handleQaPanelTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0]
+    if (!touch) return
+    const target = event.target as HTMLElement | null
+    if (target?.closest('button, a, input, select, textarea, label')) return
+    qaDragLog('touchstart', {
+      clientX: touch.clientX,
+      clientY: touch.clientY,
+      touches: event.touches.length,
+    })
+    beginQaPanelDragFromPoint(touch.clientX, touch.clientY)
+    event.stopPropagation()
+    event.preventDefault()
+  }, [beginQaPanelDragFromPoint, qaDragLog])
+  useEffect(() => {
+    const handleMove = (clientX: number, clientY: number) => {
+      if (!qaPanelDragStateRef.current) return
+      const { offsetX, offsetY, width, height } = qaPanelDragStateRef.current
+      const maxX = Math.max(8, Math.round(window.innerWidth - width - 8))
+      const maxY = Math.max(8, Math.round(window.innerHeight - height - 8))
+      const nextX = Math.min(maxX, Math.max(8, Math.round(clientX - offsetX)))
+      const nextY = Math.min(maxY, Math.max(8, Math.round(clientY - offsetY)))
+      qaPanelLivePositionRef.current = { x: nextX, y: nextY }
+      const now = performance.now()
+      if (now - qaPanelLastMoveLogTsRef.current > 250) {
+        qaPanelLastMoveLogTsRef.current = now
+        qaDragLog('move', { clientX, clientY, nextX, nextY, maxX, maxY })
+      }
+      if (qaPanelRafRef.current !== null) return
+      qaPanelRafRef.current = window.requestAnimationFrame(() => {
+        qaPanelRafRef.current = null
+        const live = qaPanelLivePositionRef.current
+        if (!live) return
+        applyQaPanelPosition(live.x, live.y)
+      })
+    }
+    const handleMouseMove = (event: globalThis.MouseEvent) => {
+      handleMove(event.clientX, event.clientY)
+    }
+    const handleTouchMove = (event: globalThis.TouchEvent) => {
+      const touch = event.touches[0]
+      if (!touch) return
+      handleMove(touch.clientX, touch.clientY)
+      event.preventDefault()
+    }
+    const handleEnd = () => {
+      qaDragLog('end drag', { final: qaPanelLivePositionRef.current })
+      qaPanelDragStateRef.current = null
+      if (qaPanelRafRef.current !== null) {
+        window.cancelAnimationFrame(qaPanelRafRef.current)
+        qaPanelRafRef.current = null
+      }
+    }
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleEnd)
+    window.addEventListener('touchmove', handleTouchMove, { passive: false })
+    window.addEventListener('touchend', handleEnd)
+    window.addEventListener('touchcancel', handleEnd)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleEnd)
+      window.removeEventListener('touchmove', handleTouchMove)
+      window.removeEventListener('touchend', handleEnd)
+      window.removeEventListener('touchcancel', handleEnd)
+      if (qaPanelRafRef.current !== null) {
+        window.cancelAnimationFrame(qaPanelRafRef.current)
+        qaPanelRafRef.current = null
+      }
+    }
+  }, [applyQaPanelPosition, qaDragLog])
+  useEffect(() => {
+    if (!qaToolsEnabled || qaPanelInitializedRef.current) return
+    const panelElement = qaPanelRef.current
+    if (!panelElement) return
+    const rect = panelElement.getBoundingClientRect()
+    const nextX = Math.max(8, Math.round(window.innerWidth - rect.width - 16))
+    const nextY = Math.max(8, Math.round(window.innerHeight - rect.height - 16))
+    qaPanelLivePositionRef.current = { x: nextX, y: nextY }
+    applyQaPanelPosition(nextX, nextY)
+    qaPanelInitializedRef.current = true
+    qaDragLog('init position', {
+      nextX,
+      nextY,
+      rectWidth: rect.width,
+      rectHeight: rect.height,
+      panelCursor: window.getComputedStyle(panelElement).cursor,
+      panelPointerEvents: window.getComputedStyle(panelElement).pointerEvents,
+    })
+  }, [applyQaPanelPosition, qaToolsEnabled, qaDragLog])
 
   const sharedAllPlaylistEntries = useMemo(
     () => sharedPlaylistView?.allEntries ?? sharedPlaylistView?.entries ?? [],
@@ -7088,6 +7265,45 @@ function App() {
     )
     return { error: insertError }
   }
+  const ensureGigSongMembership = async (
+    gigId: string,
+    songId: string | undefined,
+  ) => {
+    if (!supabase || !songId) return { error: null }
+    const existingQuery = supabase
+      .from('SetlistGigSongs')
+      .select('id')
+      .eq('gig_id', gigId)
+      .eq('song_id', songId)
+      .limit(1)
+    const { data: existingRows, error: existingError } = activeBandId
+      ? await existingQuery.eq('band_id', activeBandId)
+      : await existingQuery
+    if (existingError) return { error: existingError }
+    if ((existingRows ?? []).length > 0) return { error: null }
+
+    const sortQuery = supabase
+      .from('SetlistGigSongs')
+      .select('sort_order')
+      .eq('gig_id', gigId)
+      .order('sort_order', { ascending: false })
+      .limit(1)
+    const { data: maxRows, error: sortReadError } = activeBandId
+      ? await sortQuery.eq('band_id', activeBandId)
+      : await sortQuery
+    if (sortReadError) return { error: sortReadError }
+    const nextSortOrder = (maxRows?.[0]?.sort_order ?? -1) + 1
+
+    const { error: insertError } = await supabase
+      .from('SetlistGigSongs')
+      .insert(withBandId({
+        id: createId(),
+        gig_id: gigId,
+        song_id: songId,
+        sort_order: nextSortOrder,
+      }))
+    return { error: insertError }
+  }
 
   const updateSpecialRequest = () => {
     if (!currentSetlist || !editingSpecialRequestId) return
@@ -7113,6 +7329,7 @@ function App() {
     const djSongId = shouldPersistAsDjTrack
       ? matchingSong?.id ?? existingRequest?.songId ?? createId()
       : undefined
+    const resolvedSongId = shouldPersistAsDjTrack ? djSongId : nextSongId
     commitChange('Update special request', (prev) => ({
       ...prev,
       specialRequests: prev.specialRequests.map((request) =>
@@ -7122,7 +7339,7 @@ function App() {
               type: normalizedType,
               songTitle: customSong,
               artist: normalizedArtist || undefined,
-              songId: shouldPersistAsDjTrack ? djSongId : nextSongId,
+              songId: resolvedSongId,
               singers: normalizedSingers,
               key: normalizedKey,
               note: pendingSpecialNote.trim() || undefined,
@@ -7135,6 +7352,12 @@ function App() {
             }
           : request,
       ),
+      setlists: resolvedSongId
+        ? prev.setlists.map((setlist) => {
+            if (setlist.id !== currentSetlist.id || setlist.songIds.includes(resolvedSongId)) return setlist
+            return { ...setlist, songIds: [...setlist.songIds, resolvedSongId] }
+          })
+        : prev.setlists,
       specialTypes: prev.specialTypes.includes(normalizedType)
         ? prev.specialTypes
         : [...prev.specialTypes, normalizedType],
@@ -7185,6 +7408,11 @@ function App() {
               { onConflict: 'id' },
             )
             if (ensureSongError) return { error: ensureSongError }
+            const { error: ensureGigSongError } = await ensureGigSongMembership(
+              currentSetlist.id,
+              djSongId,
+            )
+            if (ensureGigSongError) return { error: ensureGigSongError }
 
             const djTags = ['Special Request', 'DJ Only']
             const { data: existingTags, error: tagReadError } = await supabase
@@ -7248,6 +7476,11 @@ function App() {
               )
               if (upsertSongError) return { error: upsertSongError }
             }
+            const { error: ensureGigSongError } = await ensureGigSongMembership(
+              currentSetlist.id,
+              nextSongId ?? existingRequest?.songId,
+            )
+            if (ensureGigSongError) return { error: ensureGigSongError }
             return syncSpecialRequestSingerKeys(
               currentSetlist.id,
               nextSongId ?? existingRequest?.songId,
@@ -7336,7 +7569,7 @@ function App() {
             type: normalizedType,
             songTitle,
             artist: normalizedArtist || existingSong?.artist || undefined,
-            songId: shouldPersistAsDjTrack ? undefined : createdSongId,
+          songId: createdSongId,
             singers: shouldPersistAsDjTrack ? ['DJ'] : normalizedSingers,
             key: shouldPersistAsDjTrack ? '' : normalizedKey,
             note: pendingSpecialNote.trim() || undefined,
@@ -7350,6 +7583,10 @@ function App() {
           ...prev.specialRequests,
         ],
         songs: nextSongs,
+        setlists: prev.setlists.map((setlist) => {
+          if (setlist.id !== currentSetlist.id || setlist.songIds.includes(createdSongId)) return setlist
+          return { ...setlist, songIds: [...setlist.songIds, createdSongId] }
+        }),
         specialTypes: prev.specialTypes.includes(normalizedType)
           ? prev.specialTypes
           : [...prev.specialTypes, normalizedType],
@@ -7377,6 +7614,11 @@ function App() {
               { onConflict: 'id' },
             )
             if (ensureSongError) return { error: ensureSongError }
+            const { error: ensureGigSongError } = await ensureGigSongMembership(
+              currentSetlist.id,
+              createdSongId,
+            )
+            if (ensureGigSongError) return { error: ensureGigSongError }
 
             const djTags = ['Special Request', 'DJ Only']
             const { data: existingTags, error: tagReadError } = await supabase
@@ -7435,6 +7677,11 @@ function App() {
             { onConflict: 'id' },
           )
           if (ensureSongError) return { error: ensureSongError }
+          const { error: ensureGigSongError } = await ensureGigSongMembership(
+            currentSetlist.id,
+            createdSongId,
+          )
+          if (ensureGigSongError) return { error: ensureGigSongError }
 
           if (!existingSong && customSong) {
             if (normalizedSingers.length > 0 && normalizedKey) {
@@ -7845,6 +8092,10 @@ function App() {
           artist: row.artist ?? '',
           originalKey: row.original_key ?? '',
           youtubeUrl: row.audio_url ?? '',
+          youtubeVideoId: row.youtube_video_id ?? undefined,
+          youtubeVerified: Boolean(row.youtube_verified),
+          originalYear: row.original_year ?? undefined,
+          genre: row.genre ?? undefined,
           bpm: undefined,
           tags: (tagsBySong.get(row.id) ?? []).filter((tag) => !isPollutedSpecialTypeTag(tag)),
           keys: enrichedKeys.length ? enrichedKeys : [],
@@ -7862,7 +8113,9 @@ function App() {
       .forEach((row) => {
       if (!songIdSet.has(row.song_id)) return
       const list = gigSongsByGig.get(row.gig_id) ?? []
-      list.push(row.song_id)
+      if (!list.includes(row.song_id)) {
+        list.push(row.song_id)
+      }
       gigSongsByGig.set(row.gig_id, list)
       const currentMax = gigSongSortOrderMaxByGig.get(row.gig_id) ?? -1
       const rowSortOrder = row.sort_order ?? 0
@@ -7881,6 +8134,38 @@ function App() {
       }
     })
     const validGigIdSet = new Set((gigsRes.data ?? []).map((row) => row.id))
+    const recoveredSpecialRequestGigSongRows: Array<{
+      id: string
+      gig_id: string
+      song_id: string
+      sort_order: number
+    }> = []
+    const queueRecoveredSpecialRequestSong = (gigId: string, songId: string | null | undefined) => {
+      const normalizedSongId = typeof songId === 'string' ? songId.trim() : ''
+      if (!normalizedSongId) return
+      if (!validGigIdSet.has(gigId) || !songIdSet.has(normalizedSongId)) return
+      const list = gigSongsByGig.get(gigId) ?? []
+      if (list.includes(normalizedSongId)) return
+      list.push(normalizedSongId)
+      gigSongsByGig.set(gigId, list)
+      const nextSortOrder = (gigSongSortOrderMaxByGig.get(gigId) ?? list.length - 2) + 1
+      gigSongSortOrderMaxByGig.set(gigId, nextSortOrder)
+      recoveredSpecialRequestGigSongRows.push({
+        id: createId(),
+        gig_id: gigId,
+        song_id: normalizedSongId,
+        sort_order: nextSortOrder,
+      })
+    }
+    specialReqRes.data?.forEach((row) => {
+      queueRecoveredSpecialRequestSong(row.gig_id, row.song_id)
+    })
+    djTracksRes.data?.forEach((row) => {
+      const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : null
+      const metadataSongId =
+        metadata && typeof metadata.song_id === 'string' ? metadata.song_id.trim() : ''
+      queueRecoveredSpecialRequestSong(row.gig_id, metadataSongId)
+    })
     // Recovery path: if songs have explicit gig-section assignments but lost gig-song rows,
     // restore membership so section playlists stay intact.
     const recoveredGigSongRows: Array<{
@@ -7908,10 +8193,14 @@ function App() {
         })
       })
     })
-    if (recoveredGigSongRows.length > 0) {
+    const allRecoveredGigSongRows = [
+      ...recoveredSpecialRequestGigSongRows,
+      ...recoveredGigSongRows,
+    ]
+    if (allRecoveredGigSongRows.length > 0) {
       const { error: recoveredGigSongsError } = await supabase
         .from('SetlistGigSongs')
-        .insert(recoveredGigSongRows.map((row) => withBandId(row)))
+        .insert(allRecoveredGigSongRows.map((row) => withBandId(row)))
       reportSupabaseError(recoveredGigSongsError)
     }
 
@@ -10248,9 +10537,15 @@ function App() {
   useEffect(() => {
     const client = supabase
     if (!client || !authUserId) return
+    let reloadTimer: number | null = null
     const handleRealtimeChange = () => {
+      if ((window as typeof window & { __SC_SUPPRESS_REALTIME__?: boolean }).__SC_SUPPRESS_REALTIME__) return
       if (setlistSectionSaveInProgressRef.current) return
-      void loadSupabaseData()
+      if (reloadTimer) return
+      reloadTimer = window.setTimeout(() => {
+        reloadTimer = null
+        void loadSupabaseData()
+      }, 250)
     }
     const channel = client
       .channel('setlist-sync')
@@ -10318,6 +10613,10 @@ function App() {
     channel.subscribe()
 
     return () => {
+      if (reloadTimer) {
+        window.clearTimeout(reloadTimer)
+        reloadTimer = null
+      }
       void client.removeChannel(channel)
     }
   }, [authUserId, loadSupabaseData])
@@ -13500,14 +13799,14 @@ function App() {
                     .map((songId) => appState.songs.find((song) => song.id === songId))
                     .filter((song): song is Song => Boolean(song))
                     .filter((song) => hasSongTag(song, 'Latin'))
-                    .map((song) => {
+                    .map((song, songIndex) => {
                       const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
                       const singers = assignments.map((entry) => entry.singer)
                       const keys = Array.from(new Set(assignments.map((entry) => entry.key)))
                       const keyLabel =
                         keys.length === 0 ? 'No key' : keys.length === 1 ? keys[0] : 'Multi'
                       return (
-                        <div key={song.id} className="print-row song-row">
+                        <div key={`${song.id}-latin-${songIndex}`} className="print-row song-row">
                           <div className="print-row-title">
                             <div className="song-title-stack">
                               {song.youtubeUrl ? (
@@ -13550,14 +13849,14 @@ function App() {
                     .map((songId) => appState.songs.find((song) => song.id === songId))
                     .filter((song): song is Song => Boolean(song))
                     .filter((song) => hasSongTag(song, 'Dinner'))
-                    .map((song) => {
+                    .map((song, songIndex) => {
                       const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
                       const singers = assignments.map((entry) => entry.singer)
                       const keys = Array.from(new Set(assignments.map((entry) => entry.key)))
                       const keyLabel =
                         keys.length === 0 ? 'No key' : keys.length === 1 ? keys[0] : 'Multi'
                       return (
-                        <div key={song.id} className="print-row song-row">
+                        <div key={`${song.id}-dinner-${songIndex}`} className="print-row song-row">
                           <div className="print-row-title">
                             <div className="song-title-stack">
                               {song.youtubeUrl ? (
@@ -13600,14 +13899,14 @@ function App() {
                     .map((songId) => appState.songs.find((song) => song.id === songId))
                     .filter((song): song is Song => Boolean(song))
                     .filter((song) => hasSongTag(song, 'Dance'))
-                    .map((song) => {
+                    .map((song, songIndex) => {
                       const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
                       const singers = assignments.map((entry) => entry.singer)
                       const keys = Array.from(new Set(assignments.map((entry) => entry.key)))
                       const keyLabel =
                         keys.length === 0 ? 'No key' : keys.length === 1 ? keys[0] : 'Multi'
                       return (
-                        <div key={song.id} className="print-row song-row">
+                        <div key={`${song.id}-dance-${songIndex}`} className="print-row song-row">
                           <div className="print-row-title">
                             <div className="song-title-stack">
                               {song.youtubeUrl ? (
@@ -17092,14 +17391,14 @@ function App() {
                               {getPrintableSectionTitle(section, chunkIndex > 0)}
                             </div>
                             <div className="print-list">
-                              {songChunk.map((song) => {
+                              {songChunk.map((song, songIndex) => {
                                 const assignments = getGigSingerAssignments(song.id, currentSetlist.id)
                                 const singers = assignments.map((entry) => entry.singer)
                                 const keys = Array.from(new Set(assignments.map((entry) => entry.key)))
                                 const keyLabel =
                                   keys.length === 0 ? 'No key' : keys.length === 1 ? keys[0] : 'Multi'
                                 return (
-                                  <div key={song.id} className="print-row song-row">
+                                  <div key={`${song.id}-${section}-${chunkIndex}-${songIndex}`} className="print-row song-row">
                                     <div className="print-row-title">
                                       <div className="song-title-stack">
                                         {song.youtubeUrl ? (
@@ -18855,8 +19154,36 @@ function App() {
         </div>
       )}
       {qaToolsEnabled && (
-        <div className="fixed bottom-4 right-4 z-[390] w-[min(92vw,19rem)] rounded-2xl border border-cyan-300/35 bg-slate-950/95 p-3 shadow-2xl backdrop-blur">
-          <div className="flex items-center justify-between gap-2">
+        <div
+          ref={qaPanelRef}
+          data-qa-view-switcher
+          className="fixed bottom-4 right-4 z-[390] w-[min(92vw,19rem)] select-none rounded-2xl border border-cyan-300/35 bg-slate-950/95 p-3 shadow-2xl backdrop-blur"
+          onMouseDown={handleQaPanelMouseDown}
+          onTouchStart={handleQaPanelTouchStart}
+        >
+          <div
+            className="mx-auto mb-2 h-1.5 w-12 cursor-grab rounded-full bg-cyan-300/40 active:cursor-grabbing"
+            onMouseDown={handleQaPanelMouseDown}
+            onTouchStart={handleQaPanelTouchStart}
+            onMouseEnter={(event) => {
+              qaDragLog('handle hover', {
+                cursor: window.getComputedStyle(event.currentTarget).cursor,
+              })
+            }}
+            style={{ cursor: 'grab' }}
+            aria-hidden
+          />
+          <div
+            className="flex cursor-grab touch-none select-none items-center justify-between gap-2 active:cursor-grabbing"
+            onMouseDown={handleQaPanelMouseDown}
+            onTouchStart={handleQaPanelTouchStart}
+            onMouseEnter={(event) => {
+              qaDragLog('header hover', {
+                cursor: window.getComputedStyle(event.currentTarget).cursor,
+              })
+            }}
+            style={{ cursor: 'grab' }}
+          >
             <div>
               <p className="text-[10px] uppercase tracking-[0.22em] text-cyan-200">QA</p>
               <p className="text-xs font-semibold text-white">View switcher</p>
@@ -18864,6 +19191,36 @@ function App() {
             <span className="rounded-full border border-cyan-300/35 px-2 py-0.5 text-[10px] text-cyan-100">
               {qaPreset === 'off' ? 'Live session' : qaPreset}
             </span>
+          </div>
+          <div className="mt-2 grid grid-cols-4 gap-1">
+            <button
+              type="button"
+              className="rounded border border-cyan-300/35 px-2 py-1 text-[10px] text-cyan-100 hover:bg-cyan-500/15"
+              onClick={() => nudgeQaPanel(-24, 0)}
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              className="rounded border border-cyan-300/35 px-2 py-1 text-[10px] text-cyan-100 hover:bg-cyan-500/15"
+              onClick={() => nudgeQaPanel(24, 0)}
+            >
+              →
+            </button>
+            <button
+              type="button"
+              className="rounded border border-cyan-300/35 px-2 py-1 text-[10px] text-cyan-100 hover:bg-cyan-500/15"
+              onClick={() => nudgeQaPanel(0, -24)}
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              className="rounded border border-cyan-300/35 px-2 py-1 text-[10px] text-cyan-100 hover:bg-cyan-500/15"
+              onClick={() => nudgeQaPanel(0, 24)}
+            >
+              ↓
+            </button>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-300">
             <span className="rounded-full border border-white/10 px-2 py-0.5">

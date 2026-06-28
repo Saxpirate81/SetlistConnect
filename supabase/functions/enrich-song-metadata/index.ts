@@ -76,10 +76,11 @@ const ALLOWED_ORIGIN = Deno.env.get('CORS_ALLOWED_ORIGIN') ?? 'https://www.setli
 function getCorsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get('origin') ?? ''
   const allowed = LOCALHOST_RE.test(origin) ? origin : ALLOWED_ORIGIN
+  const requestedHeaders = req.headers.get('access-control-request-headers')?.trim()
   return {
     'Access-Control-Allow-Origin': allowed,
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': requestedHeaders || 'Content-Type, Authorization, apikey, x-client-info',
     Vary: 'Origin',
   }
 }

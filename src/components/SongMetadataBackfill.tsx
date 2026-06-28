@@ -15,7 +15,7 @@ import { useAppContext } from '../context/AppContext'
 import { enrichSongMetadata } from '../lib/enrichSongMetadata'
 import { supabase } from '../lib/supabaseClient'
 
-const BATCH_SIZE = 5
+const BATCH_SIZE = 1
 
 type Phase = 'idle' | 'running' | 'done' | 'error'
 
@@ -24,11 +24,13 @@ type Progress = {
   done: number
   succeeded: number
   failed: number
+  infraFailed: number
   current?: string
+  lastError?: string
 }
 
 export function SongMetadataBackfill() {
-  const { songs, isAdmin, updateSong } = useAppContext()
+  const { songs, isAdmin } = useAppContext()
   const [phase, setPhase] = useState<Phase>('idle')
   const [progress, setProgress] = useState<Progress | null>(null)
 
@@ -41,24 +43,37 @@ export function SongMetadataBackfill() {
   const handleRun = async () => {
     if (!supabase || needsEnrichment.length === 0) return
     setPhase('running')
-    setProgress({ total: needsEnrichment.length, done: 0, succeeded: 0, failed: 0 })
+    setProgress({ total: needsEnrichment.length, done: 0, succeeded: 0, failed: 0, infraFailed: 0 })
 
     let succeeded = 0
     let failed = 0
+    let infraFailed = 0
+    let lastError = ''
 
-    for (let i = 0; i < needsEnrichment.length; i += BATCH_SIZE) {
-      const batch = needsEnrichment.slice(i, i + BATCH_SIZE)
+    ;(window as typeof window & { __SC_SUPPRESS_REALTIME__?: boolean }).__SC_SUPPRESS_REALTIME__ = true
+    try {
+      for (let i = 0; i < needsEnrichment.length; i += BATCH_SIZE) {
+        const batch = needsEnrichment.slice(i, i + BATCH_SIZE)
 
-      await Promise.all(
-        batch.map(async (song) => {
-          setProgress((prev) => prev ? { ...prev, current: `${song.title} — ${song.artist}` } : prev)
-
+        for (const song of batch) {
+          setProgress((prev) => prev ? { ...prev, current: `${song.title} - ${song.artist}` } : prev)
           const result = await enrichSongMetadata(song.title, song.artist)
+
+          if (result.error) {
+            infraFailed++
+            lastError = result.error
+            setProgress((prev) =>
+              prev
+                ? { ...prev, done: prev.done + 1, infraFailed, lastError }
+                : prev
+            )
+            continue
+          }
 
           if (result.source === 'unknown' || (!result.year && !result.genre)) {
             failed++
             setProgress((prev) => prev ? { ...prev, done: prev.done + 1, failed } : prev)
-            return
+            continue
           }
 
           // Only update fields that are missing — never overwrite user data
@@ -68,42 +83,40 @@ export function SongMetadataBackfill() {
 
           if (Object.keys(updates).length === 0) {
             setProgress((prev) => prev ? { ...prev, done: prev.done + 1 } : prev)
-            return
+            continue
           }
 
           const { error } = await supabase!
-            .from('songs')
+            .from('SetlistSongs')
             .update(updates)
             .eq('id', song.id)
 
           if (error) {
             console.warn('[backfill] DB update failed for', song.id, error.message)
-            failed++
+            infraFailed++
+            lastError = error.message
           } else {
-            // Optimistically update local state
-            updateSong(song.id, {
-              originalYear: updates.original_year ?? song.originalYear,
-              genre: updates.genre ?? song.genre,
-            })
             succeeded++
           }
 
           setProgress((prev) =>
-            prev ? { ...prev, done: prev.done + 1, succeeded, failed } : prev
+            prev ? { ...prev, done: prev.done + 1, succeeded, failed, infraFailed, lastError } : prev
           )
-        }),
-      )
+        }
 
-      // Tiny pause between batches to avoid rate limits
-      if (i + BATCH_SIZE < needsEnrichment.length) {
-        await new Promise((r) => setTimeout(r, 300))
+        // Tiny pause between batches to avoid rate limits
+        if (i + BATCH_SIZE < needsEnrichment.length) {
+          await new Promise((r) => setTimeout(r, 300))
+        }
       }
-    }
 
-    setPhase('done')
-    setProgress((prev) =>
-      prev ? { ...prev, current: undefined, succeeded, failed } : prev
-    )
+      setPhase('done')
+      setProgress((prev) =>
+        prev ? { ...prev, current: undefined, succeeded, failed, infraFailed, lastError } : prev
+      )
+    } finally {
+      ;(window as typeof window & { __SC_SUPPRESS_REALTIME__?: boolean }).__SC_SUPPRESS_REALTIME__ = false
+    }
   }
 
   const pct = progress ? Math.round((progress.done / progress.total) * 100) : 0
@@ -171,7 +184,17 @@ export function SongMetadataBackfill() {
                 {' '}· {progress.failed} not found (obscure or very new)
               </span>
             )}
+            {progress.infraFailed > 0 && (
+              <span className="text-amber-200/90">
+                {' '}· {progress.infraFailed} failed due to configuration or network
+              </span>
+            )}
           </div>
+          {progress.lastError && (
+            <p className="text-xs text-amber-200/90">
+              Last error: {progress.lastError}
+            </p>
+          )}
           {needsEnrichment.length > 0 && (
             <button
               type="button"

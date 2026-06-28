@@ -18,7 +18,7 @@ import type { DuplicateGroup } from '../lib/deduplicateSongs'
 type MergeState = 'idle' | 'merging' | 'done' | 'error'
 
 export function DuplicateSongMerger() {
-  const { songs, setlists, activeBandId, isAdmin, showToast, updateSong } = useAppContext()
+  const { songs, setlists, activeBandId, isAdmin, showToast } = useAppContext()
   const [groups, setGroups] = useState<DuplicateGroup[] | null>(null)
   const [canonicalOverrides, setCanonicalOverrides] = useState<Record<string, string>>({})
   const [mergeStates, setMergeStates] = useState<Record<string, MergeState>>({})

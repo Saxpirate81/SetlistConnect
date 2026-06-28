@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type MouseEvent,
   type PointerEvent,
   type ReactNode,
   type TouchEvent,
@@ -16,7 +15,6 @@ import { logger } from './lib/logger'
 import { useDebounce } from './hooks/useDebounce'
 import { CloseButton } from './components/ui/CloseButton'
 import { AppIcon } from './components/ui/AppIcon'
-import type { AppIconName } from './components/ui/AppIcon'
 import { SkeletonAppShell } from './components/ui/Skeleton'
 import { AuthScreen } from './screens/AuthScreen'
 import { CreateBandScreen } from './screens/CreateBandScreen'
@@ -41,8 +39,6 @@ import {
   PRINT_SPECIAL_REQUESTS_PER_SECTION,
   PRINT_DEFAULT_SONGS_PER_SECTION,
   PRINT_DANCE_SONGS_PER_SECTION,
-  DEFAULT_PRODUCTION_APP_ORIGIN,
-  LOCALHOST_ORIGIN_REGEX,
   BILLING_TEST_EMAILS,
   BAND_TIER_DETAILS,
   LYRICS_COLOR_SWATCHES,
@@ -4524,7 +4520,6 @@ function App() {
     setActiveBuildPanel(null)
     setScreen('setlists')
     setLoginPhase('login')
-    setLoginInput('')
     setAuthEmail('')
     setAuthPassword('')
     setAuthError(null)
@@ -13327,7 +13322,31 @@ function App() {
 
       {/* Quick-add floating button — only in builder with an active setlist */}
       {screen === 'builder' && currentSetlist && (
-        <QuickAddSong />
+        <QuickAddSong
+          gigId={currentSetlist.id}
+          onSongAdded={(songId, songTitle, songArtist) => {
+            setAppState((prev) => ({
+              ...prev,
+              songs: [
+                ...prev.songs,
+                {
+                  id: songId,
+                  title: songTitle,
+                  artist: songArtist,
+                  tags: [],
+                  keys: [],
+                  specialPlayedCount: 0,
+                  youtubeVerified: false,
+                } as import('./types').Song,
+              ],
+              setlists: prev.setlists.map((sl) =>
+                sl.id === currentSetlist.id
+                  ? { ...sl, songIds: [...sl.songIds, songId] }
+                  : sl,
+              ),
+            }))
+          }}
+        />
       )}
 
       <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-white/10 bg-slate-950/90 backdrop-blur">

@@ -17,7 +17,7 @@
 
 import { createContext, useContext } from 'react'
 import type { ReactNode } from 'react'
-import type { Song, Setlist, Musician, GigMusician, Chart, Document, SpecialRequest, Band, BandMembership, AppState } from '../types'
+import type { Song, Setlist, Musician, GigMusician, Chart, Document, SpecialRequest, Band, BandMembership, AppState, Role } from '../types'
 
 // ─── Context shape ────────────────────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ export type AppContextValue = {
   authUserId: string | null
   authUserEmail: string | null
   activeBandId: string
-  role: 'admin' | 'member' | 'viewer' | null
+  role: Role
   isAdmin: boolean
 
   // ── Band metadata ─────────────────────────────────────────────────────────

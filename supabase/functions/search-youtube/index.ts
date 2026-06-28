@@ -1,3 +1,4 @@
+// @ts-nocheck — Deno runtime, not checked by the Vite/Node TypeScript compiler
 /**
  * search-youtube Edge Function
  *

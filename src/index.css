@@ -101,6 +101,15 @@ body {
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
   }
+
+  /* Audio tab song queue — dedicated mobile scrollport for all tracks. */
+  .playlist-audio-song-scroll {
+    -webkit-overflow-scrolling: touch !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    min-height: 0;
+  }
 }
 
 @media (min-width: 768px) {

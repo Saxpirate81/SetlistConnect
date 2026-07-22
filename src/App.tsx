@@ -588,18 +588,10 @@ function App() {
   const playlistShareTimerRef = useRef<number | null>(null)
   const [setlistCopyStatus, setSetlistCopyStatus] = useState<string | null>(null)
   const setlistCopyTimerRef = useRef<number | null>(null)
-  const [playlistDrawerOverlay, setPlaylistDrawerOverlay] = useState(false)
-  const [sharedPlaylistDrawerOverlay, setSharedPlaylistDrawerOverlay] = useState(false)
   const [collapsedSharedAudioSections, setCollapsedSharedAudioSections] = useState<Record<string, boolean>>({})
-  const [playlistDrawerDockTop, setPlaylistDrawerDockTop] = useState(240)
   const playlistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
   const sharedPlaylistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
-  const playlistDrawerTouchStartYRef = useRef<number | null>(null)
-  const playlistDrawerAutoCloseTimerRef = useRef<number | null>(null)
   const setlistSectionSaveInProgressRef = useRef(false)
-  const [widePlaylistUi, setWidePlaylistUi] = useState(() =>
-    typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false,
-  )
   const sharedNowPlayingSongIdRef = useRef<string | null>(null)
   const [showAddMusicianModal, setShowAddMusicianModal] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
@@ -3585,56 +3577,6 @@ function App() {
   const handlePlaylistYoutubeEnded = useCallback(() => {
     youtubePlaylistAdvanceRef.current()
   }, [])
-  const handlePlaylistDrawerTouchStart = (event: TouchEvent<HTMLDivElement>) => {
-    if (playlistDrawerOverlay) {
-      if (playlistDrawerAutoCloseTimerRef.current) {
-        window.clearTimeout(playlistDrawerAutoCloseTimerRef.current)
-      }
-      playlistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
-        setPlaylistDrawerOverlay(false)
-        playlistDrawerAutoCloseTimerRef.current = null
-      }, 6000)
-    }
-    playlistDrawerTouchStartYRef.current = event.touches[0]?.clientY ?? null
-  }
-  const handlePlaylistDrawerTouchMove = () => {
-    if (!playlistDrawerOverlay) return
-    if (playlistDrawerAutoCloseTimerRef.current) {
-      window.clearTimeout(playlistDrawerAutoCloseTimerRef.current)
-    }
-    playlistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
-      setPlaylistDrawerOverlay(false)
-      playlistDrawerAutoCloseTimerRef.current = null
-    }, 6000)
-  }
-  const handlePlaylistDrawerScroll = () => {
-    if (!playlistDrawerOverlay) return
-    if (playlistDrawerAutoCloseTimerRef.current) {
-      window.clearTimeout(playlistDrawerAutoCloseTimerRef.current)
-    }
-    playlistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
-      setPlaylistDrawerOverlay(false)
-      playlistDrawerAutoCloseTimerRef.current = null
-    }, 6000)
-  }
-  const handlePlaylistDrawerTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
-    if (!widePlaylistUi) {
-      playlistDrawerTouchStartYRef.current = null
-      return
-    }
-    const startY = playlistDrawerTouchStartYRef.current
-    playlistDrawerTouchStartYRef.current = null
-    if (startY === null) return
-    const endY = event.changedTouches[0]?.clientY ?? startY
-    const deltaY = endY - startY
-    if (deltaY <= -70) {
-      setPlaylistDrawerOverlay(true)
-      return
-    }
-    if (deltaY >= 90) {
-      setPlaylistDrawerOverlay(false)
-    }
-  }
   const movePlaylistBy = (delta: number) => {
     if (!visiblePlaylistEntries.length) return
     const next = findNextPlayableIndex(
@@ -3647,7 +3589,6 @@ function App() {
   }
   const jumpToSharedPlaylistIndex = (index: number) => {
     jumpToPlaylistIndex(index)
-    setSharedPlaylistDrawerOverlay(false)
   }
   const copyPlaylistShareLink = async (options?: { fromFirstSong?: boolean }) => {
     if (!currentSetlist) return
@@ -10344,64 +10285,10 @@ function App() {
   }, [playlistSingerFilter])
 
   useEffect(() => {
-    const updateDockTop = () => {
-      const playerHeight = playlistPlayerBlockRef.current?.getBoundingClientRect().height ?? 220
-      setPlaylistDrawerDockTop(Math.max(120, Math.round(playerHeight + 12)))
-    }
-    updateDockTop()
-    window.addEventListener('resize', updateDockTop)
-    return () => window.removeEventListener('resize', updateDockTop)
-  }, [currentPlaylistEntry, playlistIndex, showPlaylistModal, visiblePlaylistEntries.length])
-
-  useEffect(() => {
-    if (showPlaylistModal) return
-    setPlaylistDrawerOverlay(false)
-  }, [showPlaylistModal])
-
-  useEffect(() => {
     if (gigMode) return
     setShowGigSetlistSheet(false)
     setShowGigModeLaunchModal(false)
   }, [gigMode])
-
-  useEffect(() => {
-    if (sharedPlaylistView) return
-    setSharedPlaylistDrawerOverlay(false)
-  }, [sharedPlaylistView])
-
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)')
-    const apply = () => setWidePlaylistUi(mq.matches)
-    apply()
-    mq.addEventListener('change', apply)
-    return () => mq.removeEventListener('change', apply)
-  }, [])
-
-  useEffect(() => {
-    if (widePlaylistUi) return
-    setPlaylistDrawerOverlay(false)
-    setSharedPlaylistDrawerOverlay(false)
-  }, [widePlaylistUi])
-
-  useEffect(() => {
-    if (!playlistDrawerOverlay) {
-      if (playlistDrawerAutoCloseTimerRef.current) {
-        window.clearTimeout(playlistDrawerAutoCloseTimerRef.current)
-        playlistDrawerAutoCloseTimerRef.current = null
-      }
-      return
-    }
-    playlistDrawerAutoCloseTimerRef.current = window.setTimeout(() => {
-      setPlaylistDrawerOverlay(false)
-      playlistDrawerAutoCloseTimerRef.current = null
-    }, 6000)
-    return () => {
-      if (playlistDrawerAutoCloseTimerRef.current) {
-        window.clearTimeout(playlistDrawerAutoCloseTimerRef.current)
-        playlistDrawerAutoCloseTimerRef.current = null
-      }
-    }
-  }, [playlistDrawerOverlay])
 
   useEffect(() => {
     if (playlistIndex < visiblePlaylistEntries.length) return
@@ -11125,18 +11012,14 @@ function App() {
                 ) : (
                   <>
                     <div
-                      className="relative order-1 mt-3 flex flex-col overflow-visible md:order-2 md:mb-4 md:mt-4 md:h-[calc(100dvh-13.6rem)] md:min-h-0 md:max-h-[calc(100dvh-13.6rem)] md:flex-1 md:flex-row md:gap-4 md:overflow-hidden"
+                      className="relative order-1 mt-3 flex h-[calc(100dvh-14rem)] min-h-0 flex-1 flex-col overflow-hidden md:order-2 md:mb-4 md:mt-4 md:h-[calc(100dvh-13.6rem)] md:max-h-[calc(100dvh-13.6rem)] md:flex-row md:gap-4"
                     >
                       <div
                         ref={sharedPlaylistPlayerBlockRef}
-                        className={`sticky top-3 z-10 flex min-h-0 w-full flex-col md:relative md:top-auto md:h-full md:min-h-0 md:flex-1 ${
-                          widePlaylistUi && sharedPlaylistDrawerOverlay
-                            ? 'pointer-events-none opacity-0 md:pointer-events-auto md:opacity-100'
-                            : 'opacity-100'
-                        }`}
+                        className="z-10 w-full shrink-0 md:relative md:h-full md:min-h-0 md:flex-1 md:overflow-y-auto"
                       >
                           {currentPlaylistEntry ? (
-                            <div className="min-h-0 w-full shrink-0 overflow-visible md:flex-1 md:overflow-y-auto md:pr-1">
+                            <div className="max-h-[min(38vh,320px)] w-full overflow-y-auto overflow-x-hidden md:max-h-none md:flex-1 md:pr-1">
                             <div
                               className="rounded-none border-0 bg-transparent p-0 transition-all duration-150 sm:rounded-2xl sm:border sm:border-white/10 sm:bg-slate-950/40 sm:p-4"
                             >
@@ -11218,7 +11101,7 @@ function App() {
                             </div>
                           )}
                       </div>
-                      <div className="order-2 mt-3 grid grid-cols-2 gap-2 md:hidden">
+                      <div className="mt-2 grid shrink-0 grid-cols-2 gap-2 md:hidden">
                         <button
                           type="button"
                           className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
@@ -11236,48 +11119,11 @@ function App() {
                           ⏭ Next
                         </button>
                       </div>
-                      <button
-                        type="button"
-                        className="order-3 mt-2 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-teal-300/50 bg-slate-900/95 px-3 py-2 text-sm font-semibold text-teal-100 shadow-lg backdrop-blur md:hidden"
-                        onClick={() => setSharedPlaylistDrawerOverlay(true)}
-                        aria-label="Open song list"
-                      >
-                        <span className="text-base leading-none" aria-hidden>
-                          ☰
-                        </span>
-                        Songs
-                      </button>
-                      {sharedPlaylistDrawerOverlay && (
-                        <button
-                          type="button"
-                          className="fixed inset-0 z-[325] bg-slate-950/45 backdrop-blur-[1px] md:hidden"
-                          onClick={() => setSharedPlaylistDrawerOverlay(false)}
-                          aria-label="Close song list"
-                        />
-                      )}
-                        <div
-                          className={`${
-                            sharedPlaylistDrawerOverlay ? 'fixed' : 'hidden'
-                          } bottom-[calc(6.5rem+env(safe-area-inset-bottom))] left-3 right-3 top-[calc(1rem+env(safe-area-inset-top))] z-[330] order-4 flex flex-col overflow-hidden rounded-3xl border border-teal-300/40 bg-slate-900 shadow-2xl md:static md:order-none md:mb-1 md:mt-0 md:flex md:h-[calc(100%-0.25rem)] md:max-h-[calc(100%-0.25rem)] md:w-[320px] md:max-w-none md:shrink-0 md:self-start md:rounded-2xl md:shadow-xl lg:w-[340px] ${
-                            sharedPlaylistDrawerOverlay ? '' : 'md:flex'
-                          } ${widePlaylistUi ? 'md:static' : 'md:min-h-0'}`}
-                        >
-                          <div className="flex shrink-0 items-center justify-center py-2 md:hidden">
-                            <div className="h-1 w-12 rounded-full bg-white/25" />
-                          </div>
-                          <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 pb-3 md:hidden">
-                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-teal-200">
+                        <div className="mt-2 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-teal-300/40 bg-slate-900 shadow-xl md:mb-1 md:mt-0 md:h-[calc(100%-0.25rem)] md:max-h-[calc(100%-0.25rem)] md:w-[320px] md:max-w-none md:shrink-0 md:self-start lg:w-[340px]">
+                          <div className="shrink-0 border-b border-white/10 bg-slate-900/95 px-2 pb-2 pt-2 backdrop-blur">
+                            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-teal-200 md:hidden">
                               Song List
                             </div>
-                            <button
-                              type="button"
-                              className="rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-slate-200"
-                              onClick={() => setSharedPlaylistDrawerOverlay(false)}
-                            >
-                              Close
-                            </button>
-                          </div>
-                          <div className="shrink-0 border-b border-white/10 bg-slate-900/95 px-2 pb-2 pt-2 backdrop-blur">
                             <select
                               className="min-h-[38px] w-full rounded-xl border border-white/10 bg-slate-950/80 px-3 py-2 text-xs font-semibold text-slate-100 outline-none focus:border-teal-300"
                               value={playlistSingerFilter}
@@ -11292,9 +11138,7 @@ function App() {
                               ))}
                             </select>
                           </div>
-                          <div
-                            className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 pb-[calc(7.75rem+env(safe-area-inset-bottom))] md:h-full md:min-h-0 md:flex-1 md:max-h-full md:overflow-y-auto md:pb-2"
-                          >
+                          <div className="playlist-audio-song-scroll min-h-0 flex-1 px-2 pb-3 md:pb-2">
                             <div className="space-y-3 py-2">
                               {groupedPlaylistSections.map((group) => (
                                 <div
@@ -16968,17 +16812,13 @@ function App() {
                   </div>
                 </div>
               ) : (
-            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-visible px-4 pb-[calc(7.25rem+env(safe-area-inset-bottom))] pt-3 sm:px-5 sm:pt-4 md:h-full md:flex-row md:gap-4 md:overflow-hidden md:pb-4">
+            <div className="flex h-[calc(100dvh-12.5rem)] min-h-0 flex-1 flex-col gap-2 overflow-hidden px-4 pb-[calc(7.25rem+env(safe-area-inset-bottom))] pt-3 sm:px-5 sm:pt-4 md:h-full md:flex-row md:gap-4 md:pb-4">
               <div
                 ref={playlistPlayerBlockRef}
-                className={`relative z-10 flex min-h-0 w-full flex-col md:min-h-0 md:flex-1 ${
-                  widePlaylistUi && playlistDrawerOverlay
-                    ? 'pointer-events-none opacity-0 md:pointer-events-auto md:opacity-100'
-                    : 'opacity-100'
-                }`}
+                className="relative z-10 w-full shrink-0 md:min-h-0 md:flex-1 md:overflow-y-auto"
               >
               {currentPlaylistEntry ? (
-                <div className="min-h-0 max-h-[min(50vh,440px)] w-full shrink-0 overflow-y-auto overflow-x-hidden md:max-h-none md:shrink">
+                <div className="max-h-[min(38vh,320px)] w-full overflow-y-auto overflow-x-hidden md:max-h-none">
                 <div className="rounded-2xl bg-gradient-to-b from-slate-900/70 to-slate-950/60 p-4 shadow-[0_12px_36px_rgba(2,6,23,0.45)] ring-1 ring-white/10 transition-all duration-150">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -17088,28 +16928,8 @@ function App() {
               </div>
               </div>
 
-              <div
-                className={`z-20 min-h-0 rounded-2xl border border-white/10 bg-slate-900 shadow-xl transition-all duration-150 md:h-full md:w-[300px] md:shrink-0 md:overflow-hidden ${
-                  widePlaylistUi
-                    ? 'absolute inset-x-0 bottom-0 flex flex-col overflow-hidden shadow-2xl md:static md:inset-auto'
-                    : 'flex min-h-[36vh] flex-1 flex-col overflow-visible'
-                }`}
-                style={
-                  widePlaylistUi
-                    ? { top: playlistDrawerOverlay ? 0 : playlistDrawerDockTop }
-                    : undefined
-                }
-                onTouchStart={handlePlaylistDrawerTouchStart}
-                onTouchMove={handlePlaylistDrawerTouchMove}
-                onTouchEnd={handlePlaylistDrawerTouchEnd}
-              >
-                <div className={`flex shrink-0 items-center justify-center py-2 ${widePlaylistUi ? 'md:hidden' : 'hidden'}`}>
-                  <div className="h-1 w-12 rounded-full bg-white/25" />
-                </div>
-                <div
-                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-[calc(7.75rem+env(safe-area-inset-bottom))] md:h-full md:max-h-full md:pb-2"
-                  onScroll={handlePlaylistDrawerScroll}
-                >
+              <div className="z-20 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-xl md:h-full md:w-[300px] md:shrink-0">
+                <div className="playlist-audio-song-scroll min-h-0 flex-1 px-2 pb-3 md:pb-2">
                   <div className="space-y-3 pb-2">
                     <div className="sticky top-0 z-10 bg-slate-900/95 pb-2 pt-1 backdrop-blur md:pt-2">
                       <select

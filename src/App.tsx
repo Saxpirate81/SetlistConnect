@@ -10859,7 +10859,7 @@ function App() {
   if (sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) {
     return (
       <div
-        className={`shared-public-mode relative min-h-dvh overflow-x-hidden overflow-y-hidden md:overflow-y-auto bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-4 text-white sm:px-4 sm:pt-5 ${
+        className={`shared-public-mode relative min-h-dvh overflow-x-hidden overflow-y-auto bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-4 text-white sm:px-4 sm:pt-5 ${
           isIOSStandaloneMode ? 'shared-ios-standalone' : ''
         }`}
       >
@@ -10972,7 +10972,7 @@ function App() {
             {sharedPlaylistView && (
               <>
                 {sharedPublicTab === 'setlist' ? (
-                  <div className="shared-public-setlist-scroll mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain rounded-none bg-transparent p-0 pb-4 md:mb-4 md:h-[calc(100dvh-14rem)] md:max-h-[calc(100dvh-14rem)] md:pb-4 sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4 sm:pb-[calc(2rem+env(safe-area-inset-bottom))]">
+                  <div className="shared-public-setlist-scroll mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain rounded-none bg-transparent p-0 pb-[calc(8.5rem+env(safe-area-inset-bottom))] md:mb-4 md:h-[calc(100dvh-14rem)] md:max-h-[calc(100dvh-14rem)] md:pb-4 sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4 sm:pb-[calc(2rem+env(safe-area-inset-bottom))]">
                     {sharedDocsLoading && (
                       <div className="mb-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
                         Loading charts and lyrics...
@@ -16775,9 +16775,9 @@ function App() {
               ) : null}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-visible md:overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col overflow-visible md:overflow-hidden">
               {playlistModalTab === 'setlist' ? (
-                <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 pb-[calc(8.5rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pt-3 md:h-full md:pb-4">
+                <div className="h-[calc(100dvh-11.5rem)] min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain px-3 pb-[calc(8.5rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pt-3 md:h-full md:pb-4">
                   {isAdmin && (
                     <div className="mb-3 flex flex-wrap items-center gap-2">
                       <button
@@ -17089,10 +17089,10 @@ function App() {
               </div>
 
               <div
-                className={`z-20 min-h-0 overflow-visible rounded-2xl border border-white/10 bg-slate-900 shadow-xl transition-all duration-150 md:h-full md:w-[300px] md:shrink-0 md:overflow-hidden ${
+                className={`z-20 min-h-0 rounded-2xl border border-white/10 bg-slate-900 shadow-xl transition-all duration-150 md:h-full md:w-[300px] md:shrink-0 md:overflow-hidden ${
                   widePlaylistUi
-                    ? 'absolute inset-x-0 bottom-0 shadow-2xl md:static md:inset-auto'
-                    : 'flex min-h-[36vh] flex-1 flex-col'
+                    ? 'absolute inset-x-0 bottom-0 flex flex-col overflow-hidden shadow-2xl md:static md:inset-auto'
+                    : 'flex min-h-[36vh] flex-1 flex-col overflow-visible'
                 }`}
                 style={
                   widePlaylistUi
@@ -17103,13 +17103,11 @@ function App() {
                 onTouchMove={handlePlaylistDrawerTouchMove}
                 onTouchEnd={handlePlaylistDrawerTouchEnd}
               >
-                <div className={`flex items-center justify-center py-2 ${widePlaylistUi ? 'md:hidden' : 'hidden'}`}>
+                <div className={`flex shrink-0 items-center justify-center py-2 ${widePlaylistUi ? 'md:hidden' : 'hidden'}`}>
                   <div className="h-1 w-12 rounded-full bg-white/25" />
                 </div>
                 <div
-                  className={`min-h-0 overflow-visible px-2 pb-[calc(7.75rem+env(safe-area-inset-bottom))] md:h-full md:max-h-full md:overflow-y-auto md:overscroll-contain md:pb-2 ${
-                    widePlaylistUi ? 'max-h-full' : 'flex-1'
-                  }`}
+                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-[calc(7.75rem+env(safe-area-inset-bottom))] md:h-full md:max-h-full md:pb-2"
                   onScroll={handlePlaylistDrawerScroll}
                 >
                   <div className="space-y-3 pb-2">

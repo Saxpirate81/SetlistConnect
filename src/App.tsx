@@ -377,6 +377,7 @@ function App() {
   const [sharedPlaylistView, setSharedPlaylistView] = useState<SharedPlaylistView | null>(null)
   const [sharedPlaylistLoading, setSharedPlaylistLoading] = useState(false)
   const [sharedPlaylistError, setSharedPlaylistError] = useState<string | null>(null)
+  const [sharedPlaylistNotice, setSharedPlaylistNotice] = useState<string | null>(null)
   const [showSharedInstrumentPrompt, setShowSharedInstrumentPrompt] = useState(false)
   const [sharedSignupReturnView, setSharedSignupReturnView] = useState<SharedPlaylistView | null>(() => {
     try {
@@ -3569,16 +3570,7 @@ function App() {
   const youtubePlaylistAdvanceRef = useRef<() => void>(() => {})
   youtubePlaylistAdvanceRef.current = () => {
     if (!playlistAutoAdvance || visiblePlaylistEntries.length <= 1) return
-    if (sharedPlaylistView && !authUserId) {
-      const nextYoutubeIdx = visiblePlaylistEntries.findIndex(
-        (entry, i) => i > playlistIndex && isYouTubeUrl(entry.audioUrl ?? null),
-      )
-      if (nextYoutubeIdx >= 0) {
-        setPlaylistIndex(nextYoutubeIdx)
-        setPlaylistPlayNonce((current) => current + 1)
-        return
-      }
-    }
+    // Advance to the next playable track of any type (YouTube, audio file, etc.).
     movePlaylistBy(1)
   }
   const handlePlaylistYoutubeEnded = useCallback(() => {
@@ -9730,24 +9722,8 @@ function App() {
         current === (parsedPayload.setlistId || setlistId) ? null : current,
       )
     }
-    const targetSetlist = appState.setlists.find((setlist) => setlist.id === setlistId)
-    if (targetSetlist) {
-      const params = new URLSearchParams(window.location.search)
-      setSharedPlaylistView(null)
-      setSharedPlaylistError(null)
-      setSharedPlaylistLoading(false)
-      setSelectedSetlistId(setlistId)
-      setScreen('builder')
-      setPlaylistIndex(Math.min(requestedIndex, Math.max(0, targetSetlist.songIds.length - 1)))
-      setPlaylistAutoAdvance(true)
-      setPlaylistModalTab('playlist')
-      setShowPlaylistModal(true)
-      params.delete('playlist')
-      params.delete('setlist')
-      params.delete('item')
-      replaceHistorySearchParams(params)
-      return
-    }
+    // Unique links always render the guest public shell — even for the band owner —
+    // so scroll/audio behavior matches what musicians see.
     if (!supabase) {
       if (parsedPayload) return
       setSharedPlaylistError('Shared playlist is unavailable right now.')
@@ -9757,8 +9733,9 @@ function App() {
     let cancelled = false
     setSharedPlaylistLoading(true)
     setSharedPlaylistError(null)
+    setSharedPlaylistNotice(null)
     void (async () => {
-      const [gigRes, gigSongsRes, songsRes, specialReqRes, djTracksRes, gigMusiciansRes] = await Promise.all([
+      const [gigRes, gigSongsRes, specialReqRes, djTracksRes, gigMusiciansRes] = await Promise.all([
         supabase
           .from('SetlistGigs')
           .select('id, band_id, gig_name, gig_date, venue_address')
@@ -9769,10 +9746,6 @@ function App() {
           .select('id, song_id, sort_order')
           .eq('gig_id', setlistId)
           .order('sort_order', { ascending: true }),
-        supabase
-          .from('SetlistSongs')
-          .select('id, title, artist, audio_url')
-          .is('deleted_at', null),
         supabase
           .from('SetlistSpecialRequests')
           .select('id, request_type, song_id, song_title, singers, song_key, external_audio_url, dj_only')
@@ -9788,9 +9761,12 @@ function App() {
           .eq('gig_id', setlistId),
       ])
       if (cancelled) return
-      const firstError = gigRes.error || gigSongsRes.error || songsRes.error
+      const firstError = gigRes.error || gigSongsRes.error
       if (firstError) {
         if (parsedPayload) {
+          setSharedPlaylistNotice(
+            `Live refresh failed (${firstError.message ?? 'unknown error'}). Showing cached link data.`,
+          )
           setSharedPlaylistLoading(false)
           return
         }
@@ -9802,6 +9778,34 @@ function App() {
       const gig = gigRes.data
       if (!gig) {
         setSharedPlaylistError('Gig not found for this share link.')
+        setSharedPlaylistView(null)
+        setSharedPlaylistLoading(false)
+        return
+      }
+      const orderedSongIds = (gigSongsRes.data ?? []).map((row) => row.song_id).filter(Boolean)
+      let songsQuery = supabase
+        .from('SetlistSongs')
+        .select('id, title, artist, audio_url, band_id')
+        .is('deleted_at', null)
+      if (orderedSongIds.length > 0) {
+        songsQuery = songsQuery.in('id', orderedSongIds)
+      } else {
+        songsQuery = songsQuery.eq('id', '__none__')
+      }
+      if (gig.band_id) {
+        songsQuery = songsQuery.eq('band_id', gig.band_id)
+      }
+      const songsRes = await songsQuery
+      if (cancelled) return
+      if (songsRes.error) {
+        if (parsedPayload) {
+          setSharedPlaylistNotice(
+            `Song refresh failed (${songsRes.error.message}). Showing cached link data.`,
+          )
+          setSharedPlaylistLoading(false)
+          return
+        }
+        setSharedPlaylistError(songsRes.error.message ?? 'Shared playlist songs failed to load.')
         setSharedPlaylistView(null)
         setSharedPlaylistLoading(false)
         return
@@ -9821,7 +9825,6 @@ function App() {
         sharedBandName = sharedBandNameParam
       }
       const songsById = new Map((songsRes.data ?? []).map((song) => [song.id, song]))
-      const orderedSongIds = (gigSongsRes.data ?? []).map((row) => row.song_id)
       const tagsRes = orderedSongIds.length
         ? await supabase
             .from('SetlistSongTags')
@@ -9829,13 +9832,26 @@ function App() {
             .in('song_id', orderedSongIds)
         : { data: [], error: null as { message?: string } | null }
       if (cancelled) return
+      const loadGaps: string[] = []
+      if (specialReqRes.error) loadGaps.push('special requests')
+      if (djTracksRes.error) loadGaps.push('DJ tracks')
+      if (gigMusiciansRes.error) loadGaps.push('musicians')
+      if (tagsRes.error) loadGaps.push('sections')
       const tagsBySong = new Map<string, string[]>()
-      const sharedGigSectionOverrides = new Map<string, string>()
+      const sharedGigSectionOverrides = new Map<string, string[]>()
       ;(tagsRes.error ? [] : (tagsRes.data ?? [])).forEach((row) => {
         if (row.tag.startsWith(GIG_SECTION_DELETED_TAG_PREFIX)) return
         const gigSectionTag = parseGigSectionTag(row.tag)
         if (gigSectionTag?.gigId === setlistId) {
-          sharedGigSectionOverrides.set(row.song_id, gigSectionTag.section)
+          const sections = sharedGigSectionOverrides.get(row.song_id) ?? []
+          const sectionKey = gigSectionTag.section.trim().toLowerCase()
+          if (
+            gigSectionTag.section.trim() &&
+            !sections.some((item) => item.trim().toLowerCase() === sectionKey)
+          ) {
+            sections.push(gigSectionTag.section)
+            sharedGigSectionOverrides.set(row.song_id, sections)
+          }
           return
         }
         const list = tagsBySong.get(row.song_id) ?? []
@@ -10057,13 +10073,12 @@ function App() {
           })
         })
       orderedSongs.forEach((song) => {
-        const overrideSection = sharedGigSectionOverrides.get(song.id)
+        const overrideSections = sharedGigSectionOverrides.get(song.id)
         const sectionTags = uniqueList(
           (
-            overrideSection
-              ? [overrideSection]
-              : (tagsBySong.get(song.id) ?? [])
-                .filter((tag) => isSetlistTypeTag(tag))
+            overrideSections && overrideSections.length > 0
+              ? overrideSections
+              : (tagsBySong.get(song.id) ?? []).filter((tag) => isSetlistTypeTag(tag))
           )
             .map(normalizePlaylistSection)
             .filter(Boolean),
@@ -10098,6 +10113,11 @@ function App() {
         entries: playableEntries,
         allEntries: entries,
       })
+      if (loadGaps.length > 0) {
+        setSharedPlaylistNotice(`Some parts could not load: ${loadGaps.join(', ')}.`)
+      } else {
+        setSharedPlaylistNotice(null)
+      }
       setPlaylistIndex(Math.min(requestedIndex, Math.max(0, entries.length - 1)))
       setPlaylistAutoAdvance(true)
       setSharedWelcomeStep('cta')
@@ -10114,13 +10134,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [
-    activeBandName,
-    appState.setlists,
-    isSetlistTypeTag,
-    normalizePlaylistSection,
-    parseGigSectionTag,
-  ])
+  }, [activeBandName, isSetlistTypeTag, normalizePlaylistSection, parseGigSectionTag])
 
   useEffect(() => {
     if (!sharedPlaylistView) {
@@ -11080,6 +11094,11 @@ function App() {
                 {sharedPlaylistError}
               </div>
             )}
+            {sharedPlaylistNotice && (
+              <div className="mt-3 shrink-0 rounded-xl border border-amber-300/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                {sharedPlaylistNotice}
+              </div>
+            )}
             {sharedPlaylistView && (
               <>
                 {sharedPublicTab === 'setlist' ? (
@@ -11292,7 +11311,7 @@ function App() {
                                     <div className="absolute inset-0 z-0 min-h-[96px] sm:min-h-[160px]">
                                       <PlaylistYouTubePlayer
                                         ref={sharedPublicYtHandleRef}
-                                        key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared-yt`}
+                                        key="shared-public-yt-player"
                                         watchUrl={currentPlaylistEntry.audioUrl}
                                         playNonce={playlistPlayNonce}
                                         className="h-full w-full"
@@ -17119,7 +17138,7 @@ function App() {
                         <div className="absolute inset-0 z-0 min-h-[160px]">
                           <PlaylistYouTubePlayer
                             ref={playlistModalYtHandleRef}
-                            key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-modal-yt`}
+                            key="signed-in-playlist-yt-player"
                             watchUrl={currentPlaylistEntry.audioUrl}
                             playNonce={playlistPlayNonce}
                             className="h-full w-full"

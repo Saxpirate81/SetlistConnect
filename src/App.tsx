@@ -592,6 +592,8 @@ function App() {
   const playlistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
   const sharedPlaylistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
   const setlistSectionSaveInProgressRef = useRef(false)
+  const gigMusicianWriteInProgressRef = useRef(false)
+  const gigMusicianWriteCooldownTimerRef = useRef<number | null>(null)
   const sharedNowPlayingSongIdRef = useRef<string | null>(null)
   const [showAddMusicianModal, setShowAddMusicianModal] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
@@ -1691,7 +1693,6 @@ function App() {
           .filter(
             (gm) =>
               gm.gigId === currentSetlist.id &&
-              gm.status !== 'out' &&
               knownMusicianIds.has(gm.musicianId),
           )
           .map((gm) => gm.musicianId),
@@ -1777,7 +1778,6 @@ function App() {
         .filter(
           (gm) =>
             gm.gigId === currentSetlist.id &&
-            gm.status !== 'out' &&
             knownMusicianIds.has(gm.musicianId),
         )
         .map((gm) => gm.musicianId),
@@ -3866,7 +3866,7 @@ function App() {
     return (gigLockedSongIdsByGig[currentSetlist.id] ?? []).includes(songId)
   }, [currentSetlist, gigLockedSongIdsByGig])
   const markGigSongAsSelected = (songId: string, options?: { forceResend?: boolean }) => {
-    if (!currentSetlist) return
+    if (!currentSetlist || !gigMode) return
     const forceResend = Boolean(options?.forceResend)
     if (isGigSongLocked(songId) && !forceResend) {
       setPendingResendGigSongId(songId)
@@ -4801,6 +4801,7 @@ function App() {
         },
         ...prev.setlists,
       ],
+      currentSongId: null,
     }))
     if (supabase && activeBandId) {
       runSupabase(
@@ -4813,7 +4814,11 @@ function App() {
       )
     }
     setGigHiddenSpecialSection((prev) => ({ ...prev, [newId]: false }))
+    setNowPlayingByGig((prev) => ({ ...prev, [newId]: null }))
+    setGigMode(false)
+    setDismissedUpNextId(null)
     setSelectedSetlistId(newId)
+    setActiveGigId(newId)
     setScreen('builder')
   }
 
@@ -6376,121 +6381,215 @@ function App() {
     )
   }
 
+  const beginGigMusicianWrite = () => {
+    gigMusicianWriteInProgressRef.current = true
+    if (gigMusicianWriteCooldownTimerRef.current) {
+      window.clearTimeout(gigMusicianWriteCooldownTimerRef.current)
+      gigMusicianWriteCooldownTimerRef.current = null
+    }
+  }
+
+  const endGigMusicianWrite = () => {
+    if (gigMusicianWriteCooldownTimerRef.current) {
+      window.clearTimeout(gigMusicianWriteCooldownTimerRef.current)
+    }
+    // Keep realtime suppressed briefly so delayed DELETE/INSERT events cannot wipe local state.
+    gigMusicianWriteCooldownTimerRef.current = window.setTimeout(() => {
+      gigMusicianWriteInProgressRef.current = false
+      gigMusicianWriteCooldownTimerRef.current = null
+    }, 900)
+  }
+
+  /** Always target the open setlist — never a stale dropdown selection. */
+  const getMusicianTargetGigId = () => currentSetlist?.id || ''
+
   const importRosterToGig = () => {
-    if (!activeGigId) return
+    const gigId = getMusicianTargetGigId()
+    if (!gigId) return
     const coreMusicians = appState.musicians.filter((musician) => musician.roster === 'core')
+    const nextAssignments = coreMusicians.map((musician) => ({
+      gigId,
+      musicianId: musician.id,
+      status: 'active' as const,
+    }))
     commitChange('Import roster', (prev) => ({
       ...prev,
       gigMusicians: [
-        ...prev.gigMusicians.filter((gm) => gm.gigId !== activeGigId),
-        ...coreMusicians.map((musician) => ({
-          gigId: activeGigId,
-          musicianId: musician.id,
-          status: 'active' as const,
-        })),
+        ...prev.gigMusicians.filter((gm) => gm.gigId !== gigId),
+        ...nextAssignments,
       ],
     }))
     if (supabase) {
+      beginGigMusicianWrite()
       runSupabase(
         (async () => {
-          const ensureResult = await ensureGigExistsInSupabase(activeGigId)
-          if (ensureResult.error) return { error: ensureResult.error }
-          const { error: deleteError } = await supabase
-            .from('SetlistGigMusicians')
-            .delete()
-            .eq('gig_id', activeGigId)
-          if (deleteError) return { error: deleteError }
-          const { error: insertError } = await supabase.from('SetlistGigMusicians').insert(
-            coreMusicians.map((musician) => withBandId({
-              id: createId(),
-              gig_id: activeGigId,
-              musician_id: musician.id,
-              status: 'active',
-            })),
-          )
-          return { error: insertError }
+          try {
+            const ensureResult = await ensureGigExistsInSupabase(gigId)
+            if (ensureResult.error) return { error: ensureResult.error }
+            const existingQuery = supabase
+              .from('SetlistGigMusicians')
+              .select('id, musician_id, status')
+              .eq('gig_id', gigId)
+            const existingRes = activeBandId
+              ? await existingQuery.eq('band_id', activeBandId)
+              : await existingQuery
+            if (existingRes.error) return { error: existingRes.error }
+            const existingRows = existingRes.data ?? []
+            const existingByMusician = new Map(
+              existingRows.map((row) => [row.musician_id as string, row]),
+            )
+            const desiredMusicianIds = new Set(coreMusicians.map((musician) => musician.id))
+            const toInsert = coreMusicians.filter((musician) => !existingByMusician.has(musician.id))
+            const toDeleteIds = existingRows
+              .filter((row) => !desiredMusicianIds.has(row.musician_id as string))
+              .map((row) => row.id as string)
+            const toReactivateIds = existingRows
+              .filter(
+                (row) =>
+                  desiredMusicianIds.has(row.musician_id as string) && row.status !== 'active',
+              )
+              .map((row) => row.id as string)
+
+            if (toDeleteIds.length > 0) {
+              const { error: deleteError } = await supabase
+                .from('SetlistGigMusicians')
+                .delete()
+                .in('id', toDeleteIds)
+              if (deleteError) return { error: deleteError }
+            }
+            if (toReactivateIds.length > 0) {
+              const { error: updateError } = await supabase
+                .from('SetlistGigMusicians')
+                .update({ status: 'active' })
+                .in('id', toReactivateIds)
+              if (updateError) return { error: updateError }
+            }
+            if (toInsert.length > 0) {
+              const { error: insertError } = await supabase.from('SetlistGigMusicians').insert(
+                toInsert.map((musician) =>
+                  withBandId({
+                    id: createId(),
+                    gig_id: gigId,
+                    musician_id: musician.id,
+                    status: 'active',
+                  }),
+                ),
+              )
+              if (insertError) return { error: insertError }
+            }
+            return { error: null }
+          } finally {
+            endGigMusicianWrite()
+          }
         })(),
       )
     }
   }
 
   const toggleGigMusicianStatus = (musicianId: string) => {
-    if (!activeGigId) return
+    const gigId = getMusicianTargetGigId()
+    if (!gigId) return
+    let nextStatus: 'active' | 'out' | null = null
     commitChange('Toggle musician', (prev) => ({
       ...prev,
-      gigMusicians: prev.gigMusicians.map((gm) =>
-        gm.gigId === activeGigId && gm.musicianId === musicianId
-          ? { ...gm, status: gm.status === 'active' ? 'out' : 'active' }
-          : gm,
-      ),
+      gigMusicians: prev.gigMusicians.map((gm) => {
+        if (gm.gigId !== gigId || gm.musicianId !== musicianId) return gm
+        nextStatus = gm.status === 'active' ? 'out' : 'active'
+        return { ...gm, status: nextStatus }
+      }),
     }))
-    const current = appState.gigMusicians.find(
-      (gm) => gm.gigId === activeGigId && gm.musicianId === musicianId,
-    )
-    if (supabase && current) {
-      const nextStatus = current.status === 'active' ? 'out' : 'active'
+    if (supabase && nextStatus) {
+      beginGigMusicianWrite()
       runSupabase(
-        supabase
-          .from('SetlistGigMusicians')
-          .update({ status: nextStatus })
-          .eq('gig_id', activeGigId)
-          .eq('musician_id', musicianId),
+        (async () => {
+          try {
+            const { error } = await supabase
+              .from('SetlistGigMusicians')
+              .update({ status: nextStatus })
+              .eq('gig_id', gigId)
+              .eq('musician_id', musicianId)
+            return { error }
+          } finally {
+            endGigMusicianWrite()
+          }
+        })(),
       )
     }
   }
 
   const addMusicianToGig = (musicianId: string) => {
-    if (!activeGigId) return
-    commitChange('Add musician to gig', (prev) => ({
-      ...prev,
-      gigMusicians: prev.gigMusicians.some(
-        (gm) => gm.gigId === activeGigId && gm.musicianId === musicianId,
-      )
-        ? prev.gigMusicians
-        : [
-            ...prev.gigMusicians,
-            { gigId: activeGigId, musicianId, status: 'active' },
-          ],
-    }))
-    if (supabase) {
+    const gigId = getMusicianTargetGigId()
+    if (!gigId) return
+    let didAdd = false
+    commitChange('Add musician to gig', (prev) => {
+      if (prev.gigMusicians.some((gm) => gm.gigId === gigId && gm.musicianId === musicianId)) {
+        return prev
+      }
+      didAdd = true
+      return {
+        ...prev,
+        gigMusicians: [
+          ...prev.gigMusicians,
+          { gigId, musicianId, status: 'active' },
+        ],
+      }
+    })
+    if (supabase && didAdd) {
+      beginGigMusicianWrite()
       runSupabase(
         (async () => {
-          const ensureResult = await ensureGigExistsInSupabase(activeGigId)
-          if (ensureResult.error) return { error: ensureResult.error }
-          const { error } = await supabase.from('SetlistGigMusicians').insert(withBandId({
-            id: createId(),
-            gig_id: activeGigId,
-            musician_id: musicianId,
-            status: 'active',
-          }))
-          return { error }
+          try {
+            const ensureResult = await ensureGigExistsInSupabase(gigId)
+            if (ensureResult.error) return { error: ensureResult.error }
+            const { error } = await supabase.from('SetlistGigMusicians').insert(
+              withBandId({
+                id: createId(),
+                gig_id: gigId,
+                musician_id: musicianId,
+                status: 'active',
+              }),
+            )
+            return { error }
+          } finally {
+            endGigMusicianWrite()
+          }
         })(),
       )
     }
   }
 
   const removeMusicianFromGig = (musicianId: string) => {
-    if (!activeGigId) return
+    const gigId = getMusicianTargetGigId()
+    if (!gigId) return
     commitChange('Remove musician from gig', (prev) => ({
       ...prev,
       gigMusicians: prev.gigMusicians.filter(
-        (gm) => !(gm.gigId === activeGigId && gm.musicianId === musicianId),
+        (gm) => !(gm.gigId === gigId && gm.musicianId === musicianId),
       ),
     }))
     if (supabase) {
+      beginGigMusicianWrite()
       runSupabase(
-        supabase
-          .from('SetlistGigMusicians')
-          .delete()
-          .eq('gig_id', activeGigId)
-          .eq('musician_id', musicianId),
+        (async () => {
+          try {
+            const { error } = await supabase
+              .from('SetlistGigMusicians')
+              .delete()
+              .eq('gig_id', gigId)
+              .eq('musician_id', musicianId)
+            return { error }
+          } finally {
+            endGigMusicianWrite()
+          }
+        })(),
       )
     }
   }
 
   const addSubAndAssign = () => {
     const name = newSubName.trim()
-    if (!name || !activeGigId) return
+    const gigId = getMusicianTargetGigId()
+    if (!name || !gigId) return
     if (!canCreateMusicians()) return
     const id = createId()
     commitChange('Add sub to gig', (prev) => ({
@@ -6509,31 +6608,42 @@ function App() {
       ],
       gigMusicians: [
         ...prev.gigMusicians,
-        { gigId: activeGigId, musicianId: id, status: 'active' },
+        { gigId, musicianId: id, status: 'active' },
       ],
     }))
     if (supabase) {
+      beginGigMusicianWrite()
       runSupabase(
         (async () => {
-          const ensureResult = await ensureGigExistsInSupabase(activeGigId)
-          if (ensureResult.error) return { error: ensureResult.error }
-          const { error: musicianInsertError } = await supabase.from('SetlistMusicians').insert(withBandId({
-            id,
-            name,
-            roster: 'sub',
-            email: newSubEmail.trim() || null,
-            phone: newSubPhone.trim() || null,
-            instruments: newSubInstruments,
-            singer: newSubSinger || null,
-          }))
-          if (musicianInsertError) return { error: musicianInsertError }
-          const { error: gigMusicianInsertError } = await supabase.from('SetlistGigMusicians').insert(withBandId({
-            id: createId(),
-            gig_id: activeGigId,
-            musician_id: id,
-            status: 'active',
-          }))
-          return { error: gigMusicianInsertError }
+          try {
+            const ensureResult = await ensureGigExistsInSupabase(gigId)
+            if (ensureResult.error) return { error: ensureResult.error }
+            const { error: musicianInsertError } = await supabase.from('SetlistMusicians').insert(
+              withBandId({
+                id,
+                name,
+                roster: 'sub',
+                email: newSubEmail.trim() || null,
+                phone: newSubPhone.trim() || null,
+                instruments: newSubInstruments,
+                singer: newSubSinger || null,
+              }),
+            )
+            if (musicianInsertError) return { error: musicianInsertError }
+            const { error: gigMusicianInsertError } = await supabase
+              .from('SetlistGigMusicians')
+              .insert(
+                withBandId({
+                  id: createId(),
+                  gig_id: gigId,
+                  musician_id: id,
+                  status: 'active',
+                }),
+              )
+            return { error: gigMusicianInsertError }
+          } finally {
+            endGigMusicianWrite()
+          }
         })(),
       )
     }
@@ -8425,7 +8535,8 @@ function App() {
       documents,
       charts,
       musicians,
-      gigMusicians,
+      // Preserve in-flight musician assignments if a local write is still settling.
+      gigMusicians: gigMusicianWriteInProgressRef.current ? prev.gigMusicians : gigMusicians,
     }))
 
     if (setlists.length) {
@@ -8883,7 +8994,7 @@ function App() {
           </div>
         </div>
       </header>
-      {appState.currentSongId && appState.currentSongId !== dismissedUpNextId && (
+      {gigMode && appState.currentSongId && appState.currentSongId !== dismissedUpNextId && (
         <div
           ref={adminUpNextBannerRef}
           role="button"
@@ -10404,7 +10515,7 @@ function App() {
 
   useEffect(() => {
     const isAdminUpNextVisible = Boolean(
-      appState.currentSongId && appState.currentSongId !== dismissedUpNextId,
+      gigMode && appState.currentSongId && appState.currentSongId !== dismissedUpNextId,
     )
     if (!isAdminUpNextVisible) {
       setAdminUpNextBannerBottom(0)
@@ -10419,7 +10530,7 @@ function App() {
     return () => {
       window.removeEventListener('resize', syncBannerBottom)
     }
-  }, [appState.currentSongId, dismissedUpNextId, screen])
+  }, [appState.currentSongId, dismissedUpNextId, gigMode, screen])
 
   useEffect(() => {
     const client = supabase
@@ -10428,9 +10539,11 @@ function App() {
     const handleRealtimeChange = () => {
       if ((window as typeof window & { __SC_SUPPRESS_REALTIME__?: boolean }).__SC_SUPPRESS_REALTIME__) return
       if (setlistSectionSaveInProgressRef.current) return
+      if (gigMusicianWriteInProgressRef.current) return
       if (reloadTimer) return
       reloadTimer = window.setTimeout(() => {
         reloadTimer = null
+        if (gigMusicianWriteInProgressRef.current) return
         void loadSupabaseData()
       }, 250)
     }
@@ -11901,6 +12014,8 @@ function App() {
                             className="min-h-[44px] rounded-xl bg-teal-400/90 px-3 py-2 text-sm font-semibold text-slate-950"
                             onClick={() => {
                               setSelectedSetlistId(setlist.id)
+                              setActiveGigId(setlist.id)
+                              setGigMode(false)
                               setScreen('builder')
                             }}
                           >
@@ -12004,6 +12119,8 @@ function App() {
                             className="min-h-[44px] rounded-xl bg-teal-400/90 px-3 py-2 text-sm font-semibold text-slate-950"
                             onClick={() => {
                               setSelectedSetlistId(setlist.id)
+                              setActiveGigId(setlist.id)
+                              setGigMode(false)
                               setScreen('builder')
                             }}
                           >
@@ -13463,8 +13580,8 @@ function App() {
         )}
       </main>
 
-      {/* Quick-add floating button — only in builder with an active setlist */}
-      {screen === 'builder' && currentSetlist && (
+      {/* Quick-add floating button — live setlist view for band leaders */}
+      {isAdmin && screen === 'builder' && gigMode && currentSetlist && (
         <QuickAddSong
           gigId={currentSetlist.id}
           onSongAdded={(songId, songTitle, songArtist) => {
@@ -17598,7 +17715,7 @@ function App() {
                 <button
                   className="min-w-[92px] rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
                   onClick={() => {
-                    if (newSubName.trim() && activeGigId) {
+                    if (newSubName.trim() && (currentSetlist?.id || activeGigId)) {
                       addSubAndAssign()
                       setShowSubModal(false)
                     }
@@ -18287,20 +18404,15 @@ function App() {
                                 setDragOverSpecialRequestId(null)
                               }}
                               onClick={() => {
-                                if (gigMode && request.songId) {
-                                  markGigSongAsSelected(request.songId)
-                                  return
-                                }
-                                if (!gigMode && request.songId) {
+                                // Call songs from the Active Setlist sheet; builder taps edit/open only.
+                                if (request.songId) {
                                   openSingerModal(request.songId)
                                 }
                               }}
                               onKeyDown={(event) => {
                                 if (event.key === 'Enter' || event.key === ' ') {
                                   event.preventDefault()
-                                  if (gigMode && request.songId) {
-                                    markGigSongAsSelected(request.songId)
-                                  } else if (!gigMode && request.songId) {
+                                  if (request.songId) {
                                     openSingerModal(request.songId)
                                   }
                                 }
@@ -18438,24 +18550,16 @@ function App() {
                   </p>
                   {!buildCompletion.musicians && (
                     <>
-                      <div className="mt-3 flex flex-wrap gap-2">
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
                         <button
                           className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-200"
                           onClick={importRosterToGig}
                         >
                           Import roster
                         </button>
-                        <select
-                          className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                          value={activeGigId}
-                          onChange={(event) => setActiveGigId(event.target.value)}
-                        >
-                          {appState.setlists.map((gig) => (
-                            <option key={gig.id} value={gig.id}>
-                              {gig.gigName} · {formatGigDate(gig.date)}
-                            </option>
-                          ))}
-                        </select>
+                        <span className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+                          {currentSetlist.gigName} · {formatGigDate(currentSetlist.date)}
+                        </span>
                       </div>
                       <div className="mt-4 rounded-2xl border border-white/10 bg-slate-900/70 p-4 text-xs">
                         <div className="text-[10px] uppercase tracking-wide text-slate-400">
@@ -18510,7 +18614,7 @@ function App() {
                   <div className="mt-4 space-y-2">
                     {appState.musicians.map((musician) => {
                       const gigEntry = appState.gigMusicians.find(
-                        (gm) => gm.gigId === activeGigId && gm.musicianId === musician.id,
+                        (gm) => gm.gigId === currentSetlist.id && gm.musicianId === musician.id,
                       )
                       if (!gigEntry) return null
                       return (
@@ -18787,19 +18891,15 @@ function App() {
                                   setDragOverSectionSongId(null)
                                 }}
                                 onClick={() => {
-                                  if (gigMode) {
-                                    markGigSongAsSelected(song.id)
-                                    if (isLockedInGigMode) return
-                                  }
+                                  // Calling songs is done from Active Setlist / Gig Mode sheet only.
+                                  // Opening docs from the builder must not mark a song as called.
+                                  if (gigMode && isLockedInGigMode) return
                                   openDocsForSong(song.id)
                                 }}
                                 onKeyDown={(event) => {
                                   if (event.key === 'Enter' || event.key === ' ') {
                                     event.preventDefault()
-                                    if (gigMode) {
-                                      markGigSongAsSelected(song.id)
-                                      if (isLockedInGigMode) return
-                                    }
+                                    if (gigMode && isLockedInGigMode) return
                                     openDocsForSong(song.id)
                                   }
                                 }}

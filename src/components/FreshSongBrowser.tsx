@@ -65,6 +65,15 @@ export function FreshSongBrowser({
     }
     return ['All', ...Array.from(set).sort()]
   }, [freshSongs])
+  const genreCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    counts.set('All', freshSongs.length)
+    for (const song of freshSongs) {
+      if (!song.genre) continue
+      counts.set(song.genre, (counts.get(song.genre) ?? 0) + 1)
+    }
+    return counts
+  }, [freshSongs])
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
@@ -140,7 +149,8 @@ export function FreshSongBrowser({
                 }`}
                 onClick={() => setGenreFilter(g)}
               >
-                {g}
+                <span>{g}</span>
+                <span className="ml-1 text-[10px] opacity-80">({genreCounts.get(g) ?? 0})</span>
               </button>
             ))}
           </div>

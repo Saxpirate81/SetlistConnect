@@ -1,16 +1,9 @@
 /**
  * QuickAddSong
  *
- * A floating "+ Quick Add" button always visible during gig mode / builder.
- * Opens a minimal bottom sheet: Song Name + Artist.
- * On submit → instantly creates the song and adds to the current setlist.
- * YouTube search runs in the background — no blocking.
- *
- * Usage in builder screen:
- *   <QuickAddSong
- *     gigId={currentSetlist.id}
- *     onSongAdded={(song) => { ... add to setlist state ... }}
- *   />
+ * Floating "+ Quick Add" button for gig mode / builder.
+ * Creates a SetlistSongs row and links it via SetlistGigSongs.
+ * YouTube search runs in the background after the song is added.
  */
 
 import { useRef, useState } from 'react'
@@ -21,14 +14,27 @@ import { useAppContext } from '../context/AppContext'
 
 type QuickAddSongProps = {
   gigId: string
-  /** Called after the song is created and added — lets parent update setlist state */
+  /** Current song count on the gig — used for sort_order. */
+  sortOrder?: number
+  /** Called after the song is created and linked to the gig. */
   onSongAdded: (songId: string, title: string, artist: string) => void
+  /** Optional: called when background YouTube match lands. */
+  onSongAudioFound?: (songId: string, youtubeUrl: string, youtubeVideoId: string) => void
 }
 
 type Phase = 'closed' | 'form' | 'saving' | 'done'
 
-export function QuickAddSong({ gigId, onSongAdded }: QuickAddSongProps) {
-  const { activeBandId, showToast } = useAppContext()
+const suppressRealtime = (on: boolean) => {
+  ;(window as typeof window & { __SC_SUPPRESS_REALTIME__?: boolean }).__SC_SUPPRESS_REALTIME__ = on
+}
+
+export function QuickAddSong({
+  gigId,
+  sortOrder = 0,
+  onSongAdded,
+  onSongAudioFound,
+}: QuickAddSongProps) {
+  const { activeBandId, showToast, updateSong } = useAppContext()
   const [phase, setPhase] = useState<Phase>('closed')
   const [title, setTitle] = useState('')
   const [artist, setArtist] = useState('')
@@ -40,7 +46,6 @@ export function QuickAddSong({ gigId, onSongAdded }: QuickAddSongProps) {
     setArtist('')
     setError(null)
     setPhase('form')
-    // Focus title after paint
     requestAnimationFrame(() => titleRef.current?.focus())
   }
 
@@ -54,78 +59,88 @@ export function QuickAddSong({ gigId, onSongAdded }: QuickAddSongProps) {
   const handleSubmit = async () => {
     const cleanTitle = title.trim()
     const cleanArtist = artist.trim()
-    if (!cleanTitle) { setError('Song name is required'); return }
-    if (!cleanArtist) { setError('Artist is required'); return }
-    if (!supabase || !activeBandId) { setError('Not connected'); return }
-
-    setPhase('saving')
-
-    // 1. Create song in DB immediately (no YouTube yet — speed first)
-    const { data: songRow, error: insertErr } = await supabase
-      .from('songs')
-      .insert({
-        band_id: activeBandId,
-        title: cleanTitle,
-        artist: cleanArtist,
-        tags: [],
-        keys: [],
-        special_played_count: 0,
-        youtube_verified: false,
-      })
-      .select('id')
-      .single()
-
-    if (insertErr || !songRow) {
-      setError(insertErr?.message ?? 'Failed to create song')
-      setPhase('form')
+    if (!cleanTitle) {
+      setError('Song name is required')
+      return
+    }
+    if (!cleanArtist) {
+      setError('Artist is required')
+      return
+    }
+    if (!supabase || !activeBandId) {
+      setError('Not connected')
       return
     }
 
-    const songId: string = songRow.id
+    setPhase('saving')
+    const songId = crypto.randomUUID()
+    const gigSongId = crypto.randomUUID()
+    suppressRealtime(true)
 
-    // 2. Add song to gig setlist (append to end)
-    // Fetch current song IDs first
-    const { data: gigRow } = await supabase
-      .from('setlists')
-      .select('song_ids')
-      .eq('id', gigId)
-      .single()
+    try {
+      const { error: insertErr } = await supabase.from('SetlistSongs').insert({
+        id: songId,
+        band_id: activeBandId,
+        title: cleanTitle,
+        artist: cleanArtist || null,
+        audio_url: null,
+        youtube_verified: false,
+      })
 
-    const currentIds: string[] = gigRow?.song_ids ?? []
-    if (!currentIds.includes(songId)) {
-      await supabase
-        .from('setlists')
-        .update({ song_ids: [...currentIds, songId] })
-        .eq('id', gigId)
-    }
+      if (insertErr) {
+        setError(insertErr.message || 'Failed to create song')
+        setPhase('form')
+        return
+      }
 
-    // 3. Tell parent immediately — UI updates before YouTube search completes
-    setPhase('done')
-    onSongAdded(songId, cleanTitle, cleanArtist)
-    showToast(`"${cleanTitle}" added to gig ✓`)
-    close()
+      const { error: gigErr } = await supabase.from('SetlistGigSongs').insert({
+        id: gigSongId,
+        band_id: activeBandId,
+        gig_id: gigId,
+        song_id: songId,
+        sort_order: sortOrder,
+      })
 
-    // 4. Background: search YouTube and save result (no await in UI path)
-    void (async () => {
-      const videos = await searchYouTube(cleanTitle, cleanArtist, 1)
-      if (videos.length === 0) return
-      const best = videos[0]
-      const videoId = getYouTubeVideoId(best.url)
-      if (!videoId) return
-      await supabase
-        .from('songs')
-        .update({
-          audio_url: best.url,
-          youtube_video_id: videoId,
-          // Don't set youtube_verified — user still needs to confirm
+      if (gigErr) {
+        // Best-effort cleanup so we don't leave an orphan song row.
+        await supabase.from('SetlistSongs').delete().eq('id', songId)
+        setError(gigErr.message || 'Failed to add song to gig')
+        setPhase('form')
+        return
+      }
+
+      setPhase('done')
+      onSongAdded(songId, cleanTitle, cleanArtist)
+      showToast(`"${cleanTitle}" added to gig`)
+      close()
+
+      void (async () => {
+        const videos = await searchYouTube(cleanTitle, cleanArtist, 1)
+        if (videos.length === 0) return
+        const best = videos[0]
+        const videoId = getYouTubeVideoId(best.url)
+        if (!videoId) return
+        const { error: ytErr } = await supabase
+          .from('SetlistSongs')
+          .update({
+            audio_url: best.url,
+            youtube_video_id: videoId,
+          })
+          .eq('id', songId)
+        if (ytErr) return
+        updateSong(songId, {
+          youtubeUrl: best.url,
+          youtubeVideoId: videoId,
         })
-        .eq('id', songId)
-    })()
+        onSongAudioFound?.(songId, best.url, videoId)
+      })()
+    } finally {
+      window.setTimeout(() => suppressRealtime(false), 900)
+    }
   }
 
   return (
     <>
-      {/* Floating trigger button */}
       <button
         type="button"
         className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] right-4 z-40 flex items-center gap-2 rounded-full bg-teal-400/90 px-4 py-3 text-sm font-semibold text-slate-950 shadow-[0_8px_24px_rgba(20,184,166,0.45)] active:scale-95 transition-transform"
@@ -136,7 +151,6 @@ export function QuickAddSong({ gigId, onSongAdded }: QuickAddSongProps) {
         <span>Quick Add</span>
       </button>
 
-      {/* Bottom sheet */}
       {phase !== 'closed' && (
         <div
           className="fixed inset-0 z-[160] flex items-end justify-center bg-slate-950/70"
@@ -171,7 +185,10 @@ export function QuickAddSong({ gigId, onSongAdded }: QuickAddSongProps) {
                   className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-800/80 px-4 py-3 text-white placeholder-slate-500 outline-none focus:border-teal-400"
                   placeholder="e.g. September"
                   value={title}
-                  onChange={(e) => { setTitle(e.target.value); setError(null) }}
+                  onChange={(e) => {
+                    setTitle(e.target.value)
+                    setError(null)
+                  }}
                   onKeyDown={(e) => e.key === 'Enter' && void handleSubmit()}
                   autoComplete="off"
                   autoCorrect="off"
@@ -188,7 +205,10 @@ export function QuickAddSong({ gigId, onSongAdded }: QuickAddSongProps) {
                   className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-800/80 px-4 py-3 text-white placeholder-slate-500 outline-none focus:border-teal-400"
                   placeholder="e.g. Earth, Wind & Fire"
                   value={artist}
-                  onChange={(e) => { setArtist(e.target.value); setError(null) }}
+                  onChange={(e) => {
+                    setArtist(e.target.value)
+                    setError(null)
+                  }}
                   onKeyDown={(e) => e.key === 'Enter' && void handleSubmit()}
                   autoComplete="off"
                   autoCorrect="off"

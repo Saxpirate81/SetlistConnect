@@ -592,8 +592,11 @@ function App() {
   const playlistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
   const sharedPlaylistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
   const setlistSectionSaveInProgressRef = useRef(false)
+  const setlistSectionSaveCooldownTimerRef = useRef<number | null>(null)
   const gigMusicianWriteInProgressRef = useRef(false)
   const gigMusicianWriteCooldownTimerRef = useRef<number | null>(null)
+  const appDataWriteInProgressRef = useRef(false)
+  const appDataWriteCooldownTimerRef = useRef<number | null>(null)
   const sharedNowPlayingSongIdRef = useRef<string | null>(null)
   const [showAddMusicianModal, setShowAddMusicianModal] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
@@ -4793,6 +4796,7 @@ function App() {
   const createBlankSetlist = () => {
     if (!canCreateGigs()) return
     const newId = createId()
+    const gigDate = new Date().toISOString().slice(0, 10)
     logger.log('gig_created', { gigId: newId })
     commitChange('Create setlist', (prev) => ({
       ...prev,
@@ -4800,30 +4804,49 @@ function App() {
         {
           id: newId,
           gigName: 'New Gig',
-          date: new Date().toISOString().slice(0, 10),
+          date: gigDate,
           songIds: [],
         },
         ...prev.setlists,
       ],
       currentSongId: null,
     }))
-    if (supabase && activeBandId) {
-      runSupabase(
-        supabase.from('SetlistGigs').insert(withBandId({
-          id: newId,
-          gig_name: 'New Gig',
-          gig_date: new Date().toISOString().slice(0, 10),
-          venue_address: '',
-        })),
-      )
-    }
     setGigHiddenSpecialSection((prev) => ({ ...prev, [newId]: false }))
     setNowPlayingByGig((prev) => ({ ...prev, [newId]: null }))
-    setGigMode(false)
     setDismissedUpNextId(null)
     setSelectedSetlistId(newId)
     setActiveGigId(newId)
     setScreen('builder')
+    // Clear any leftover live-call UI without touching the previous gig's DB now-playing yet.
+    setGigMode(false)
+    setShowGigSetlistSheet(false)
+    setShowGigModeLaunchModal(false)
+    if (supabase && activeBandId) {
+      beginAppDataWrite()
+      void (async () => {
+        try {
+          const { error } = await supabase.from('SetlistGigs').insert(
+            withBandId({
+              id: newId,
+              gig_name: 'New Gig',
+              gig_date: gigDate,
+              venue_address: '',
+            }),
+          )
+          if (error) {
+            reportSupabaseError(error)
+            commitChange('Rollback create setlist', (prev) => ({
+              ...prev,
+              setlists: prev.setlists.filter((setlist) => setlist.id !== newId),
+            }))
+            setSelectedSetlistId('')
+            setActiveGigId('')
+          }
+        } finally {
+          endAppDataWrite()
+        }
+      })()
+    }
   }
 
   const deleteGig = (setlistId: string) => {
@@ -4893,27 +4916,45 @@ function App() {
       setSelectedSongIds([])
       return
     }
+    const previousSongIds = currentSetlist.songIds
+    const gigId = currentSetlist.id
     commitChange('Add songs', (prev) => ({
       ...prev,
       setlists: prev.setlists.map((setlist) =>
-        setlist.id === currentSetlist.id
+        setlist.id === gigId
           ? { ...setlist, songIds: [...setlist.songIds, ...songsToAdd] }
           : setlist,
       ),
     }))
-    if (supabase) {
-      runSupabase(
-        supabase.from('SetlistGigSongs').insert(
-          songsToAdd.map((songId, index) => withBandId({
-            id: createId(),
-            gig_id: currentSetlist.id,
-            song_id: songId,
-            sort_order: (currentSetlist.songIds.length ?? 0) + index,
-          })),
-        ),
-      )
-    }
     setSelectedSongIds([])
+    if (supabase) {
+      beginAppDataWrite()
+      void (async () => {
+        try {
+          const { error } = await supabase.from('SetlistGigSongs').insert(
+            songsToAdd.map((songId, index) =>
+              withBandId({
+                id: createId(),
+                gig_id: gigId,
+                song_id: songId,
+                sort_order: previousSongIds.length + index,
+              }),
+            ),
+          )
+          if (error) {
+            reportSupabaseError(error)
+            commitChange('Rollback add songs', (prev) => ({
+              ...prev,
+              setlists: prev.setlists.map((setlist) =>
+                setlist.id === gigId ? { ...setlist, songIds: previousSongIds } : setlist,
+              ),
+            }))
+          }
+        } finally {
+          endAppDataWrite()
+        }
+      })()
+    }
   }
 
   const setSongsForGigSection = (
@@ -5380,6 +5421,10 @@ function App() {
     }
 
     setlistSectionSaveInProgressRef.current = true
+    if (setlistSectionSaveCooldownTimerRef.current) {
+      window.clearTimeout(setlistSectionSaveCooldownTimerRef.current)
+      setlistSectionSaveCooldownTimerRef.current = null
+    }
     setSectionSaveStatus('Saving setlist...')
     try {
       const requireSave = async (
@@ -5483,7 +5528,11 @@ function App() {
       window.setTimeout(() => setSectionSaveStatus(null), 3200)
       return false
     } finally {
-      setlistSectionSaveInProgressRef.current = false
+      // Keep suppress live briefly so delayed DELETE/INSERT realtime events cannot wipe the save.
+      setlistSectionSaveCooldownTimerRef.current = window.setTimeout(() => {
+        setlistSectionSaveInProgressRef.current = false
+        setlistSectionSaveCooldownTimerRef.current = null
+      }, 900)
     }
   }
 
@@ -6402,6 +6451,47 @@ function App() {
       gigMusicianWriteInProgressRef.current = false
       gigMusicianWriteCooldownTimerRef.current = null
     }, 900)
+  }
+
+  const beginAppDataWrite = () => {
+    appDataWriteInProgressRef.current = true
+    if (appDataWriteCooldownTimerRef.current) {
+      window.clearTimeout(appDataWriteCooldownTimerRef.current)
+      appDataWriteCooldownTimerRef.current = null
+    }
+  }
+
+  const endAppDataWrite = () => {
+    if (appDataWriteCooldownTimerRef.current) {
+      window.clearTimeout(appDataWriteCooldownTimerRef.current)
+    }
+    appDataWriteCooldownTimerRef.current = window.setTimeout(() => {
+      appDataWriteInProgressRef.current = false
+      appDataWriteCooldownTimerRef.current = null
+    }, 900)
+  }
+
+  const isAppWriteInFlight = () =>
+    Boolean(
+      setlistSectionSaveInProgressRef.current ||
+        gigMusicianWriteInProgressRef.current ||
+        appDataWriteInProgressRef.current,
+    )
+
+  const exitGigMode = () => {
+    // Clear Up Next so leaving Gig Mode does not resurrect a "called" song in the builder.
+    if (currentSetlist) {
+      setGigCurrentSong(null)
+      setNowPlayingByGig((prev) => ({ ...prev, [currentSetlist.id]: null }))
+    } else {
+      setAppState((prev) =>
+        prev.currentSongId == null ? prev : { ...prev, currentSongId: null },
+      )
+    }
+    setGigMode(false)
+    setShowGigSetlistSheet(false)
+    setShowGigModeLaunchModal(false)
+    setDismissedUpNextId(null)
   }
 
   /** Always target the open setlist — never a stale dropdown selection. */
@@ -8528,20 +8618,26 @@ function App() {
         .in('tag', pollutedTagValues)
     }
 
-    setAppState((prev) => ({
-      ...prev,
-      songs,
-      setlists,
-      specialRequests,
-      tagsCatalog,
-      specialTypes,
-      singersCatalog,
-      documents,
-      charts,
-      musicians,
-      // Preserve in-flight musician assignments if a local write is still settling.
-      gigMusicians: gigMusicianWriteInProgressRef.current ? prev.gigMusicians : gigMusicians,
-    }))
+    setAppState((prev) => {
+      const preserveCore = isAppWriteInFlight()
+      return {
+        ...prev,
+        songs: preserveCore ? prev.songs : songs,
+        setlists: preserveCore ? prev.setlists : setlists,
+        specialRequests: preserveCore ? prev.specialRequests : specialRequests,
+        tagsCatalog: preserveCore ? prev.tagsCatalog : tagsCatalog,
+        specialTypes: preserveCore ? prev.specialTypes : specialTypes,
+        singersCatalog: preserveCore ? prev.singersCatalog : singersCatalog,
+        documents: preserveCore ? prev.documents : documents,
+        charts: preserveCore ? prev.charts : charts,
+        musicians: preserveCore ? prev.musicians : musicians,
+        // Always preserve in-flight musician assignments if a musician write is settling.
+        gigMusicians:
+          gigMusicianWriteInProgressRef.current || preserveCore
+            ? prev.gigMusicians
+            : gigMusicians,
+      }
+    })
 
     if (setlists.length) {
       setSelectedSetlistId((current) => current || setlists[0].id)
@@ -8982,9 +9078,7 @@ function App() {
                     }`}
                     onClick={() => {
                       if (gigMode) {
-                        setGigMode(false)
-                        setShowGigSetlistSheet(false)
-                        setShowGigModeLaunchModal(false)
+                        exitGigMode()
                         return
                       }
                       setShowGigModeLaunchModal(true)
@@ -10494,11 +10588,19 @@ function App() {
 
   useEffect(() => {
     if (!activeGigId) return
+    // Only mirror server now-playing into the UI while Gig Mode is active.
+    // Otherwise stale Up Next / "called" state resurrects during setlist building.
+    if (!gigMode) {
+      setAppState((prev) =>
+        prev.currentSongId == null ? prev : { ...prev, currentSongId: null },
+      )
+      return
+    }
     setAppState((prev) => ({
       ...prev,
       currentSongId: nowPlayingByGig[activeGigId] ?? null,
     }))
-  }, [activeGigId, nowPlayingByGig])
+  }, [activeGigId, nowPlayingByGig, gigMode])
 
   useEffect(() => {
     if (!appState.currentSongId) return
@@ -10542,12 +10644,11 @@ function App() {
     let reloadTimer: number | null = null
     const handleRealtimeChange = () => {
       if ((window as typeof window & { __SC_SUPPRESS_REALTIME__?: boolean }).__SC_SUPPRESS_REALTIME__) return
-      if (setlistSectionSaveInProgressRef.current) return
-      if (gigMusicianWriteInProgressRef.current) return
+      if (isAppWriteInFlight()) return
       if (reloadTimer) return
       reloadTimer = window.setTimeout(() => {
         reloadTimer = null
-        if (gigMusicianWriteInProgressRef.current) return
+        if (isAppWriteInFlight()) return
         void loadSupabaseData()
       }, 250)
     }
@@ -12019,7 +12120,7 @@ function App() {
                             onClick={() => {
                               setSelectedSetlistId(setlist.id)
                               setActiveGigId(setlist.id)
-                              setGigMode(false)
+                              exitGigMode()
                               setScreen('builder')
                             }}
                           >
@@ -12124,7 +12225,7 @@ function App() {
                             onClick={() => {
                               setSelectedSetlistId(setlist.id)
                               setActiveGigId(setlist.id)
-                              setGigMode(false)
+                              exitGigMode()
                               setScreen('builder')
                             }}
                           >
@@ -13588,27 +13689,42 @@ function App() {
       {isAdmin && screen === 'builder' && gigMode && currentSetlist && (
         <QuickAddSong
           gigId={currentSetlist.id}
+          sortOrder={currentSetlist.songIds.length}
           onSongAdded={(songId, songTitle, songArtist) => {
-            setAppState((prev) => ({
-              ...prev,
-              songs: [
-                ...prev.songs,
-                {
-                  id: songId,
-                  title: songTitle,
-                  artist: songArtist,
-                  tags: [],
-                  keys: [],
-                  specialPlayedCount: 0,
-                  youtubeVerified: false,
-                } as import('./types').Song,
-              ],
-              setlists: prev.setlists.map((sl) =>
-                sl.id === currentSetlist.id
-                  ? { ...sl, songIds: [...sl.songIds, songId] }
-                  : sl,
-              ),
-            }))
+            beginAppDataWrite()
+            commitChange('Quick add song', (prev) => {
+              if (prev.songs.some((song) => song.id === songId)) {
+                return {
+                  ...prev,
+                  setlists: prev.setlists.map((sl) =>
+                    sl.id === currentSetlist.id && !sl.songIds.includes(songId)
+                      ? { ...sl, songIds: [...sl.songIds, songId] }
+                      : sl,
+                  ),
+                }
+              }
+              return {
+                ...prev,
+                songs: [
+                  {
+                    id: songId,
+                    title: songTitle,
+                    artist: songArtist,
+                    tags: [],
+                    keys: [],
+                    specialPlayedCount: 0,
+                    youtubeVerified: false,
+                  },
+                  ...prev.songs,
+                ],
+                setlists: prev.setlists.map((sl) =>
+                  sl.id === currentSetlist.id
+                    ? { ...sl, songIds: [...sl.songIds, songId] }
+                    : sl,
+                ),
+              }
+            })
+            endAppDataWrite()
           }}
         />
       )}

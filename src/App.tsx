@@ -11230,27 +11230,27 @@ function App() {
                 ) : (
                   <>
                     <div
-                      className="relative order-1 mt-3 flex min-h-0 flex-1 flex-col overflow-hidden md:order-2 md:mb-4 md:mt-4 md:flex-row md:gap-4"
+                      className="relative order-1 mt-2 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain md:order-2 md:mb-4 md:mt-4 md:overflow-hidden md:flex-row md:gap-4"
                     >
                       <div
                         ref={sharedPlaylistPlayerBlockRef}
                         className="z-10 w-full shrink-0 md:relative md:h-full md:min-h-0 md:flex-1 md:overflow-y-auto"
                       >
                           {currentPlaylistEntry ? (
-                            <div className="max-h-[min(38vh,320px)] w-full overflow-y-auto overflow-x-hidden md:max-h-none md:flex-1 md:pr-1">
+                            <div className="w-full overflow-x-hidden md:max-h-none md:flex-1 md:overflow-y-auto md:pr-1">
                             <div
                               className="rounded-none border-0 bg-transparent p-0 transition-all duration-150 sm:rounded-2xl sm:border sm:border-white/10 sm:bg-slate-950/40 sm:p-4"
                             >
                               <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <p className="text-lg font-semibold">{currentPlaylistEntry.title}</p>
-                                  <p className="text-xs text-slate-400">{currentPlaylistEntry.artist || ' '}</p>
-                                  <p className="mt-1 text-xs text-teal-200">
+                                <div className="min-w-0">
+                                  <p className="truncate text-base font-semibold md:text-lg">{currentPlaylistEntry.title}</p>
+                                  <p className="truncate text-xs text-slate-400">{currentPlaylistEntry.artist || ' '}</p>
+                                  <p className="mt-0.5 truncate text-[11px] text-teal-200 md:mt-1 md:text-xs">
                                     {getPlaylistAssignmentText(currentPlaylistEntry)}
                                   </p>
                                 </div>
                               </div>
-                              <div className="mt-2 rounded-none border-0 bg-transparent p-0 sm:mt-3 sm:rounded-xl sm:border sm:border-white/10 sm:bg-slate-950/40 sm:p-3">
+                              <div className="mt-1.5 rounded-none border-0 bg-transparent p-0 sm:mt-3 sm:rounded-xl sm:border sm:border-white/10 sm:bg-slate-950/40 sm:p-3">
                                 {!currentPlaylistEntry.audioUrl ? (
                                   <div className="text-sm text-slate-400">
                                     No audio URL saved for this song yet.
@@ -11282,8 +11282,8 @@ function App() {
                                     }}
                                   />
                                 ) : isYouTubeUrl(currentPlaylistEntry.audioUrl) ? (
-                                  <div className="relative aspect-video w-full max-h-[min(48vh,320px)] overflow-hidden rounded-xl border-0 sm:max-h-[min(56vh,520px)] sm:border sm:border-white/10">
-                                    <div className="absolute inset-0 z-0 min-h-[160px]">
+                                  <div className="relative aspect-video w-full max-h-[min(22dvh,160px)] overflow-hidden rounded-xl border-0 sm:max-h-[min(56vh,520px)] sm:border sm:border-white/10">
+                                    <div className="absolute inset-0 z-0 min-h-[96px] sm:min-h-[160px]">
                                       <PlaylistYouTubePlayer
                                         ref={sharedPublicYtHandleRef}
                                         key={`${currentPlaylistEntry.key}-${playlistPlayNonce}-shared-yt`}
@@ -11319,10 +11319,10 @@ function App() {
                             </div>
                           )}
                       </div>
-                      <div className="mt-2 grid shrink-0 grid-cols-2 gap-2 md:hidden">
+                      <div className="grid shrink-0 grid-cols-2 gap-2 md:hidden">
                         <button
                           type="button"
-                          className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
+                          className="min-h-[40px] rounded-xl border border-white/10 px-3 py-2 text-sm"
                           disabled={visiblePlaylistEntries.length === 0}
                           onClick={() => movePlaylistBy(-1)}
                         >
@@ -11330,14 +11330,14 @@ function App() {
                         </button>
                         <button
                           type="button"
-                          className="min-h-[44px] rounded-xl border border-white/10 px-3 py-2 text-sm"
+                          className="min-h-[40px] rounded-xl border border-white/10 px-3 py-2 text-sm"
                           disabled={visiblePlaylistEntries.length === 0}
                           onClick={() => movePlaylistBy(1)}
                         >
                           ⏭ Next
                         </button>
                       </div>
-                        <div className="mt-2 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-teal-300/40 bg-slate-900 shadow-xl md:mb-1 md:mt-0 md:h-[calc(100%-0.25rem)] md:max-h-[calc(100%-0.25rem)] md:w-[320px] md:max-w-none md:shrink-0 md:self-start lg:w-[340px]">
+                        <div className="shared-public-audio-songlist flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-teal-300/40 bg-slate-900 shadow-xl md:mb-1 md:mt-0 md:h-[calc(100%-0.25rem)] md:max-h-[calc(100%-0.25rem)] md:w-[320px] md:max-w-none md:shrink-0 md:self-start lg:w-[340px]">
                           <div className="shrink-0 border-b border-white/10 bg-slate-900/95 px-2 pb-2 pt-2 backdrop-blur">
                             <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-teal-200 md:hidden">
                               Song List
@@ -11356,7 +11356,7 @@ function App() {
                               ))}
                             </select>
                           </div>
-                          <div className="playlist-audio-song-scroll min-h-0 flex-1 px-2 pb-3 md:pb-2">
+                          <div className="playlist-audio-song-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3 md:pb-2">
                             <div className="space-y-3 py-2">
                               {groupedPlaylistSections.map((group) => (
                                 <div

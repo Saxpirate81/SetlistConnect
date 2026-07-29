@@ -113,6 +113,19 @@ body {
     min-height: 0 !important;
     flex: 1 1 0% !important;
   }
+
+  /*
+   * Unique-link Audio tab: reserve a real chunk of the viewport for Song List
+   * so the YouTube player cannot crush it to a few pixels.
+   */
+  .shared-public-audio-songlist {
+    min-height: min(48dvh, 420px) !important;
+    flex: 1 1 auto !important;
+  }
+
+  .shared-public-audio-songlist .playlist-audio-song-scroll {
+    padding-bottom: calc(7.5rem + env(safe-area-inset-bottom)) !important;
+  }
 }
 
 @media (min-width: 768px) {

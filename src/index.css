@@ -152,6 +152,11 @@ body {
   padding-bottom: calc(9.25rem + env(safe-area-inset-bottom));
 }
 
+/* Audio tab must not keep the standalone bottom padding dead band. */
+.ios-standalone-mode .shared-public-mode.shared-ios-standalone:has(.shared-public-audio-songlist) {
+  padding-bottom: 0 !important;
+}
+
 .ios-standalone-mode .shared-bottom-nav.shared-bottom-nav-ios {
   padding-bottom: env(safe-area-inset-bottom);
 }

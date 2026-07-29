@@ -10964,9 +10964,11 @@ function App() {
   if (sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) {
     return (
       <div
-        className={`shared-public-mode relative flex h-dvh max-h-dvh flex-col overflow-x-hidden overflow-y-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-4 text-white sm:px-4 sm:pt-5 ${
-          isIOSStandaloneMode ? 'shared-ios-standalone' : ''
-        }`}
+        className={`shared-public-mode relative flex h-dvh max-h-dvh flex-col overflow-x-hidden overflow-y-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pt-4 text-white sm:px-4 sm:pt-5 ${
+          sharedPublicTab === 'playlist'
+            ? 'pb-0'
+            : 'pb-[calc(9rem+env(safe-area-inset-bottom))]'
+        } ${isIOSStandaloneMode ? 'shared-ios-standalone' : ''}`}
       >
         {showSharedInstrumentPrompt && (
           <div
@@ -11031,9 +11033,13 @@ function App() {
           }`}
         >
           <div
-            className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 md:pb-[calc(3rem+env(safe-area-inset-bottom))] sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4"
+            className={`flex min-h-0 flex-1 flex-col overflow-hidden px-3 pt-3 sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4 ${
+              sharedPublicTab === 'playlist'
+                ? 'pb-2'
+                : 'pb-3 md:pb-[calc(3rem+env(safe-area-inset-bottom))]'
+            }`}
           >
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex shrink-0 items-start justify-between gap-3">
               <div className="min-w-0 pr-2">
                 <h2 className="text-lg font-semibold">Active Setlist</h2>
               </div>
@@ -11230,7 +11236,7 @@ function App() {
                 ) : (
                   <>
                     <div
-                      className="relative order-1 mt-2 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain md:order-2 md:mb-4 md:mt-4 md:overflow-hidden md:flex-row md:gap-4"
+                      className="relative order-1 mt-2 flex min-h-0 flex-1 flex-col gap-2 overflow-hidden md:order-2 md:mb-4 md:mt-4 md:flex-row md:gap-4"
                     >
                       <div
                         ref={sharedPlaylistPlayerBlockRef}
@@ -11356,7 +11362,7 @@ function App() {
                               ))}
                             </select>
                           </div>
-                          <div className="playlist-audio-song-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3 md:pb-2">
+                          <div className="playlist-audio-song-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 md:pb-2">
                             <div className="space-y-3 py-2">
                               {groupedPlaylistSections.map((group) => (
                                 <div

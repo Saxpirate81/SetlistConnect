@@ -115,16 +115,24 @@ body {
   }
 
   /*
-   * Unique-link Audio tab: reserve a real chunk of the viewport for Song List
-   * so the YouTube player cannot crush it to a few pixels.
+   * Unique-link Audio tab: Song List grows into all space above the fixed
+   * bottom tabs. Clearance lives inside the scrollport (not outer padding),
+   * so there is no empty dead band under the teal box.
    */
   .shared-public-audio-songlist {
-    min-height: min(48dvh, 420px) !important;
-    flex: 1 1 auto !important;
+    flex: 1 1 0% !important;
+    min-height: 0 !important;
   }
 
   .shared-public-audio-songlist .playlist-audio-song-scroll {
-    padding-bottom: calc(7.5rem + env(safe-area-inset-bottom)) !important;
+    padding-bottom: calc(6.75rem + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* Audio tab: no outer bottom padding deadspace (nav clearance is in the list). */
+@media (max-width: 767px) {
+  .shared-public-mode:has(.shared-public-audio-songlist) {
+    padding-bottom: 0 !important;
   }
 }
 

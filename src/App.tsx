@@ -2272,6 +2272,10 @@ function App() {
       handleMove(event.clientX, event.clientY)
     }
     const handleTouchMove = (event: globalThis.TouchEvent) => {
+      // Only lock scrolling while the QA panel is actively being dragged.
+      // A global non-passive preventDefault here was blocking setlist/audio scroll
+      // on both signed-in and public unique-link views.
+      if (!qaPanelDragStateRef.current) return
       const touch = event.touches[0]
       if (!touch) return
       handleMove(touch.clientX, touch.clientY)
@@ -10859,7 +10863,7 @@ function App() {
   if (sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) {
     return (
       <div
-        className={`shared-public-mode relative min-h-dvh overflow-x-hidden overflow-y-auto bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-4 text-white sm:px-4 sm:pt-5 ${
+        className={`shared-public-mode relative flex h-dvh max-h-dvh flex-col overflow-x-hidden overflow-y-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-4 text-white sm:px-4 sm:pt-5 ${
           isIOSStandaloneMode ? 'shared-ios-standalone' : ''
         }`}
       >
@@ -10921,12 +10925,12 @@ function App() {
           </div>
         )}
         <div
-          className={`mx-auto flex min-h-[calc(100dvh-9rem)] w-full flex-col ${
+          className={`mx-auto flex min-h-0 w-full flex-1 flex-col overflow-hidden ${
             sharedPublicTab === 'playlist' ? 'max-w-[1480px]' : 'max-w-5xl'
           }`}
         >
           <div
-            className="flex min-h-0 flex-1 flex-col overflow-visible p-3 md:pb-[calc(3rem+env(safe-area-inset-bottom))] sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4"
+            className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 md:pb-[calc(3rem+env(safe-area-inset-bottom))] sm:rounded-3xl sm:border sm:border-white/10 sm:bg-slate-900/90 sm:p-4"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 pr-2">
@@ -10972,7 +10976,7 @@ function App() {
             {sharedPlaylistView && (
               <>
                 {sharedPublicTab === 'setlist' ? (
-                  <div className="shared-public-setlist-scroll mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain rounded-none bg-transparent p-0 pb-[calc(8.5rem+env(safe-area-inset-bottom))] md:mb-4 md:h-[calc(100dvh-14rem)] md:max-h-[calc(100dvh-14rem)] md:pb-4 sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4 sm:pb-[calc(2rem+env(safe-area-inset-bottom))]">
+                  <div className="shared-public-setlist-scroll mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain rounded-none bg-transparent p-0 pb-[calc(8.5rem+env(safe-area-inset-bottom))] md:mb-4 md:pb-4 sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4 sm:pb-[calc(2rem+env(safe-area-inset-bottom))]">
                     {sharedDocsLoading && (
                       <div className="mb-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
                         Loading charts and lyrics...
@@ -11125,7 +11129,7 @@ function App() {
                 ) : (
                   <>
                     <div
-                      className="relative order-1 mt-3 flex h-[calc(100dvh-14rem)] min-h-0 flex-1 flex-col overflow-hidden md:order-2 md:mb-4 md:mt-4 md:h-[calc(100dvh-13.6rem)] md:max-h-[calc(100dvh-13.6rem)] md:flex-row md:gap-4"
+                      className="relative order-1 mt-3 flex min-h-0 flex-1 flex-col overflow-hidden md:order-2 md:mb-4 md:mt-4 md:flex-row md:gap-4"
                     >
                       <div
                         ref={sharedPlaylistPlayerBlockRef}
@@ -16670,12 +16674,12 @@ function App() {
 
       {showPlaylistModal && currentSetlist && (
         <div
-          className={`playlist-modal-shell fixed inset-0 z-[98] overflow-y-auto overflow-x-hidden bg-slate-950/90 pb-[calc(7.25rem+env(safe-area-inset-bottom))] backdrop-blur-sm md:overflow-hidden ${
+          className={`playlist-modal-shell fixed inset-0 z-[98] flex h-dvh max-h-dvh flex-col overflow-hidden overflow-x-hidden bg-slate-950/90 pb-[calc(7.25rem+env(safe-area-inset-bottom))] backdrop-blur-sm ${
             isIOSStandaloneMode ? 'playlist-modal-ios-standalone' : ''
           }`}
         >
           <div
-            className="flex min-h-dvh w-full flex-col overflow-visible bg-slate-900 md:h-full md:min-h-0 md:overflow-hidden"
+            className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-slate-900"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sticky top-0 z-10 shrink-0 border-b border-white/10 bg-slate-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
@@ -16736,9 +16740,9 @@ function App() {
               ) : null}
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col overflow-visible md:overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {playlistModalTab === 'setlist' ? (
-                <div className="h-[calc(100dvh-11.5rem)] min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain px-3 pb-[calc(8.5rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pt-3 md:h-full md:pb-4">
+                <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-3 pb-[calc(8.5rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pt-3 md:pb-4">
                   {isAdmin && (
                     <div className="mb-3 flex flex-wrap items-center gap-2">
                       <button
@@ -16929,7 +16933,7 @@ function App() {
                   </div>
                 </div>
               ) : (
-            <div className="flex h-[calc(100dvh-12.5rem)] min-h-0 flex-1 flex-col gap-2 overflow-hidden px-4 pb-[calc(7.25rem+env(safe-area-inset-bottom))] pt-3 sm:px-5 sm:pt-4 md:h-full md:flex-row md:gap-4 md:pb-4">
+            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden px-4 pb-[calc(7.25rem+env(safe-area-inset-bottom))] pt-3 sm:px-5 sm:pt-4 md:flex-row md:gap-4 md:pb-4">
               <div
                 ref={playlistPlayerBlockRef}
                 className="relative z-10 w-full shrink-0 md:min-h-0 md:flex-1 md:overflow-y-auto"

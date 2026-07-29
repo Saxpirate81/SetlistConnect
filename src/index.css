@@ -72,8 +72,9 @@ body {
 }
 
 .shared-public-mode {
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior-y: contain;
+  /* Outer shell is a fixed viewport; only inner panes scroll. */
+  overscroll-behavior-y: none;
+  touch-action: manipulation;
 }
 
 @media (max-width: 767px) {
@@ -90,16 +91,17 @@ body {
   /* Ensure setlist body can scroll above fixed bottom controls. */
   .shared-public-setlist-scroll {
     padding-bottom: calc(8.5rem + env(safe-area-inset-bottom)) !important;
-    max-height: calc(100dvh - 11.25rem) !important;
     overflow-y: auto !important;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
+    touch-action: pan-y;
+    min-height: 0 !important;
   }
 
-  /* Signed-in active setlist modal: keep setlist/audio panes touch-scrollable. */
+  /* Signed-in active setlist modal: single viewport, inner panes scroll. */
   .playlist-modal-shell {
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior-y: contain;
+    overscroll-behavior-y: none;
+    touch-action: manipulation;
   }
 
   /* Audio tab song queue — dedicated mobile scrollport for all tracks. */
@@ -108,7 +110,8 @@ body {
     overflow-y: auto !important;
     overscroll-behavior: contain;
     touch-action: pan-y;
-    min-height: 0;
+    min-height: 0 !important;
+    flex: 1 1 0% !important;
   }
 }
 

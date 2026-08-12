@@ -11,11 +11,16 @@ import { supabase } from '../lib/supabaseClient'
 import { searchYouTube } from '../lib/youtubeSearch'
 import { getYouTubeVideoId } from '../lib/youtube'
 import { useAppContext } from '../context/AppContext'
+import { makeGigSectionTag, normalizeSetlistSectionLabel } from '../lib/gigSections'
 
 type QuickAddSongProps = {
   gigId: string
   /** Current song count on the gig — used for sort_order. */
   sortOrder?: number
+  /** Optional active setlist section (Dinner/Dance/etc.) to assign on add. */
+  section?: string | null
+  /** Optional library style tag (Dinner/Dance/Latin) to store on the song. */
+  styleTag?: string | null
   /** Called after the song is created and linked to the gig. */
   onSongAdded: (songId: string, title: string, artist: string) => void
   /** Optional: called when background YouTube match lands. */
@@ -31,6 +36,8 @@ const suppressRealtime = (on: boolean) => {
 export function QuickAddSong({
   gigId,
   sortOrder = 0,
+  section = null,
+  styleTag = null,
   onSongAdded,
   onSongAudioFound,
 }: QuickAddSongProps) {
@@ -109,9 +116,40 @@ export function QuickAddSong({
         return
       }
 
+      const normalizedSection = normalizeSetlistSectionLabel(section ?? '')
+      const normalizedStyle = normalizeSetlistSectionLabel(styleTag ?? '')
+      const tagRows: { id: string; band_id: string; song_id: string; tag: string }[] = []
+      if (normalizedSection) {
+        tagRows.push({
+          id: crypto.randomUUID(),
+          band_id: activeBandId,
+          song_id: songId,
+          tag: makeGigSectionTag(gigId, normalizedSection),
+        })
+      }
+      if (normalizedStyle) {
+        tagRows.push({
+          id: crypto.randomUUID(),
+          band_id: activeBandId,
+          song_id: songId,
+          tag: normalizedStyle,
+        })
+      }
+      if (tagRows.length) {
+        const { error: tagErr } = await supabase.from('SetlistSongTags').insert(tagRows)
+        if (tagErr) {
+          // Membership already saved — surface warning but keep the song.
+          showToast(`Song added, but section tag failed: ${tagErr.message}`)
+        }
+      }
+
       setPhase('done')
       onSongAdded(songId, cleanTitle, cleanArtist)
-      showToast(`"${cleanTitle}" added to gig`)
+      showToast(
+        normalizedSection
+          ? `"${cleanTitle}" added to ${normalizedSection}`
+          : `"${cleanTitle}" added to gig`,
+      )
       close()
 
       void (async () => {

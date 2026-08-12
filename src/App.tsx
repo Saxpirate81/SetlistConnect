@@ -14,6 +14,8 @@ import { PlaylistYouTubePlayer, type PlaylistYouTubePlayerHandle } from './Playl
 import { isSupabaseEnabled, supabase, supabaseEnvStatus } from './lib/supabaseClient'
 import { logger } from './lib/logger'
 import { useDebounce } from './hooks/useDebounce'
+import { useSessionTimeout } from './hooks/useSessionTimeout'
+import { useWriteGate } from './hooks/useWriteGate'
 import { CloseButton } from './components/ui/CloseButton'
 import { AppIcon } from './components/ui/AppIcon'
 import { SkeletonAppShell } from './components/ui/Skeleton'
@@ -34,7 +36,6 @@ import {
   DEFAULT_TAGS,
   DEFAULT_SPECIAL_TYPES,
   REQUEST_TYPE_TAG_EXCLUSIONS,
-  SETLIST_PANEL_PREFIX,
   GIG_SECTION_TAG_PREFIX,
   GIG_SECTION_DELETED_TAG_PREFIX,
   PRINT_SPECIAL_REQUESTS_PER_SECTION,
@@ -57,6 +58,7 @@ import {
   getOperationalDateISO,
   normalizeGigDateISO,
   chunkList,
+  replaceHistorySearchParams,
 } from './lib/utils'
 import type {
   Role,
@@ -89,6 +91,40 @@ import type {
   HistoryEntry,
 } from './types'
 import { getYouTubeEmbedUrl, isYouTubeUrl } from './lib/youtube'
+import { buildGigUiStatePayload, parseGigUiState } from './lib/gigUiState'
+import {
+  patchDocumentsFromRealtime,
+  patchGigMusiciansFromRealtime,
+  patchNowPlayingFromRealtime,
+  patchSongsFromRealtime,
+} from './lib/realtimePatches'
+import { NavButton } from './components/ui/NavButton'
+import { Stat } from './components/ui/Stat'
+import { loadSharedPlaylist } from './lib/loadSharedPlaylist'
+import {
+  getLibrarySeedTagsForSection,
+  getSectionDeleteKey,
+  getSectionFromPanel,
+  inferSectionStyleTag,
+  makeGigSectionDeletedTag,
+  makeGigSectionTag,
+  normalizeSetlistSectionLabel,
+  parseGigSectionDeletedTag,
+  parseGigSectionTag,
+  sectionsShareStyleFamily,
+  SETLIST_STYLE_TAGS,
+  setlistPanelKey,
+} from './lib/gigSections'
+import { useOnlineStatus } from './hooks/useOnlineStatus'
+import { OfflineBanner } from './components/OfflineBanner'
+import {
+  encodeSharePayloadBase64Url,
+  getSpotifyEmbedUrl,
+  openExternalUrlSafely,
+  parseSharedPlaylistPayload,
+  parseSharedPlaylistQuery,
+  sanitizeSharedPlaylistView,
+} from './lib/sharedPlaylist'
 import downloadPdfIcon from './assets/download-pdf-icon.png'
 import openPlaylistIcon from './assets/open-playlist-icon.png'
 import setlistConnectLogo from './assets/setlist-connect-logo.png'
@@ -130,36 +166,6 @@ const initialState: AppState = {
 
 // chunkList, PRINT_* constants, getOperationalDateISO, normalizeGigDateISO
 // imported from ./lib/utils and ./lib/constants
-
-// ── OfflineBanner ──────────────────────────────────────────────────────────
-// Shows a sticky warning at the top of the screen when the device is offline.
-// Disappears automatically when connectivity is restored.
-function OfflineBanner() {
-  const [isOffline, setIsOffline] = useState(!navigator.onLine)
-
-  useEffect(() => {
-    const goOffline = () => setIsOffline(true)
-    const goOnline = () => setIsOffline(false)
-    window.addEventListener('offline', goOffline)
-    window.addEventListener('online', goOnline)
-    return () => {
-      window.removeEventListener('offline', goOffline)
-      window.removeEventListener('online', goOnline)
-    }
-  }, [])
-
-  if (!isOffline) return null
-
-  return (
-    <div
-      role="alert"
-      className="fixed left-0 right-0 top-0 z-[9999] flex items-center justify-center gap-2 bg-amber-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow-md"
-    >
-      <span>⚠</span>
-      <span>You&apos;re offline — changes won&apos;t be saved until you reconnect.</span>
-    </div>
-  )
-}
 
 // ── App ────────────────────────────────────────────────────────────────────
 function App() {
@@ -396,10 +402,10 @@ function App() {
   const [sharedPublicTab, setSharedPublicTab] = useState<'setlist' | 'playlist'>('setlist')
   const [sharedWelcomeStep, setSharedWelcomeStep] = useState<'hidden' | 'cta' | 'learn'>('hidden')
   const [sharedWelcomeCompletedSetlistId, setSharedWelcomeCompletedSetlistId] = useState<string | null>(null)
+  // Never enable QA tooling on production hosts — its global touchmove listener
+  // previously blocked setlist/audio scroll for every visitor.
   const qaToolsEnabled = (() => {
     if (typeof window === 'undefined') return false
-    const params = new URLSearchParams(window.location.search)
-    if (params.get('qa') === '1') return true
     if (import.meta.env.DEV) return true
     const host = window.location.hostname.toLowerCase()
     return host === 'localhost' || host === '127.0.0.1'
@@ -592,12 +598,21 @@ function App() {
   const [collapsedSharedAudioSections, setCollapsedSharedAudioSections] = useState<Record<string, boolean>>({})
   const playlistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
   const sharedPlaylistPlayerBlockRef = useRef<HTMLDivElement | null>(null)
-  const setlistSectionSaveInProgressRef = useRef(false)
-  const setlistSectionSaveCooldownTimerRef = useRef<number | null>(null)
-  const gigMusicianWriteInProgressRef = useRef(false)
-  const gigMusicianWriteCooldownTimerRef = useRef<number | null>(null)
-  const appDataWriteInProgressRef = useRef(false)
-  const appDataWriteCooldownTimerRef = useRef<number | null>(null)
+  const sectionSaveWriteGate = useWriteGate(900)
+  const gigMusicianWriteGate = useWriteGate(900)
+  const appDataWriteGate = useWriteGate(900)
+  const beginAppDataWrite = appDataWriteGate.begin
+  const endAppDataWrite = appDataWriteGate.end
+  const beginGigMusicianWrite = gigMusicianWriteGate.begin
+  const endGigMusicianWrite = gigMusicianWriteGate.end
+  const isOnline = useOnlineStatus()
+  const isAppWriteInFlight = () =>
+    sectionSaveWriteGate.isInFlight() ||
+    gigMusicianWriteGate.isInFlight() ||
+    appDataWriteGate.isInFlight()
+  const loadSupabaseDataGenerationRef = useRef(0)
+  const gigUiStatePersistTimerRef = useRef<number | null>(null)
+  const gigUiStateColumnMissingRef = useRef(false)
   const sharedNowPlayingSongIdRef = useRef<string | null>(null)
   const [showAddMusicianModal, setShowAddMusicianModal] = useState(false)
   const [showPrintPreview, setShowPrintPreview] = useState(false)
@@ -646,6 +661,19 @@ function App() {
       return {}
     }
   })
+  /** Per-gig section label → Dinner/Dance/Latin (survives rename; used for cross-gig import). */
+  const [gigSectionStyles, setGigSectionStyles] = useState<Record<string, Record<string, string>>>(
+    () => {
+      const stored = localStorage.getItem('setlist_gig_section_styles')
+      if (!stored) return {}
+      try {
+        return JSON.parse(stored)
+      } catch {
+        localStorage.removeItem('setlist_gig_section_styles')
+        return {}
+      }
+    },
+  )
   const [showAddSetlistModal, setShowAddSetlistModal] = useState(false)
   const [newSetlistLabel, setNewSetlistLabel] = useState('')
   const [draggedSetlistSection, setDraggedSetlistSection] = useState<string | null>(null)
@@ -1102,55 +1130,6 @@ function App() {
     Boolean(url && /\.(png|jpe?g|gif|webp)$/i.test(url))
   const hasSongTag = (song: Song, tag: string) =>
     song.tags.some((item) => item.trim().toLowerCase() === tag.trim().toLowerCase())
-  const setlistPanelKey = (section: string) => `${SETLIST_PANEL_PREFIX}${section}`
-  const getSectionFromPanel = (panel: string | null) =>
-    panel && panel.startsWith(SETLIST_PANEL_PREFIX)
-      ? panel.slice(SETLIST_PANEL_PREFIX.length)
-      : null
-  const normalizeSetlistSectionLabel = useCallback(
-    (value: string) => value.replace(/\s+/g, ' ').trim(),
-    [],
-  )
-  const makeGigSectionTag = (gigId: string, section: string) =>
-    `${GIG_SECTION_TAG_PREFIX}${gigId}::${encodeURIComponent(normalizeSetlistSectionLabel(section))}`
-  const getSectionDeleteKey = useCallback(
-    (section: string) => normalizeSetlistSectionLabel(section).toLowerCase(),
-    [normalizeSetlistSectionLabel],
-  )
-  const makeGigSectionDeletedTag = (gigId: string, section: string) =>
-    `${GIG_SECTION_DELETED_TAG_PREFIX}${gigId}::${encodeURIComponent(normalizeSetlistSectionLabel(section))}`
-  const parseGigSectionTag = useCallback(
-    (value: string): { gigId: string; section: string } | null => {
-      if (!value.startsWith(GIG_SECTION_TAG_PREFIX)) return null
-      const payload = value.slice(GIG_SECTION_TAG_PREFIX.length)
-      const separatorIndex = payload.indexOf('::')
-      if (separatorIndex <= 0) return null
-      const gigId = payload.slice(0, separatorIndex)
-      const encodedSection = payload.slice(separatorIndex + 2)
-      const decodedSection = normalizeSetlistSectionLabel(
-        decodeURIComponent(encodedSection || ''),
-      )
-      if (!gigId || !decodedSection) return null
-      return { gigId, section: decodedSection }
-    },
-    [normalizeSetlistSectionLabel],
-  )
-  const parseGigSectionDeletedTag = useCallback(
-    (value: string): { gigId: string; section: string } | null => {
-      if (!value.startsWith(GIG_SECTION_DELETED_TAG_PREFIX)) return null
-      const payload = value.slice(GIG_SECTION_DELETED_TAG_PREFIX.length)
-      const separatorIndex = payload.indexOf('::')
-      if (separatorIndex <= 0) return null
-      const gigId = payload.slice(0, separatorIndex)
-      const encodedSection = payload.slice(separatorIndex + 2)
-      const decodedSection = normalizeSetlistSectionLabel(
-        decodeURIComponent(encodedSection || ''),
-      )
-      if (!gigId || !decodedSection) return null
-      return { gigId, section: decodedSection }
-    },
-    [normalizeSetlistSectionLabel],
-  )
   const getGigSongSections = useCallback(
     (gigId: string, songId: string) => {
       const overrides = gigSongSectionOverrides[gigId]?.[songId] ?? []
@@ -1166,7 +1145,7 @@ function App() {
       })
       return normalized
     },
-    [gigSongSectionOverrides, normalizeSetlistSectionLabel],
+    [gigSongSectionOverrides],
   )
   const getGigSongSectionOverride = useCallback(
     (gigId: string, songId: string) => getGigSongSections(gigId, songId)[0] ?? '',
@@ -1175,7 +1154,93 @@ function App() {
   const getDeletedSectionSongIds = useCallback(
     (gigId: string, section: string) =>
       new Set(gigDeletedSectionSongs[gigId]?.[getSectionDeleteKey(section)] ?? []),
-    [gigDeletedSectionSongs, getSectionDeleteKey],
+    [gigDeletedSectionSongs],
+  )
+  const getStoredSectionStyle = useCallback(
+    (gigId: string, section: string) => {
+      const normalized = normalizeSetlistSectionLabel(section)
+      if (!normalized) return null
+      const byLabel = gigSectionStyles[gigId] ?? {}
+      const direct = byLabel[normalized]
+      if (direct) return normalizeSetlistSectionLabel(direct)
+      const matchKey = Object.keys(byLabel).find(
+        (key) => key.trim().toLowerCase() === normalized.toLowerCase(),
+      )
+      return matchKey ? normalizeSetlistSectionLabel(byLabel[matchKey] ?? '') || null : null
+    },
+    [gigSectionStyles],
+  )
+  const resolveSectionStyleTag = useCallback(
+    (gigId: string, section: string) =>
+      getStoredSectionStyle(gigId, section) || inferSectionStyleTag(section),
+    [getStoredSectionStyle],
+  )
+  const rememberSectionStyle = useCallback((gigId: string, section: string, style?: string | null) => {
+    const normalizedSection = normalizeSetlistSectionLabel(section)
+    const resolved =
+      normalizeSetlistSectionLabel(style ?? '') || inferSectionStyleTag(normalizedSection) || ''
+    if (!normalizedSection || !resolved) return
+    setGigSectionStyles((prev) => {
+      const current = prev[gigId]?.[normalizedSection]
+      if (current && current.toLowerCase() === resolved.toLowerCase()) return prev
+      return {
+        ...prev,
+        [gigId]: {
+          ...(prev[gigId] ?? {}),
+          [normalizedSection]: resolved,
+        },
+      }
+    })
+  }, [])
+  const ensureSongsHaveLibraryStyleTags = useCallback(
+    (songIds: string[], styleTag: string) => {
+      const normalizedStyle = normalizeSetlistSectionLabel(styleTag)
+      if (!normalizedStyle || songIds.length === 0) return
+      const songIdSet = new Set(songIds)
+      // Additive only — never strip existing tags.
+      setAppState((prev) => ({
+        ...prev,
+        songs: prev.songs.map((song) => {
+          if (!songIdSet.has(song.id)) return song
+          if (song.tags.some((tag) => tag.trim().toLowerCase() === normalizedStyle.toLowerCase())) {
+            return song
+          }
+          return { ...song, tags: [...song.tags, normalizedStyle] }
+        }),
+        tagsCatalog: Array.from(new Set([...prev.tagsCatalog, normalizedStyle])),
+      }))
+      if (!supabase) return
+      const client = supabase
+      void (async () => {
+        for (const songId of songIds) {
+          const existingQuery = client
+            .from('SetlistSongTags')
+            .select('id')
+            .eq('song_id', songId)
+            .eq('tag', normalizedStyle)
+            .limit(1)
+          const existingRes = activeBandId
+            ? await existingQuery.eq('band_id', activeBandId)
+            : await existingQuery
+          if (existingRes.error) {
+            reportSupabaseError(existingRes.error)
+            continue
+          }
+          if ((existingRes.data ?? []).length > 0) continue
+          const { error } = await client.from('SetlistSongTags').insert(
+            withBandId({
+              id: createId(),
+              song_id: songId,
+              tag: normalizedStyle,
+            }),
+          )
+          reportSupabaseError(error)
+        }
+      })()
+    },
+    // withBandId / reportSupabaseError / createId are module-scoped helpers
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeBandId],
   )
   const songMatchesGigSection = useCallback(
     (
@@ -1202,7 +1267,7 @@ function App() {
       }
       return false
     },
-    [getDeletedSectionSongIds, getGigSongSections, normalizeSetlistSectionLabel],
+    [getDeletedSectionSongIds, getGigSongSections],
   )
   const normalizeTagIdentity = (value: string) =>
     value
@@ -1242,7 +1307,7 @@ function App() {
     if (identity === 'djonly') return true
     if (requestTypeIdentitySet.has(identity)) return false
     return !specialTypeIdentitySet.has(identity)
-  }, [normalizeSetlistSectionLabel, requestTypeIdentitySet, specialTypeIdentitySet])
+  }, [requestTypeIdentitySet, specialTypeIdentitySet])
   const setlistTypeTags = useMemo(
     () => normalizeTagList(appState.tagsCatalog.filter((tag) => isSetlistTypeTag(tag))),
     [appState.tagsCatalog, isSetlistTypeTag],
@@ -1369,10 +1434,17 @@ function App() {
   const isSpecialSectionHidden = currentSetlist
     ? Boolean(gigHiddenSpecialSection[currentSetlist.id])
     : false
+  const selectCurrentGig = (gigId: string) => {
+    setSelectedSetlistId(gigId)
+    setActiveGigId(gigId)
+  }
   useEffect(() => {
     if (!currentSetlist?.id) return
-    setActiveGigId(currentSetlist.id)
-  }, [currentSetlist?.id])
+    // Keep the secondary gig pointer aligned with the open setlist.
+    if (activeGigId !== currentSetlist.id) {
+      setActiveGigId(currentSetlist.id)
+    }
+  }, [activeGigId, currentSetlist?.id])
   const orderedSetSections = useMemo(() => {
     if (!currentSetlist) return []
     const saved = gigSetlistSections[currentSetlist.id] ?? []
@@ -1403,7 +1475,6 @@ function App() {
     gigHiddenSetlistSections,
     gigSetlistSections,
     getGigSongSections,
-    normalizeSetlistSectionLabel,
   ])
   const printableSetSections = useMemo(() => {
     if (!currentSetlist) return []
@@ -1513,7 +1584,7 @@ function App() {
     if (lower === 'additional request' || lower === 'additional requests') return 'Additional Requests'
     if (lower === 'dj only') return 'DJ Only'
     return normalized
-  }, [normalizeSetlistSectionLabel])
+  }, [])
   const getPlaylistSections = useCallback((entry: PlaylistEntry) => {
     const seen = new Set<string>()
     const normalizedTags = (entry.tags ?? [])
@@ -1758,12 +1829,10 @@ function App() {
   }, [
     appState.songs,
     currentSetlist,
-    normalizeSetlistSectionLabel,
     orderedSetSections,
     pendingDeleteSetlistSection,
     songMatchesGigSection,
   ])
-
   const buildCardCounts = useMemo(() => {
     const base: Record<string, number> = {
       musicians: 0,
@@ -1832,21 +1901,18 @@ function App() {
     const filterSections = sectionAddSongsActiveFilters
     const includeAllBySection =
       filterSections.length === 0 || filterSections.length >= orderedSetSections.length
-    const getLibrarySeedTags = (section: string) => {
-      const normalized = normalizeSetlistSectionLabel(section)
-      const lower = normalized.toLowerCase()
-      if (lower.startsWith('dance set ')) return ['Dance']
-      if (lower.startsWith('dinner set ')) return ['Dinner']
-      if (lower.startsWith('latin set ')) return ['Latin']
-      return [normalized]
-    }
     return appState.songs
       .filter((song) =>
         includeAllBySection
           ? true
-          : filterSections.some((section) =>
-              getLibrarySeedTags(section).some((tag) => hasSongTag(song, tag)),
-            ),
+          : filterSections.some((section) => {
+              const style = currentSetlist
+                ? resolveSectionStyleTag(currentSetlist.id, section)
+                : inferSectionStyleTag(section)
+              return getLibrarySeedTagsForSection(section, style).some((tag) =>
+                hasSongTag(song, tag),
+              )
+            }),
       )
       .filter((song) =>
         !search ? true : `${song.title} ${song.artist}`.toLowerCase().includes(search),
@@ -1856,9 +1922,9 @@ function App() {
     appState.songs,
     currentSetlist,
     orderedSetSections.length,
+    resolveSectionStyleTag,
     sectionAddSongsActiveFilters,
     sectionAddSongsSearch,
-    normalizeSetlistSectionLabel,
   ])
 
   const gigSingerOptions = useMemo(() => {
@@ -2251,6 +2317,7 @@ function App() {
     event.preventDefault()
   }, [beginQaPanelDragFromPoint, qaDragLog])
   useEffect(() => {
+    if (!qaToolsEnabled) return
     const handleMove = (clientX: number, clientY: number) => {
       if (!qaPanelDragStateRef.current) return
       const { offsetX, offsetY, width, height } = qaPanelDragStateRef.current
@@ -2277,8 +2344,6 @@ function App() {
     }
     const handleTouchMove = (event: globalThis.TouchEvent) => {
       // Only lock scrolling while the QA panel is actively being dragged.
-      // A global non-passive preventDefault here was blocking setlist/audio scroll
-      // on both signed-in and public unique-link views.
       if (!qaPanelDragStateRef.current) return
       const touch = event.touches[0]
       if (!touch) return
@@ -2309,7 +2374,7 @@ function App() {
         qaPanelRafRef.current = null
       }
     }
-  }, [applyQaPanelPosition, qaDragLog])
+  }, [applyQaPanelPosition, qaDragLog, qaToolsEnabled])
   useEffect(() => {
     if (!qaToolsEnabled || qaPanelInitializedRef.current) return
     const panelElement = qaPanelRef.current
@@ -3777,27 +3842,34 @@ function App() {
       }),
     }))
     if (supabase) {
+      beginAppDataWrite()
       runSupabase(
         (async () => {
-          const deleteQuery = supabase
-            .from('SetlistGigSingerKeys')
-            .delete()
-            .eq('gig_id', currentSetlist.id)
-            .eq('song_id', songId)
-          const { error: deleteError } = activeBandId
-            ? await deleteQuery.eq('band_id', activeBandId)
-            : await deleteQuery
-          if (deleteError) return { error: deleteError }
-          const { error: insertError } = await supabase.from('SetlistGigSingerKeys').insert(
-            assignments.map((entry) => withBandId({
-              id: createId(),
-              gig_id: currentSetlist.id,
-              song_id: songId,
-              singer_name: entry.singer,
-              gig_key: keyValue,
-            })),
-          )
-          return { error: insertError }
+          try {
+            const deleteQuery = supabase
+              .from('SetlistGigSingerKeys')
+              .delete()
+              .eq('gig_id', currentSetlist.id)
+              .eq('song_id', songId)
+            const { error: deleteError } = activeBandId
+              ? await deleteQuery.eq('band_id', activeBandId)
+              : await deleteQuery
+            if (deleteError) return { error: deleteError }
+            const { error: insertError } = await supabase.from('SetlistGigSingerKeys').insert(
+              assignments.map((entry) =>
+                withBandId({
+                  id: createId(),
+                  gig_id: currentSetlist.id,
+                  song_id: songId,
+                  singer_name: entry.singer,
+                  gig_key: keyValue,
+                }),
+              ),
+            )
+            return { error: insertError }
+          } finally {
+            endAppDataWrite()
+          }
         })(),
       )
     }
@@ -3907,8 +3979,7 @@ function App() {
   }
   const closeGigSetlistSheet = () => {
     if (currentSetlist) {
-      setSelectedSetlistId(currentSetlist.id)
-      setActiveGigId(currentSetlist.id)
+      selectCurrentGig(currentSetlist.id)
     }
     setGigSheetSongSearch('')
     setScreen('builder')
@@ -4145,26 +4216,31 @@ function App() {
           })),
         )
       }
+      beginAppDataWrite()
       runSupabase(
         (async () => {
-          const deleteQuery = supabase
-            .from('SetlistGigSingerKeys')
-            .delete()
-            .eq('gig_id', currentSetlist.id)
-            .eq('song_id', songId)
-            .eq('singer_name', singerName)
-          const { error: deleteError } = activeBandId
-            ? await deleteQuery.eq('band_id', activeBandId)
-            : await deleteQuery
-          if (deleteError) return { error: deleteError }
-          const { error: insertError } = await supabase.from('SetlistGigSingerKeys').insert(withBandId({
-            id: createId(),
-            gig_id: currentSetlist.id,
-            song_id: songId,
-            singer_name: singerName,
-            gig_key: normalizedKey,
-          }))
-          return { error: insertError }
+          try {
+            const deleteQuery = supabase
+              .from('SetlistGigSingerKeys')
+              .delete()
+              .eq('gig_id', currentSetlist.id)
+              .eq('song_id', songId)
+              .eq('singer_name', singerName)
+            const { error: deleteError } = activeBandId
+              ? await deleteQuery.eq('band_id', activeBandId)
+              : await deleteQuery
+            if (deleteError) return { error: deleteError }
+            const { error: insertError } = await supabase.from('SetlistGigSingerKeys').insert(withBandId({
+              id: createId(),
+              gig_id: currentSetlist.id,
+              song_id: songId,
+              singer_name: singerName,
+              gig_key: normalizedKey,
+            }))
+            return { error: insertError }
+          } finally {
+            endAppDataWrite()
+          }
         })(),
       )
     }
@@ -4698,8 +4774,80 @@ function App() {
         songs: clonedSongs,
       }
     })
-    if (supabase && activeBandId) {
-      void (async () => {
+    if (Object.keys(sourceGigSectionOverrides).length > 0) {
+      setGigSongSectionOverrides((prev) => ({
+        ...prev,
+        [newId]: { ...sourceGigSectionOverrides },
+      }))
+    }
+    if ((gigSetlistSections[source.id] ?? []).length > 0) {
+      setGigSetlistSections((prev) => ({
+        ...prev,
+        [newId]: [...(prev[source.id] ?? [])],
+      }))
+    }
+    if (Object.keys(gigSectionStyles[source.id] ?? {}).length > 0) {
+      setGigSectionStyles((prev) => ({
+        ...prev,
+        [newId]: { ...(prev[source.id] ?? {}) },
+      }))
+    }
+    setGigHiddenSpecialSection((prev) => ({ ...prev, [newId]: false }))
+
+    if (!supabase || !activeBandId) return
+
+    // Snapshot before async so realtime/other edits cannot change what we persist.
+    const sourceMusicianRows = appState.gigMusicians
+      .filter((gm) => gm.gigId === source.id)
+      .map((gm) => ({
+        id: createId(),
+        gig_id: newId,
+        musician_id: gm.musicianId,
+        status: gm.status,
+        note: gm.note ?? null,
+      }))
+    const sourceSingerRows = uniqueSourceSongIds.flatMap((songId) => {
+      const song = appState.songs.find((item) => item.id === songId)
+      if (!song) return []
+      return song.keys
+        .filter((key) => key.gigOverrides[source.id])
+        .map((key) => ({
+          id: createId(),
+          gig_id: newId,
+          song_id: songId,
+          singer_name: key.singer,
+          gig_key: key.gigOverrides[source.id],
+        }))
+    })
+    const sectionOverrideTagRows = Object.entries(sourceGigSectionOverrides)
+      .flatMap(([songId, sections]) =>
+        (sections ?? []).map((section) => ({
+          id: createId(),
+          song_id: songId,
+          tag: makeGigSectionTag(newId, section),
+        })),
+      )
+      .filter((row) => row.song_id && row.tag)
+
+    const rollbackDuplicate = () => {
+      undoLast()
+      setGigSongSectionOverrides((prev) => {
+        if (!(newId in prev)) return prev
+        const next = { ...prev }
+        delete next[newId]
+        return next
+      })
+      setGigHiddenSpecialSection((prev) => {
+        if (!(newId in prev)) return prev
+        const next = { ...prev }
+        delete next[newId]
+        return next
+      })
+    }
+
+    beginAppDataWrite()
+    void (async () => {
+      try {
         const { error: gigInsertError } = await supabase.from('SetlistGigs').insert(withBandId({
           id: newId,
           gig_name: `${source.gigName} (Copy)`,
@@ -4708,6 +4856,7 @@ function App() {
         }))
         if (gigInsertError) {
           reportSupabaseError(gigInsertError)
+          rollbackDuplicate()
           return
         }
 
@@ -4720,69 +4869,52 @@ function App() {
               sort_order: index,
             })),
           )
-          reportSupabaseError(gigSongsInsertError)
+          if (gigSongsInsertError) {
+            reportSupabaseError(gigSongsInsertError)
+            await supabase.from('SetlistGigs').delete().eq('id', newId)
+            rollbackDuplicate()
+            return
+          }
         }
 
-        const gigMusicianRows = appState.gigMusicians
-          .filter((gm) => gm.gigId === source.id)
-          .map((gm) => ({
-            id: createId(),
-            gig_id: newId,
-            musician_id: gm.musicianId,
-            status: gm.status,
-            note: gm.note ?? null,
-          }))
-        if (gigMusicianRows.length) {
+        if (sourceMusicianRows.length) {
           const { error: gigMusiciansInsertError } = await supabase.from('SetlistGigMusicians').insert(
-            gigMusicianRows.map((row) => withBandId(row)),
+            sourceMusicianRows.map((row) => withBandId(row)),
           )
-          reportSupabaseError(gigMusiciansInsertError)
+          if (gigMusiciansInsertError) {
+            reportSupabaseError(gigMusiciansInsertError)
+            await supabase.from('SetlistGigs').delete().eq('id', newId)
+            rollbackDuplicate()
+            return
+          }
         }
 
-        const gigSingerRows = uniqueSourceSongIds.flatMap((songId) => {
-          const song = appState.songs.find((item) => item.id === songId)
-          if (!song) return []
-          return song.keys
-            .filter((key) => key.gigOverrides[source.id])
-            .map((key) => ({
-              id: createId(),
-              gig_id: newId,
-              song_id: songId,
-              singer_name: key.singer,
-              gig_key: key.gigOverrides[source.id],
-            }))
-        })
-        if (gigSingerRows.length) {
+        if (sourceSingerRows.length) {
           const { error: gigSingerKeysInsertError } = await supabase.from('SetlistGigSingerKeys').insert(
-            gigSingerRows.map((row) => withBandId(row)),
+            sourceSingerRows.map((row) => withBandId(row)),
           )
-          reportSupabaseError(gigSingerKeysInsertError)
+          if (gigSingerKeysInsertError) {
+            reportSupabaseError(gigSingerKeysInsertError)
+            await supabase.from('SetlistGigs').delete().eq('id', newId)
+            rollbackDuplicate()
+            return
+          }
         }
 
-        const sectionOverrideTagRows = Object.entries(sourceGigSectionOverrides)
-          .flatMap(([songId, sections]) =>
-            (sections ?? []).map((section) => ({
-              id: createId(),
-              song_id: songId,
-              tag: makeGigSectionTag(newId, section),
-            })),
-          )
-          .filter((row) => row.song_id && row.tag)
         if (sectionOverrideTagRows.length) {
           const { error: sectionTagInsertError } = await supabase.from('SetlistSongTags').insert(
             sectionOverrideTagRows.map((row) => withBandId(row)),
           )
-          reportSupabaseError(sectionTagInsertError)
+          if (sectionTagInsertError) {
+            reportSupabaseError(sectionTagInsertError)
+            await supabase.from('SetlistGigs').delete().eq('id', newId)
+            rollbackDuplicate()
+          }
         }
-      })()
-    }
-    if (Object.keys(sourceGigSectionOverrides).length > 0) {
-      setGigSongSectionOverrides((prev) => ({
-        ...prev,
-        [newId]: { ...sourceGigSectionOverrides },
-      }))
-    }
-    setGigHiddenSpecialSection((prev) => ({ ...prev, [newId]: false }))
+      } finally {
+        endAppDataWrite()
+      }
+    })()
   }
 
   const createBlankSetlist = () => {
@@ -4806,8 +4938,7 @@ function App() {
     setGigHiddenSpecialSection((prev) => ({ ...prev, [newId]: false }))
     setNowPlayingByGig((prev) => ({ ...prev, [newId]: null }))
     setDismissedUpNextId(null)
-    setSelectedSetlistId(newId)
-    setActiveGigId(newId)
+    selectCurrentGig(newId)
     setScreen('builder')
     // Clear any leftover live-call UI without touching the previous gig's DB now-playing yet.
     setGigMode(false)
@@ -4831,8 +4962,21 @@ function App() {
               ...prev,
               setlists: prev.setlists.filter((setlist) => setlist.id !== newId),
             }))
+            setGigHiddenSpecialSection((prev) => {
+              if (!(newId in prev)) return prev
+              const next = { ...prev }
+              delete next[newId]
+              return next
+            })
+            setNowPlayingByGig((prev) => {
+              if (!(newId in prev)) return prev
+              const next = { ...prev }
+              delete next[newId]
+              return next
+            })
             setSelectedSetlistId('')
             setActiveGigId('')
+            setScreen('setlists')
           }
         } finally {
           endAppDataWrite()
@@ -4860,7 +5004,18 @@ function App() {
       gigMusicians: prev.gigMusicians.filter((gm) => gm.gigId !== setlistId),
     }))
     if (supabase) {
-      runSupabase(supabase.from('SetlistGigs').delete().eq('id', setlistId))
+      beginAppDataWrite()
+      void (async () => {
+        try {
+          const { error } = await supabase.from('SetlistGigs').delete().eq('id', setlistId)
+          if (error) {
+            reportSupabaseError(error)
+            undoLast()
+          }
+        } finally {
+          endAppDataWrite()
+        }
+      })()
     }
     if (selectedSetlistId === setlistId) {
       setSelectedSetlistId('')
@@ -4989,15 +5144,16 @@ function App() {
     if (options.persist === false || !supabase) return
     const client = supabase
     const deletedTag = makeGigSectionDeletedTag(gigId, normalizedSection)
-    uniqueSongIds.forEach((songId) => {
-      runSupabase(
-        (async () => {
+    beginAppDataWrite()
+    void (async () => {
+      try {
+        for (const songId of uniqueSongIds) {
           const { error: clearDeletedError } = await client
             .from('SetlistSongTags')
             .delete()
             .eq('song_id', songId)
             .eq('tag', deletedTag)
-          if (clearDeletedError) return { error: clearDeletedError }
+          reportSupabaseError(clearDeletedError)
           const sectionTag = makeGigSectionTag(gigId, normalizedSection)
           const existingTagQuery = client
             .from('SetlistSongTags')
@@ -5008,17 +5164,19 @@ function App() {
           const existingTagRes = activeBandId
             ? await existingTagQuery.eq('band_id', activeBandId)
             : await existingTagQuery
-          if (existingTagRes.error) return { error: existingTagRes.error }
-          if ((existingTagRes.data ?? []).length > 0) return { error: null }
+          reportSupabaseError(existingTagRes.error)
+          if ((existingTagRes.data ?? []).length > 0) continue
           const { error: insertError } = await client.from('SetlistSongTags').insert(withBandId({
             id: createId(),
             song_id: songId,
             tag: sectionTag,
           }))
-          return { error: insertError }
-        })(),
-      )
-    })
+          reportSupabaseError(insertError)
+        }
+      } finally {
+        endAppDataWrite()
+      }
+    })()
   }
 
   const openAddSongsForSection = (section: string) => {
@@ -5033,6 +5191,11 @@ function App() {
 
   const addSelectedSongsToTargetSetlists = () => {
     if (!currentSetlist || selectedSongIds.length === 0) return
+    if (!isOnline) {
+      setSectionSaveStatus("You're offline — reconnect to save songs.")
+      window.setTimeout(() => setSectionSaveStatus(null), 3200)
+      return
+    }
     const normalizedTargets = normalizeTagList(sectionAddSongsTargets).filter(Boolean)
     const assignmentSection = normalizeSetlistSectionLabel(
       (normalizedTargets.length === 1 ? normalizedTargets[0] : '') ||
@@ -5043,6 +5206,11 @@ function App() {
     if (!assignmentSection) return
     const selectedUniqueSongIds = Array.from(new Set(selectedSongIds))
     const songsToAdd = selectedUniqueSongIds.filter((songId) => !currentSetlist.songIds.includes(songId))
+    const previousSongIds = currentSetlist.songIds
+    const previousSectionOverrides = gigSongSectionOverrides[currentSetlist.id]
+    const previousDeletedSectionSongs = gigDeletedSectionSongs[currentSetlist.id]
+    const styleTag = resolveSectionStyleTag(currentSetlist.id, assignmentSection)
+    rememberSectionStyle(currentSetlist.id, assignmentSection, styleTag)
 
     commitChange('Add songs to setlists', (prev) => ({
       ...prev,
@@ -5054,25 +5222,105 @@ function App() {
       ),
       tagsCatalog: prev.tagsCatalog,
     }))
-    setSongsForGigSection(currentSetlist.id, selectedUniqueSongIds, assignmentSection)
-
-    if (supabase) {
-      if (songsToAdd.length) {
-        runSupabase(
-          supabase.from('SetlistGigSongs').insert(
-            songsToAdd.map((songId, index) => withBandId({
-              id: createId(),
-              gig_id: currentSetlist.id,
-              song_id: songId,
-              sort_order: (currentSetlist.songIds.length ?? 0) + index,
-            })),
-          ),
-        )
-      }
+    setSongsForGigSection(currentSetlist.id, selectedUniqueSongIds, assignmentSection, {
+      persist: false,
+    })
+    if (styleTag) {
+      ensureSongsHaveLibraryStyleTags(selectedUniqueSongIds, styleTag)
     }
 
     setSelectedSongIds([])
     setShowSectionAddSongsModal(false)
+    setSectionSaveStatus('Saving setlist...')
+
+    if (!supabase) {
+      setSongsForGigSection(currentSetlist.id, selectedUniqueSongIds, assignmentSection)
+      setSectionSaveStatus(`Saved ${selectedUniqueSongIds.length} song${selectedUniqueSongIds.length === 1 ? '' : 's'} locally.`)
+      window.setTimeout(() => setSectionSaveStatus(null), 2600)
+      return
+    }
+
+    const client = supabase
+    const gigId = currentSetlist.id
+    sectionSaveWriteGate.begin()
+    beginAppDataWrite()
+    void (async () => {
+      try {
+        if (songsToAdd.length) {
+          const { error } = await client.from('SetlistGigSongs').insert(
+            songsToAdd.map((songId, index) =>
+              withBandId({
+                id: createId(),
+                gig_id: gigId,
+                song_id: songId,
+                sort_order: previousSongIds.length + index,
+              }),
+            ),
+          )
+          if (error) throw error
+        }
+        const deletedTag = makeGigSectionDeletedTag(gigId, assignmentSection)
+        const sectionTag = makeGigSectionTag(gigId, assignmentSection)
+        for (const songId of selectedUniqueSongIds) {
+          const { error: clearDeletedError } = await client
+            .from('SetlistSongTags')
+            .delete()
+            .eq('song_id', songId)
+            .eq('tag', deletedTag)
+          if (clearDeletedError) throw clearDeletedError
+          const existingTagQuery = client
+            .from('SetlistSongTags')
+            .select('id')
+            .eq('song_id', songId)
+            .eq('tag', sectionTag)
+            .limit(1)
+          const existingTagRes = activeBandId
+            ? await existingTagQuery.eq('band_id', activeBandId)
+            : await existingTagQuery
+          if (existingTagRes.error) throw existingTagRes.error
+          if ((existingTagRes.data ?? []).length > 0) continue
+          const { error: insertError } = await client.from('SetlistSongTags').insert(
+            withBandId({
+              id: createId(),
+              song_id: songId,
+              tag: sectionTag,
+            }),
+          )
+          if (insertError) throw insertError
+        }
+        setSectionSaveStatus(
+          `Saved ${selectedUniqueSongIds.length} song${selectedUniqueSongIds.length === 1 ? '' : 's'} to ${assignmentSection}.`,
+        )
+        window.setTimeout(() => setSectionSaveStatus(null), 2600)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Setlist save failed.'
+        setSupabaseError(message)
+        setSectionSaveStatus('Save failed. Please try again.')
+        window.setTimeout(() => setSectionSaveStatus(null), 3200)
+        undoLast()
+        setGigSongSectionOverrides((prev) => {
+          if (previousSectionOverrides === undefined) {
+            if (!(gigId in prev)) return prev
+            const next = { ...prev }
+            delete next[gigId]
+            return next
+          }
+          return { ...prev, [gigId]: previousSectionOverrides }
+        })
+        setGigDeletedSectionSongs((prev) => {
+          if (previousDeletedSectionSongs === undefined) {
+            if (!(gigId in prev)) return prev
+            const next = { ...prev }
+            delete next[gigId]
+            return next
+          }
+          return { ...prev, [gigId]: previousDeletedSectionSongs }
+        })
+      } finally {
+        endAppDataWrite()
+        sectionSaveWriteGate.end()
+      }
+    })()
   }
 
   const removeSongFromSetlist = (songId: string, sectionOverride?: string) => {
@@ -5123,19 +5371,26 @@ function App() {
         }
       })
       if (supabase) {
+        beginAppDataWrite()
         runSupabase(
-          supabase.from('SetlistSongTags').insert(withBandId({
-            id: createId(),
-            song_id: songId,
-            tag: makeGigSectionDeletedTag(currentSetlist.id, activeSection),
-          })),
-        )
-        runSupabase(
-          supabase
-            .from('SetlistSongTags')
-            .delete()
-            .eq('song_id', songId)
-            .eq('tag', makeGigSectionTag(currentSetlist.id, activeSection)),
+          (async () => {
+            try {
+              const { error: insertError } = await supabase.from('SetlistSongTags').insert(withBandId({
+                id: createId(),
+                song_id: songId,
+                tag: makeGigSectionDeletedTag(currentSetlist.id, activeSection),
+              }))
+              if (insertError) return { error: insertError }
+              const { error: deleteError } = await supabase
+                .from('SetlistSongTags')
+                .delete()
+                .eq('song_id', songId)
+                .eq('tag', makeGigSectionTag(currentSetlist.id, activeSection))
+              return { error: deleteError }
+            } finally {
+              endAppDataWrite()
+            }
+          })(),
         )
       }
       if (shouldOnlyRemoveFromSection) return
@@ -5160,19 +5415,26 @@ function App() {
       ),
     }))
     if (supabase) {
+      beginAppDataWrite()
       runSupabase(
-        supabase
-          .from('SetlistGigSongs')
-          .delete()
-          .eq('gig_id', currentSetlist.id)
-          .eq('song_id', songId),
-      )
-      runSupabase(
-        supabase
-          .from('SetlistGigSingerKeys')
-          .delete()
-          .eq('gig_id', currentSetlist.id)
-          .eq('song_id', songId),
+        (async () => {
+          try {
+            const { error: gigSongError } = await supabase
+              .from('SetlistGigSongs')
+              .delete()
+              .eq('gig_id', currentSetlist.id)
+              .eq('song_id', songId)
+            if (gigSongError) return { error: gigSongError }
+            const { error: singerKeyError } = await supabase
+              .from('SetlistGigSingerKeys')
+              .delete()
+              .eq('gig_id', currentSetlist.id)
+              .eq('song_id', songId)
+            return { error: singerKeyError }
+          } finally {
+            endAppDataWrite()
+          }
+        })(),
       )
     }
   }
@@ -5253,25 +5515,49 @@ function App() {
 
   const getSourceSectionSongIds = (section: string, source: Setlist) => {
     const normalizedSection = normalizeSetlistSectionLabel(section)
-    if (!normalizedSection) return []
-    const normalizedSectionLower = normalizedSection.toLowerCase()
-    const sourceHasExplicitSectionSongs = source.songIds.some((songId) =>
-      getGigSongSections(source.id, songId).some(
-        (override) => override.trim().toLowerCase() === normalizedSectionLower,
+    if (!normalizedSection || !currentSetlist) return []
+    const targetStyle = resolveSectionStyleTag(currentSetlist.id, normalizedSection)
+    const seedTags = getLibrarySeedTagsForSection(normalizedSection, targetStyle).map((tag) =>
+      tag.toLowerCase(),
+    )
+    const sourceSectionLabels = new Set<string>()
+    ;(gigSetlistSections[source.id] ?? []).forEach((label) => {
+      const normalized = normalizeSetlistSectionLabel(label)
+      if (normalized) sourceSectionLabels.add(normalized)
+    })
+    source.songIds.forEach((songId) => {
+      getGigSongSections(source.id, songId).forEach((label) => {
+        const normalized = normalizeSetlistSectionLabel(label)
+        if (normalized) sourceSectionLabels.add(normalized)
+      })
+    })
+    const matchingSourceSections = Array.from(sourceSectionLabels).filter((sourceSection) =>
+      sectionsShareStyleFamily(
+        normalizedSection,
+        sourceSection,
+        targetStyle,
+        resolveSectionStyleTag(source.id, sourceSection),
       ),
     )
-    const matchesLibrarySectionTag = (song: Song) => {
-      if (normalizedSectionLower.startsWith('dance set ')) return hasSongTag(song, 'Dance')
-      if (normalizedSectionLower.startsWith('dinner set ')) return hasSongTag(song, 'Dinner')
-      if (normalizedSectionLower.startsWith('latin set ')) return hasSongTag(song, 'Latin')
-      return hasSongTag(song, normalizedSection)
-    }
+    const explicitFromStyleFamily = source.songIds.filter((songId) => {
+      const song = appState.songs.find((item) => item.id === songId)
+      if (!song) return false
+      if (getDeletedSectionSongIds(source.id, normalizedSection).has(songId)) return false
+      return getGigSongSections(source.id, songId).some((sourceSection) =>
+        matchingSourceSections.some(
+          (match) => match.toLowerCase() === sourceSection.trim().toLowerCase(),
+        ),
+      )
+    })
+    if (explicitFromStyleFamily.length > 0) return explicitFromStyleFamily
+
+    // Fallback: pull by library style/tags (Dinner/Dance/Latin), not gig column title.
     return source.songIds.filter((songId) => {
       const song = appState.songs.find((item) => item.id === songId)
       if (!song) return false
-      return sourceHasExplicitSectionSongs
-        ? songMatchesGigSection(song, normalizedSection, source.id)
-        : matchesLibrarySectionTag(song)
+      return seedTags.some((seed) =>
+        song.tags.some((tag) => tag.trim().toLowerCase() === seed),
+      )
     })
   }
 
@@ -5279,9 +5565,12 @@ function App() {
     const source = appState.setlists.find((setlist) => setlist.id === gigId)
     if (!source || !currentSetlist) return
     const deletedSongIds = getDeletedSectionSongIds(currentSetlist.id, section)
-    const candidateSongIds = getSourceSectionSongIds(section, source).filter(
-      (songId) => !currentSetlist.songIds.includes(songId),
-    )
+    const candidateSongIds = getSourceSectionSongIds(section, source).filter((songId) => {
+      const song = appState.songs.find((item) => item.id === songId)
+      if (!song) return false
+      // Allow songs already on the gig if they are not yet in this section.
+      return !songMatchesGigSection(song, section, currentSetlist.id)
+    })
     setImportReview({
       section,
       sourceGigId: gigId,
@@ -5332,6 +5621,13 @@ function App() {
     if (!source || !currentSetlist) return false
     const normalizedSection = normalizeSetlistSectionLabel(section)
     if (!normalizedSection) return false
+    if (!isOnline) {
+      setSectionSaveStatus("You're offline — reconnect to save songs.")
+      window.setTimeout(() => setSectionSaveStatus(null), 3200)
+      return false
+    }
+    const targetStyle = resolveSectionStyleTag(currentSetlist.id, normalizedSection)
+    rememberSectionStyle(currentSetlist.id, normalizedSection, targetStyle)
     const activeSingerNames = new Set(
       appState.gigMusicians
         .filter((entry) => entry.gigId === currentSetlist.id && entry.status !== 'out')
@@ -5365,10 +5661,13 @@ function App() {
       window.setTimeout(() => setSectionSaveStatus(null), 2200)
       return false
     }
+    const targetGigId = currentSetlist.id
+    const previousSectionOverrides = gigSongSectionOverrides[targetGigId]
+    const previousDeletedSectionSongs = gigDeletedSectionSongs[targetGigId]
     commitChange(`Import ${section} from gig`, (prev) => ({
       ...prev,
       setlists: prev.setlists.map((setlist) =>
-        setlist.id === currentSetlist.id
+        setlist.id === targetGigId
           ? {
               ...setlist,
               songIds: Array.from(new Set([...setlist.songIds, ...sectionSongIds])),
@@ -5382,7 +5681,7 @@ function App() {
           const isActiveSinger = activeSingerNames.has(key.singer.trim().toLowerCase())
           if (!isActiveSinger) {
             const remainingGigOverrides = { ...key.gigOverrides }
-            delete remainingGigOverrides[currentSetlist.id]
+            delete remainingGigOverrides[targetGigId]
             return {
               ...key,
               gigOverrides: remainingGigOverrides,
@@ -5394,17 +5693,20 @@ function App() {
             ...key,
             gigOverrides: {
               ...key.gigOverrides,
-              [currentSetlist.id]: keyForCurrentGig,
+              [targetGigId]: keyForCurrentGig,
             },
           }
         })
         return { ...song, keys: nextKeys }
       }),
     }))
-    clearDeletedSectionSongMemory(currentSetlist.id, normalizedSection, sectionSongIds, {
+    clearDeletedSectionSongMemory(targetGigId, normalizedSection, sectionSongIds, {
       persist: false,
     })
-    setSongsForGigSection(currentSetlist.id, sectionSongIds, normalizedSection, { persist: false })
+    setSongsForGigSection(targetGigId, sectionSongIds, normalizedSection, { persist: false })
+    if (targetStyle) {
+      ensureSongsHaveLibraryStyleTags(sectionSongIds, targetStyle)
+    }
     const client = supabase
     if (!client) {
       setSectionSaveStatus(`Saved ${sectionSongIds.length} song${sectionSongIds.length === 1 ? '' : 's'} locally.`)
@@ -5412,11 +5714,8 @@ function App() {
       return true
     }
 
-    setlistSectionSaveInProgressRef.current = true
-    if (setlistSectionSaveCooldownTimerRef.current) {
-      window.clearTimeout(setlistSectionSaveCooldownTimerRef.current)
-      setlistSectionSaveCooldownTimerRef.current = null
-    }
+    sectionSaveWriteGate.begin()
+    beginAppDataWrite()
     setSectionSaveStatus('Saving setlist...')
     try {
       const requireSave = async (
@@ -5425,22 +5724,25 @@ function App() {
         const { error } = await promise
         if (error) throw error
       }
-      const gigSongIdsToSave = sectionSongIds
-      if (gigSongIdsToSave.length) {
-        const existingGigSongQuery = client
-          .from('SetlistGigSongs')
-          .delete()
-          .eq('gig_id', currentSetlist.id)
-          .in('song_id', gigSongIdsToSave)
-        await requireSave(
-          activeBandId ? existingGigSongQuery.eq('band_id', activeBandId) : existingGigSongQuery,
-        )
+      // Additive only — never delete existing gig songs (prevents data loss on partial failure).
+      const existingMembershipQuery = client
+        .from('SetlistGigSongs')
+        .select('song_id')
+        .eq('gig_id', targetGigId)
+        .in('song_id', sectionSongIds)
+      const existingMembershipRes = await (activeBandId
+        ? existingMembershipQuery.eq('band_id', activeBandId)
+        : existingMembershipQuery)
+      if (existingMembershipRes.error) throw existingMembershipRes.error
+      const alreadyOnGig = new Set((existingMembershipRes.data ?? []).map((row) => row.song_id))
+      const gigSongIdsToInsert = sectionSongIds.filter((songId) => !alreadyOnGig.has(songId))
+      if (gigSongIdsToInsert.length) {
         await requireSave(
           client.from('SetlistGigSongs').insert(
-            gigSongIdsToSave.map((songId, index) =>
+            gigSongIdsToInsert.map((songId, index) =>
               withBandId({
                 id: createId(),
-                gig_id: currentSetlist.id,
+                gig_id: targetGigId,
                 song_id: songId,
                 sort_order: currentSetlist.songIds.length + index,
               }),
@@ -5448,16 +5750,8 @@ function App() {
           ),
         )
       }
-      const tagPrefix = `${GIG_SECTION_TAG_PREFIX}${currentSetlist.id}::%`
-      const deletedTag = makeGigSectionDeletedTag(currentSetlist.id, normalizedSection)
-      const clearSectionTagsQuery = client
-        .from('SetlistSongTags')
-        .delete()
-        .in('song_id', sectionSongIds)
-        .like('tag', tagPrefix)
-      await requireSave(
-        activeBandId ? clearSectionTagsQuery.eq('band_id', activeBandId) : clearSectionTagsQuery,
-      )
+      const deletedTag = makeGigSectionDeletedTag(targetGigId, normalizedSection)
+      const sectionTag = makeGigSectionTag(targetGigId, normalizedSection)
       const clearDeletedTagsQuery = client
         .from('SetlistSongTags')
         .delete()
@@ -5466,26 +5760,29 @@ function App() {
       await requireSave(
         activeBandId ? clearDeletedTagsQuery.eq('band_id', activeBandId) : clearDeletedTagsQuery,
       )
-      await requireSave(
-        client.from('SetlistSongTags').insert(
-          sectionSongIds.map((songId) =>
+      for (const songId of sectionSongIds) {
+        const existingTagQuery = client
+          .from('SetlistSongTags')
+          .select('id')
+          .eq('song_id', songId)
+          .eq('tag', sectionTag)
+          .limit(1)
+        const existingTagRes = activeBandId
+          ? await existingTagQuery.eq('band_id', activeBandId)
+          : await existingTagQuery
+        if (existingTagRes.error) throw existingTagRes.error
+        if ((existingTagRes.data ?? []).length > 0) continue
+        await requireSave(
+          client.from('SetlistSongTags').insert(
             withBandId({
               id: createId(),
               song_id: songId,
-              tag: makeGigSectionTag(currentSetlist.id, normalizedSection),
+              tag: sectionTag,
             }),
           ),
-        ),
-      )
+        )
+      }
 
-      const clearSingerKeysQuery = client
-        .from('SetlistGigSingerKeys')
-        .delete()
-        .eq('gig_id', currentSetlist.id)
-        .in('song_id', sectionSongIds)
-      await requireSave(
-        activeBandId ? clearSingerKeysQuery.eq('band_id', activeBandId) : clearSingerKeysQuery,
-      )
       const singerKeyRows = sectionSongIds.flatMap((songId) => {
         const song = appState.songs.find((item) => item.id === songId)
         if (!song) return []
@@ -5498,7 +5795,7 @@ function App() {
           return [
             withBandId({
               id: createId(),
-              gig_id: currentSetlist.id,
+              gig_id: targetGigId,
               song_id: songId,
               singer_name: key.singer,
               gig_key: keyForCurrentGig,
@@ -5507,9 +5804,20 @@ function App() {
         })
       })
       if (singerKeyRows.length) {
+        // Upsert-safe: clear only keys we are about to rewrite for these singers/songs.
+        for (const row of singerKeyRows) {
+          const clearOneQuery = client
+            .from('SetlistGigSingerKeys')
+            .delete()
+            .eq('gig_id', targetGigId)
+            .eq('song_id', row.song_id)
+            .eq('singer_name', row.singer_name)
+          await requireSave(
+            activeBandId ? clearOneQuery.eq('band_id', activeBandId) : clearOneQuery,
+          )
+        }
         await requireSave(client.from('SetlistGigSingerKeys').insert(singerKeyRows))
       }
-      await loadSupabaseData()
       setSectionSaveStatus(`Saved ${sectionSongIds.length} song${sectionSongIds.length === 1 ? '' : 's'} to ${normalizedSection}.`)
       window.setTimeout(() => setSectionSaveStatus(null), 2600)
       return true
@@ -5518,13 +5826,31 @@ function App() {
       setSupabaseError(message)
       setSectionSaveStatus('Save failed. Please try again.')
       window.setTimeout(() => setSectionSaveStatus(null), 3200)
+      // Revert optimistic import so local state matches the failed DB write.
+      undoLast()
+      setGigSongSectionOverrides((prev) => {
+        if (previousSectionOverrides === undefined) {
+          if (!(targetGigId in prev)) return prev
+          const next = { ...prev }
+          delete next[targetGigId]
+          return next
+        }
+        return { ...prev, [targetGigId]: previousSectionOverrides }
+      })
+      setGigDeletedSectionSongs((prev) => {
+        if (previousDeletedSectionSongs === undefined) {
+          if (!(targetGigId in prev)) return prev
+          const next = { ...prev }
+          delete next[targetGigId]
+          return next
+        }
+        return { ...prev, [targetGigId]: previousDeletedSectionSongs }
+      })
       return false
     } finally {
-      // Keep suppress live briefly so delayed DELETE/INSERT realtime events cannot wipe the save.
-      setlistSectionSaveCooldownTimerRef.current = window.setTimeout(() => {
-        setlistSectionSaveInProgressRef.current = false
-        setlistSectionSaveCooldownTimerRef.current = null
-      }, 900)
+      endAppDataWrite()
+      // Keep suppress live briefly so delayed realtime events cannot wipe the save.
+      sectionSaveWriteGate.end()
     }
   }
 
@@ -5533,6 +5859,14 @@ function App() {
     text: string,
   ) => {
     if (!currentSetlist) return
+    const normalizedSection = normalizeSetlistSectionLabel(section)
+    if (!normalizedSection) return
+    const styleTag =
+      resolveSectionStyleTag(currentSetlist.id, normalizedSection) ||
+      inferSectionStyleTag(normalizedSection)
+    rememberSectionStyle(currentSetlist.id, normalizedSection, styleTag)
+    // Library tags use Dinner/Dance/Latin (not renamed column titles).
+    const libraryTag = styleTag || normalizedSection
     const lines = text
       .split('\n')
       .map((line) => line.trim())
@@ -5579,14 +5913,20 @@ function App() {
     entries.forEach((entry) => {
       const artistKey = normalize(entry.artist || '')
       const titleKey = normalize(entry.title)
+      // Prefer title+artist; title-only only when unique in the library.
       const found = artistKey
         ? existingByTitleArtist.get(`${titleKey}|${artistKey}`)
-        : existingByTitle.get(titleKey)
+        : (() => {
+            const matches = appState.songs.filter(
+              (song) => normalize(song.title) === titleKey,
+            )
+            return matches.length === 1 ? matches[0] : undefined
+          })()
       if (found) {
         songIdsForSection.add(found.id)
-        if (!hasSongTag(found, section)) {
+        if (!hasSongTag(found, libraryTag)) {
           songIdsToTag.add(found.id)
-          tagInserts.push({ id: createId(), song_id: found.id, tag: section })
+          tagInserts.push({ id: createId(), song_id: found.id, tag: libraryTag })
         }
         if (!currentSetlist.songIds.includes(found.id)) {
           songIdsToAdd.push(found.id)
@@ -5600,7 +5940,7 @@ function App() {
         artist: entry.artist,
         originalKey: '',
         youtubeUrl: '',
-        tags: [section],
+        tags: [libraryTag],
         keys: [],
         specialPlayedCount: 0,
       })
@@ -5609,7 +5949,7 @@ function App() {
         title: entry.title,
         artist: entry.artist || null,
       })
-      tagInserts.push({ id: createId(), song_id: id, tag: section })
+      tagInserts.push({ id: createId(), song_id: id, tag: libraryTag })
       songIdsToAdd.push(id)
       songIdsForSection.add(id)
       existingByTitle.set(titleKey, newSongs[newSongs.length - 1])
@@ -5627,13 +5967,13 @@ function App() {
     const uniqueSongIdsForSection = Array.from(songIdsForSection)
     if (newSongs.length > 0 && !canCreateSongs(newSongs.length)) return
 
-    commitChange(`Import ${section} paste`, (prev) => ({
+    commitChange(`Import ${normalizedSection} paste`, (prev) => ({
       ...prev,
       songs: [
         ...newSongs,
         ...prev.songs.map((song) =>
           songIdsToTag.has(song.id)
-            ? { ...song, tags: Array.from(new Set([...song.tags, section])) }
+            ? { ...song, tags: Array.from(new Set([...song.tags, libraryTag])) }
             : song,
         ),
       ],
@@ -5647,30 +5987,57 @@ function App() {
             }
           : setlist,
       ),
-      tagsCatalog: Array.from(new Set([...prev.tagsCatalog, section])),
+      tagsCatalog: Array.from(new Set([...prev.tagsCatalog, libraryTag])),
     }))
-    setSongsForGigSection(currentSetlist.id, uniqueSongIdsForSection, section)
+    const targetGigId = currentSetlist.id
+    const previousSongCount = currentSetlist.songIds.length
+    setSongsForGigSection(targetGigId, uniqueSongIdsForSection, normalizedSection)
 
     const client = supabase
     if (client) {
-      if (songInserts.length) {
-        runSupabase(client.from('SetlistSongs').insert(songInserts.map((row) => withBandId(row))))
-      }
-      if (tagInserts.length) {
-        runSupabase(client.from('SetlistSongTags').insert(tagInserts.map((row) => withBandId(row))))
-      }
-      if (uniqueSongIdsToAdd.length) {
-        runSupabase(
-          client.from('SetlistGigSongs').insert(
-            uniqueSongIdsToAdd.map((songId, index) => withBandId({
-              id: createId(),
-              gig_id: currentSetlist.id,
-              song_id: songId,
-              sort_order: currentSetlist.songIds.length + index,
-            })),
-          ),
-        )
-      }
+      beginAppDataWrite()
+      void (async () => {
+        try {
+          if (songInserts.length) {
+            const { error } = await client
+              .from('SetlistSongs')
+              .insert(songInserts.map((row) => withBandId(row)))
+            if (error) {
+              reportSupabaseError(error)
+              undoLast()
+              return
+            }
+          }
+          if (tagInserts.length) {
+            const { error } = await client
+              .from('SetlistSongTags')
+              .insert(tagInserts.map((row) => withBandId(row)))
+            if (error) {
+              reportSupabaseError(error)
+              undoLast()
+              return
+            }
+          }
+          if (uniqueSongIdsToAdd.length) {
+            const { error } = await client.from('SetlistGigSongs').insert(
+              uniqueSongIdsToAdd.map((songId, index) =>
+                withBandId({
+                  id: createId(),
+                  gig_id: targetGigId,
+                  song_id: songId,
+                  sort_order: previousSongCount + index,
+                }),
+              ),
+            )
+            if (error) {
+              reportSupabaseError(error)
+              undoLast()
+            }
+          }
+        } finally {
+          endAppDataWrite()
+        }
+      })()
     }
     setStarterPasteBySection((prev) => ({ ...prev, [section]: '' }))
     setStarterPasteOpen((prev) => ({ ...prev, [section]: false }))
@@ -5705,25 +6072,35 @@ function App() {
       return nextId
     })
     const dedupedNextSongIds = Array.from(new Set(nextSongIds))
+    const gigId = currentSetlist.id
 
     commitChange(`Reorder ${section} songs`, (prev) => ({
       ...prev,
       setlists: prev.setlists.map((setlist) =>
-        setlist.id === currentSetlist.id ? { ...setlist, songIds: dedupedNextSongIds } : setlist,
+        setlist.id === gigId ? { ...setlist, songIds: dedupedNextSongIds } : setlist,
       ),
     }))
 
     if (supabase) {
       const client = supabase
-      dedupedNextSongIds.forEach((songId, index) => {
-        runSupabase(
-          client
-            .from('SetlistGigSongs')
-            .update({ sort_order: index })
-            .eq('gig_id', currentSetlist.id)
-            .eq('song_id', songId),
-        )
-      })
+      beginAppDataWrite()
+      void (async () => {
+        try {
+          for (const [index, songId] of dedupedNextSongIds.entries()) {
+            const { error } = await client
+              .from('SetlistGigSongs')
+              .update({ sort_order: index })
+              .eq('gig_id', gigId)
+              .eq('song_id', songId)
+            if (error) {
+              reportSupabaseError(error)
+              break
+            }
+          }
+        } finally {
+          endAppDataWrite()
+        }
+      })()
     }
   }
   const reorderSectionSongs = (section: string, fromId: string, toId: string) => {
@@ -5737,6 +6114,19 @@ function App() {
     const insertIndex = fromIndex < toIndex ? toIndex - 1 : toIndex
     reorderedSectionSongIds.splice(insertIndex, 0, moved)
     applySectionSongOrder(section, reorderedSectionSongIds)
+  }
+  const nudgeSectionSong = (section: string, songId: string, direction: -1 | 1) => {
+    const sectionSongIds = getSectionSongIds(section)
+    const index = sectionSongIds.indexOf(songId)
+    if (index < 0) return
+    const swapIndex = index + direction
+    if (swapIndex < 0 || swapIndex >= sectionSongIds.length) return
+    const reordered = [...sectionSongIds]
+    const temp = reordered[index]
+    reordered[index] = reordered[swapIndex]
+    reordered[swapIndex] = temp
+    applySectionSongOrder(section, reordered)
+    flashMovedSong(songId)
   }
   const assignGigSongSection = (gigId: string, songId: string, section: string) => {
     const normalizedSection = normalizeSetlistSectionLabel(section)
@@ -5764,30 +6154,39 @@ function App() {
     })
     if (!supabase) return
     const client = supabase
+    beginAppDataWrite()
     void (async () => {
-      const sectionTag = makeGigSectionTag(gigId, normalizedSection)
-      const deletedTag = makeGigSectionDeletedTag(gigId, normalizedSection)
-      const { error: clearDeletedError } = await client
-        .from('SetlistSongTags')
-        .delete()
-        .eq('song_id', songId)
-        .eq('tag', deletedTag)
-      reportSupabaseError(clearDeletedError)
-      const existingQuery = client
-        .from('SetlistSongTags')
-        .select('id')
-        .eq('song_id', songId)
-        .eq('tag', sectionTag)
-        .limit(1)
-      const existingRes = activeBandId ? await existingQuery.eq('band_id', activeBandId) : await existingQuery
-      reportSupabaseError(existingRes.error)
-      if ((existingRes.data ?? []).length > 0) return
-      const { error: insertError } = await client.from('SetlistSongTags').insert(withBandId({
-        id: createId(),
-        song_id: songId,
-        tag: sectionTag,
-      }))
-      reportSupabaseError(insertError)
+      try {
+        const sectionTag = makeGigSectionTag(gigId, normalizedSection)
+        const deletedTag = makeGigSectionDeletedTag(gigId, normalizedSection)
+        const { error: clearDeletedError } = await client
+          .from('SetlistSongTags')
+          .delete()
+          .eq('song_id', songId)
+          .eq('tag', deletedTag)
+        reportSupabaseError(clearDeletedError)
+        const existingQuery = client
+          .from('SetlistSongTags')
+          .select('id')
+          .eq('song_id', songId)
+          .eq('tag', sectionTag)
+          .limit(1)
+        const existingRes = activeBandId
+          ? await existingQuery.eq('band_id', activeBandId)
+          : await existingQuery
+        reportSupabaseError(existingRes.error)
+        if ((existingRes.data ?? []).length > 0) return
+        const { error: insertError } = await client.from('SetlistSongTags').insert(
+          withBandId({
+            id: createId(),
+            song_id: songId,
+            tag: sectionTag,
+          }),
+        )
+        reportSupabaseError(insertError)
+      } finally {
+        endAppDataWrite()
+      }
     })()
   }
   const moveSongToGigSection = (
@@ -5996,7 +6395,7 @@ function App() {
     closeManualSectionOrderModal()
   }
 
-  const addGigSetlistSection = (requestedLabel: string) => {
+  const addGigSetlistSection = (requestedLabel: string, styleHint?: string | null) => {
     if (!currentSetlist) return
     const normalized = normalizeSetlistSectionLabel(requestedLabel)
     if (!normalized) return
@@ -6025,9 +6424,17 @@ function App() {
       }
       return next
     })
+    rememberSectionStyle(
+      currentSetlist.id,
+      normalized,
+      styleHint || inferSectionStyleTag(normalized),
+    )
+    const styleTag = normalizeSetlistSectionLabel(styleHint ?? '') || inferSectionStyleTag(normalized)
     setAppState((prev) => ({
       ...prev,
-      tagsCatalog: Array.from(new Set([...prev.tagsCatalog, normalized])),
+      tagsCatalog: Array.from(
+        new Set([...prev.tagsCatalog, normalized, ...(styleTag ? [styleTag] : [])]),
+      ),
     }))
   }
 
@@ -6054,6 +6461,10 @@ function App() {
     const normalizedTo = normalizeSetlistSectionLabel(toSection)
     if (!normalizedFrom || !normalizedTo) return
     if (normalizedFrom.toLowerCase() === normalizedTo.toLowerCase()) return
+    // Preserve Dinner/Dance/Latin affinity across rename so imports keep working.
+    const preservedStyle =
+      resolveSectionStyleTag(currentSetlist.id, normalizedFrom) ||
+      inferSectionStyleTag(normalizedTo)
 
     setGigSetlistSections((prev) => ({
       ...prev,
@@ -6067,6 +6478,17 @@ function App() {
         section.toLowerCase() === normalizedFrom.toLowerCase() ? normalizedTo : section,
       ),
     }))
+    setGigSectionStyles((prev) => {
+      const bySection = { ...(prev[currentSetlist.id] ?? {}) }
+      const previousStyle = bySection[normalizedFrom]
+      delete bySection[normalizedFrom]
+      if (preservedStyle) {
+        bySection[normalizedTo] = preservedStyle
+      } else if (previousStyle) {
+        bySection[normalizedTo] = previousStyle
+      }
+      return { ...prev, [currentSetlist.id]: bySection }
+    })
     setBuildCompleteOverrides((prev) => {
       const gigOverrides = prev[currentSetlist.id] ?? {}
       const fromKey = setlistPanelKey(normalizedFrom)
@@ -6137,7 +6559,7 @@ function App() {
         renameGigSetlistSectionLabel('Dance', 'Dance Set 1')
       }
       const label = danceCount === 0 ? 'Dance' : `Dance Set ${danceCount + 1}`
-      addGigSetlistSection(label)
+      addGigSetlistSection(label, 'Dance')
       return
     }
     if (template === 'Dinner') {
@@ -6151,7 +6573,7 @@ function App() {
         renameGigSetlistSectionLabel('Dinner', 'Dinner Set 1')
       }
       const label = dinnerCount === 0 ? 'Dinner' : `Dinner Set ${dinnerCount + 1}`
-      addGigSetlistSection(label)
+      addGigSetlistSection(label, 'Dinner')
       return
     }
     if (template === 'Latin') {
@@ -6165,7 +6587,7 @@ function App() {
         renameGigSetlistSectionLabel('Latin', 'Latin Set 1')
       }
       const label = latinCount === 0 ? 'Latin' : `Latin Set ${latinCount + 1}`
-      addGigSetlistSection(label)
+      addGigSetlistSection(label, 'Latin')
       return
     }
     if (template === 'Special Requests') {
@@ -6426,50 +6848,6 @@ function App() {
     )
   }
 
-  const beginGigMusicianWrite = () => {
-    gigMusicianWriteInProgressRef.current = true
-    if (gigMusicianWriteCooldownTimerRef.current) {
-      window.clearTimeout(gigMusicianWriteCooldownTimerRef.current)
-      gigMusicianWriteCooldownTimerRef.current = null
-    }
-  }
-
-  const endGigMusicianWrite = () => {
-    if (gigMusicianWriteCooldownTimerRef.current) {
-      window.clearTimeout(gigMusicianWriteCooldownTimerRef.current)
-    }
-    // Keep realtime suppressed briefly so delayed DELETE/INSERT events cannot wipe local state.
-    gigMusicianWriteCooldownTimerRef.current = window.setTimeout(() => {
-      gigMusicianWriteInProgressRef.current = false
-      gigMusicianWriteCooldownTimerRef.current = null
-    }, 900)
-  }
-
-  const beginAppDataWrite = () => {
-    appDataWriteInProgressRef.current = true
-    if (appDataWriteCooldownTimerRef.current) {
-      window.clearTimeout(appDataWriteCooldownTimerRef.current)
-      appDataWriteCooldownTimerRef.current = null
-    }
-  }
-
-  const endAppDataWrite = () => {
-    if (appDataWriteCooldownTimerRef.current) {
-      window.clearTimeout(appDataWriteCooldownTimerRef.current)
-    }
-    appDataWriteCooldownTimerRef.current = window.setTimeout(() => {
-      appDataWriteInProgressRef.current = false
-      appDataWriteCooldownTimerRef.current = null
-    }, 900)
-  }
-
-  const isAppWriteInFlight = () =>
-    Boolean(
-      setlistSectionSaveInProgressRef.current ||
-        gigMusicianWriteInProgressRef.current ||
-        appDataWriteInProgressRef.current,
-    )
-
   const exitGigMode = () => {
     // Clear Up Next so leaving Gig Mode does not resurrect a "called" song in the builder.
     if (currentSetlist) {
@@ -6507,68 +6885,84 @@ function App() {
     }))
     if (supabase) {
       beginGigMusicianWrite()
-      runSupabase(
-        (async () => {
-          try {
-            const ensureResult = await ensureGigExistsInSupabase(gigId)
-            if (ensureResult.error) return { error: ensureResult.error }
-            const existingQuery = supabase
-              .from('SetlistGigMusicians')
-              .select('id, musician_id, status')
-              .eq('gig_id', gigId)
-            const existingRes = activeBandId
-              ? await existingQuery.eq('band_id', activeBandId)
-              : await existingQuery
-            if (existingRes.error) return { error: existingRes.error }
-            const existingRows = existingRes.data ?? []
-            const existingByMusician = new Map(
-              existingRows.map((row) => [row.musician_id as string, row]),
-            )
-            const desiredMusicianIds = new Set(coreMusicians.map((musician) => musician.id))
-            const toInsert = coreMusicians.filter((musician) => !existingByMusician.has(musician.id))
-            const toDeleteIds = existingRows
-              .filter((row) => !desiredMusicianIds.has(row.musician_id as string))
-              .map((row) => row.id as string)
-            const toReactivateIds = existingRows
-              .filter(
-                (row) =>
-                  desiredMusicianIds.has(row.musician_id as string) && row.status !== 'active',
-              )
-              .map((row) => row.id as string)
-
-            if (toDeleteIds.length > 0) {
-              const { error: deleteError } = await supabase
-                .from('SetlistGigMusicians')
-                .delete()
-                .in('id', toDeleteIds)
-              if (deleteError) return { error: deleteError }
-            }
-            if (toReactivateIds.length > 0) {
-              const { error: updateError } = await supabase
-                .from('SetlistGigMusicians')
-                .update({ status: 'active' })
-                .in('id', toReactivateIds)
-              if (updateError) return { error: updateError }
-            }
-            if (toInsert.length > 0) {
-              const { error: insertError } = await supabase.from('SetlistGigMusicians').insert(
-                toInsert.map((musician) =>
-                  withBandId({
-                    id: createId(),
-                    gig_id: gigId,
-                    musician_id: musician.id,
-                    status: 'active',
-                  }),
-                ),
-              )
-              if (insertError) return { error: insertError }
-            }
-            return { error: null }
-          } finally {
-            endGigMusicianWrite()
+      void (async () => {
+        try {
+          const ensureResult = await ensureGigExistsInSupabase(gigId)
+          if (ensureResult.error) {
+            reportSupabaseError(ensureResult.error)
+            undoLast()
+            return
           }
-        })(),
-      )
+          const existingQuery = supabase
+            .from('SetlistGigMusicians')
+            .select('id, musician_id, status')
+            .eq('gig_id', gigId)
+          const existingRes = activeBandId
+            ? await existingQuery.eq('band_id', activeBandId)
+            : await existingQuery
+          if (existingRes.error) {
+            reportSupabaseError(existingRes.error)
+            undoLast()
+            return
+          }
+          const existingRows = existingRes.data ?? []
+          const existingByMusician = new Map(
+            existingRows.map((row) => [row.musician_id as string, row]),
+          )
+          const desiredMusicianIds = new Set(coreMusicians.map((musician) => musician.id))
+          const toInsert = coreMusicians.filter((musician) => !existingByMusician.has(musician.id))
+          const toDeleteIds = existingRows
+            .filter((row) => !desiredMusicianIds.has(row.musician_id as string))
+            .map((row) => row.id as string)
+          const toReactivateIds = existingRows
+            .filter(
+              (row) =>
+                desiredMusicianIds.has(row.musician_id as string) && row.status !== 'active',
+            )
+            .map((row) => row.id as string)
+
+          if (toDeleteIds.length > 0) {
+            const { error: deleteError } = await supabase
+              .from('SetlistGigMusicians')
+              .delete()
+              .in('id', toDeleteIds)
+            if (deleteError) {
+              reportSupabaseError(deleteError)
+              undoLast()
+              return
+            }
+          }
+          if (toReactivateIds.length > 0) {
+            const { error: updateError } = await supabase
+              .from('SetlistGigMusicians')
+              .update({ status: 'active' })
+              .in('id', toReactivateIds)
+            if (updateError) {
+              reportSupabaseError(updateError)
+              undoLast()
+              return
+            }
+          }
+          if (toInsert.length > 0) {
+            const { error: insertError } = await supabase.from('SetlistGigMusicians').insert(
+              toInsert.map((musician) =>
+                withBandId({
+                  id: createId(),
+                  gig_id: gigId,
+                  musician_id: musician.id,
+                  status: 'active',
+                }),
+              ),
+            )
+            if (insertError) {
+              reportSupabaseError(insertError)
+              undoLast()
+            }
+          }
+        } finally {
+          endGigMusicianWrite()
+        }
+      })()
     }
   }
 
@@ -6586,20 +6980,21 @@ function App() {
     }))
     if (supabase && nextStatus) {
       beginGigMusicianWrite()
-      runSupabase(
-        (async () => {
-          try {
-            const { error } = await supabase
-              .from('SetlistGigMusicians')
-              .update({ status: nextStatus })
-              .eq('gig_id', gigId)
-              .eq('musician_id', musicianId)
-            return { error }
-          } finally {
-            endGigMusicianWrite()
+      void (async () => {
+        try {
+          const { error } = await supabase
+            .from('SetlistGigMusicians')
+            .update({ status: nextStatus })
+            .eq('gig_id', gigId)
+            .eq('musician_id', musicianId)
+          if (error) {
+            reportSupabaseError(error)
+            undoLast()
           }
-        })(),
-      )
+        } finally {
+          endGigMusicianWrite()
+        }
+      })()
     }
   }
 
@@ -6622,25 +7017,30 @@ function App() {
     })
     if (supabase && didAdd) {
       beginGigMusicianWrite()
-      runSupabase(
-        (async () => {
-          try {
-            const ensureResult = await ensureGigExistsInSupabase(gigId)
-            if (ensureResult.error) return { error: ensureResult.error }
-            const { error } = await supabase.from('SetlistGigMusicians').insert(
-              withBandId({
-                id: createId(),
-                gig_id: gigId,
-                musician_id: musicianId,
-                status: 'active',
-              }),
-            )
-            return { error }
-          } finally {
-            endGigMusicianWrite()
+      void (async () => {
+        try {
+          const ensureResult = await ensureGigExistsInSupabase(gigId)
+          if (ensureResult.error) {
+            reportSupabaseError(ensureResult.error)
+            undoLast()
+            return
           }
-        })(),
-      )
+          const { error } = await supabase.from('SetlistGigMusicians').insert(
+            withBandId({
+              id: createId(),
+              gig_id: gigId,
+              musician_id: musicianId,
+              status: 'active',
+            }),
+          )
+          if (error) {
+            reportSupabaseError(error)
+            undoLast()
+          }
+        } finally {
+          endGigMusicianWrite()
+        }
+      })()
     }
   }
 
@@ -6655,20 +7055,21 @@ function App() {
     }))
     if (supabase) {
       beginGigMusicianWrite()
-      runSupabase(
-        (async () => {
-          try {
-            const { error } = await supabase
-              .from('SetlistGigMusicians')
-              .delete()
-              .eq('gig_id', gigId)
-              .eq('musician_id', musicianId)
-            return { error }
-          } finally {
-            endGigMusicianWrite()
+      void (async () => {
+        try {
+          const { error } = await supabase
+            .from('SetlistGigMusicians')
+            .delete()
+            .eq('gig_id', gigId)
+            .eq('musician_id', musicianId)
+          if (error) {
+            reportSupabaseError(error)
+            undoLast()
           }
-        })(),
-      )
+        } finally {
+          endGigMusicianWrite()
+        }
+      })()
     }
   }
 
@@ -6699,39 +7100,48 @@ function App() {
     }))
     if (supabase) {
       beginGigMusicianWrite()
-      runSupabase(
-        (async () => {
-          try {
-            const ensureResult = await ensureGigExistsInSupabase(gigId)
-            if (ensureResult.error) return { error: ensureResult.error }
-            const { error: musicianInsertError } = await supabase.from('SetlistMusicians').insert(
+      void (async () => {
+        try {
+          const ensureResult = await ensureGigExistsInSupabase(gigId)
+          if (ensureResult.error) {
+            reportSupabaseError(ensureResult.error)
+            undoLast()
+            return
+          }
+          const { error: musicianInsertError } = await supabase.from('SetlistMusicians').insert(
+            withBandId({
+              id,
+              name,
+              roster: 'sub',
+              email: newSubEmail.trim() || null,
+              phone: newSubPhone.trim() || null,
+              instruments: newSubInstruments,
+              singer: newSubSinger || null,
+            }),
+          )
+          if (musicianInsertError) {
+            reportSupabaseError(musicianInsertError)
+            undoLast()
+            return
+          }
+          const { error: gigMusicianInsertError } = await supabase
+            .from('SetlistGigMusicians')
+            .insert(
               withBandId({
-                id,
-                name,
-                roster: 'sub',
-                email: newSubEmail.trim() || null,
-                phone: newSubPhone.trim() || null,
-                instruments: newSubInstruments,
-                singer: newSubSinger || null,
+                id: createId(),
+                gig_id: gigId,
+                musician_id: id,
+                status: 'active',
               }),
             )
-            if (musicianInsertError) return { error: musicianInsertError }
-            const { error: gigMusicianInsertError } = await supabase
-              .from('SetlistGigMusicians')
-              .insert(
-                withBandId({
-                  id: createId(),
-                  gig_id: gigId,
-                  musician_id: id,
-                  status: 'active',
-                }),
-              )
-            return { error: gigMusicianInsertError }
-          } finally {
-            endGigMusicianWrite()
+          if (gigMusicianInsertError) {
+            reportSupabaseError(gigMusicianInsertError)
+            undoLast()
           }
-        })(),
-      )
+        } finally {
+          endGigMusicianWrite()
+        }
+      })()
     }
     setNewSubName('')
     setNewSubEmail('')
@@ -7152,35 +7562,40 @@ function App() {
       tagsCatalog: Array.from(new Set([...prev.tagsCatalog, ...normalizedEditingTags])),
     }))
     if (supabase) {
+      beginAppDataWrite()
       runSupabase(
         (async () => {
-          const { error: updateError } = await supabase
-            .from('SetlistSongs')
-            .update({
-              title,
-              artist: editingSongArtist.trim() || null,
-              audio_url: editingSongAudio.trim() || null,
-              original_key: editingSongOriginalKey.trim() || null,
-            })
-            .eq('id', editingSongId)
-          if (updateError) return { error: updateError }
+          try {
+            const { error: updateError } = await supabase
+              .from('SetlistSongs')
+              .update({
+                title,
+                artist: editingSongArtist.trim() || null,
+                audio_url: editingSongAudio.trim() || null,
+                original_key: editingSongOriginalKey.trim() || null,
+              })
+              .eq('id', editingSongId)
+            if (updateError) return { error: updateError }
 
-          const { error: deleteError } = await supabase
-            .from('SetlistSongTags')
-            .delete()
-            .eq('song_id', editingSongId)
-          if (deleteError) return { error: deleteError }
+            const { error: deleteError } = await supabase
+              .from('SetlistSongTags')
+              .delete()
+              .eq('song_id', editingSongId)
+            if (deleteError) return { error: deleteError }
 
-          if (!normalizedEditingTags.length) return { error: null }
+            if (!normalizedEditingTags.length) return { error: null }
 
-          const { error: insertError } = await supabase.from('SetlistSongTags').insert(
-            normalizedEditingTags.map((tag) => withBandId({
-              id: createId(),
-              song_id: editingSongId,
-              tag,
-            })),
-          )
-          return { error: insertError }
+            const { error: insertError } = await supabase.from('SetlistSongTags').insert(
+              normalizedEditingTags.map((tag) => withBandId({
+                id: createId(),
+                song_id: editingSongId,
+                tag,
+              })),
+            )
+            return { error: insertError }
+          } finally {
+            endAppDataWrite()
+          }
         })(),
       )
     }
@@ -7351,25 +7766,44 @@ function App() {
   const deleteSpecialRequest = (requestId: string) => {
     if (!currentSetlist) return
     const targetRequest = appState.specialRequests.find((request) => request.id === requestId)
+    const gigId = currentSetlist.id
+    const previousOrder = specialRequestOrderByGig[gigId]
     commitChange('Delete special request', (prev) => ({
       ...prev,
       specialRequests: prev.specialRequests.filter((request) => request.id !== requestId),
     }))
     setSpecialRequestOrderByGig((prev) => {
-      const ordered = prev[currentSetlist.id] ?? []
+      const ordered = prev[gigId] ?? []
       if (!ordered.includes(requestId)) return prev
       return {
         ...prev,
-        [currentSetlist.id]: ordered.filter((id) => id !== requestId),
+        [gigId]: ordered.filter((id) => id !== requestId),
       }
     })
-    if (supabase) {
-      if (targetRequest?.origin === 'dj_track') {
-        runSupabase(supabase.from('SetlistGigDjTracks').delete().eq('id', requestId))
-      } else {
-        runSupabase(supabase.from('SetlistSpecialRequests').delete().eq('id', requestId))
+    if (!supabase) return
+    beginAppDataWrite()
+    void (async () => {
+      try {
+        const { error } =
+          targetRequest?.origin === 'dj_track'
+            ? await supabase.from('SetlistGigDjTracks').delete().eq('id', requestId)
+            : await supabase.from('SetlistSpecialRequests').delete().eq('id', requestId)
+        if (!error) return
+        reportSupabaseError(error)
+        undoLast()
+        setSpecialRequestOrderByGig((prev) => {
+          if (previousOrder === undefined) {
+            if (!(gigId in prev)) return prev
+            const next = { ...prev }
+            delete next[gigId]
+            return next
+          }
+          return { ...prev, [gigId]: previousOrder }
+        })
+      } finally {
+        endAppDataWrite()
       }
-    }
+    })()
   }
 
   const syncSpecialRequestSingerKeys = async (
@@ -7379,28 +7813,33 @@ function App() {
     keyValue: string,
   ) => {
     if (!supabase || !songId) return { error: null }
-    const deleteQuery = supabase
-      .from('SetlistGigSingerKeys')
-      .delete()
-      .eq('gig_id', gigId)
-      .eq('song_id', songId)
-    const { error: deleteError } = activeBandId
-      ? await deleteQuery.eq('band_id', activeBandId)
-      : await deleteQuery
-    if (deleteError) return { error: deleteError }
-    const normalizedSingers = normalizeTagList(singers)
-    const normalizedKey = keyValue.trim()
-    if (!normalizedSingers.length || !normalizedKey) return { error: null }
-    const { error: insertError } = await supabase.from('SetlistGigSingerKeys').insert(
-      normalizedSingers.map((singer) => withBandId({
-        id: createId(),
-        gig_id: gigId,
-        song_id: songId,
-        singer_name: singer,
-        gig_key: normalizedKey,
-      })),
-    )
-    return { error: insertError }
+    beginAppDataWrite()
+    try {
+      const deleteQuery = supabase
+        .from('SetlistGigSingerKeys')
+        .delete()
+        .eq('gig_id', gigId)
+        .eq('song_id', songId)
+      const { error: deleteError } = activeBandId
+        ? await deleteQuery.eq('band_id', activeBandId)
+        : await deleteQuery
+      if (deleteError) return { error: deleteError }
+      const normalizedSingers = normalizeTagList(singers)
+      const normalizedKey = keyValue.trim()
+      if (!normalizedSingers.length || !normalizedKey) return { error: null }
+      const { error: insertError } = await supabase.from('SetlistGigSingerKeys').insert(
+        normalizedSingers.map((singer) => withBandId({
+          id: createId(),
+          gig_id: gigId,
+          song_id: songId,
+          singer_name: singer,
+          gig_key: normalizedKey,
+        })),
+      )
+      return { error: insertError }
+    } finally {
+      endAppDataWrite()
+    }
   }
   const ensureGigSongMembership = async (
     gigId: string,
@@ -7729,145 +8168,203 @@ function App() {
           : [...prev.specialTypes, normalizedType],
       }
     })
+    const gigId = currentSetlist.id
+    const previousOrder = specialRequestOrderByGig[gigId]
+    const externalAudioUrl = pendingSpecialExternalUrl.trim()
+    const specialNote = pendingSpecialNote.trim()
     setSpecialRequestOrderByGig((prev) => ({
       ...prev,
-      [currentSetlist.id]: [requestId, ...(prev[currentSetlist.id] ?? []).filter((id) => id !== requestId)],
+      [gigId]: [requestId, ...(prev[gigId] ?? []).filter((id) => id !== requestId)],
     }))
     resetPendingSpecialRequest()
     setShowSpecialRequestModal(false)
-    if (supabase) {
-      if (shouldPersistAsDjTrack) {
-        runSupabase(
-          (async () => {
-            const { error: ensureSongError } = await supabase.from('SetlistSongs').upsert(
-              withBandId({
-                id: createdSongId,
-                title: songTitle,
-                artist: normalizedArtist,
-                audio_url: pendingSpecialExternalUrl.trim() || null,
-                original_key: null,
-                deleted_at: null,
-              }),
-              { onConflict: 'id' },
-            )
-            if (ensureSongError) return { error: ensureSongError }
-            const { error: ensureGigSongError } = await ensureGigSongMembership(
-              currentSetlist.id,
-              createdSongId,
-            )
-            if (ensureGigSongError) return { error: ensureGigSongError }
+    if (!supabase) return
 
-            const djTags = ['Special Request', 'DJ Only']
-            const { data: existingTags, error: tagReadError } = await supabase
-              .from('SetlistSongTags')
-              .select('tag')
-              .eq('song_id', createdSongId)
-              .in('tag', djTags)
-            if (tagReadError) return { error: tagReadError }
-            const existingTagSet = new Set(
-              (existingTags ?? []).map((row) => String(row.tag ?? '').trim().toLowerCase()),
-            )
-            const missingTags = djTags.filter((tag) => !existingTagSet.has(tag.toLowerCase()))
-            if (missingTags.length > 0) {
-              const { error: tagInsertError } = await supabase.from('SetlistSongTags').insert(
-                missingTags.map((tag) => withBandId({
-                  id: createId(),
-                  song_id: createdSongId,
-                  tag,
-                })),
-              )
-              if (tagInsertError) return { error: tagInsertError }
-            }
+    const rollbackSpecialAdd = () => {
+      undoLast()
+      setSpecialRequestOrderByGig((prev) => {
+        if (previousOrder === undefined) {
+          if (!(gigId in prev)) return prev
+          const next = { ...prev }
+          delete next[gigId]
+          return next
+        }
+        return { ...prev, [gigId]: previousOrder }
+      })
+    }
 
-            const { error: djInsertError } = await supabase.from('SetlistGigDjTracks').insert(
-              withBandId({
-                id: requestId,
-                gig_id: currentSetlist.id,
-                sort_order: getOrderedSpecialRequests(currentSetlist.id).length,
-                title: songTitle,
-                artist: normalizedArtist,
-                notes: pendingSpecialNote.trim(),
-                source_type: getDjSourceTypeFromUrl(pendingSpecialExternalUrl),
-                source_url: pendingSpecialExternalUrl.trim(),
-                status: 'active',
-                metadata: { type: normalizedType, song_id: createdSongId },
-              }),
-            )
-            return { error: djInsertError }
-          })(),
-        )
-        return
-      }
-      runSupabase(
-        (async () => {
-          // Ensure the referenced song row exists in Supabase before inserting special request.
-          // This protects against legacy local-only songs causing FK failures.
+    beginAppDataWrite()
+    void (async () => {
+      try {
+        if (shouldPersistAsDjTrack) {
           const { error: ensureSongError } = await supabase.from('SetlistSongs').upsert(
             withBandId({
               id: createdSongId,
               title: songTitle,
-              artist: normalizedArtist || existingSong?.artist || '',
-              audio_url: pendingSpecialExternalUrl.trim() || existingSong?.youtubeUrl || null,
-              original_key: existingSong?.originalKey ?? null,
+              artist: normalizedArtist,
+              audio_url: externalAudioUrl || null,
+              original_key: null,
               deleted_at: null,
             }),
             { onConflict: 'id' },
           )
-          if (ensureSongError) return { error: ensureSongError }
-          const { error: ensureGigSongError } = await ensureGigSongMembership(
-            currentSetlist.id,
-            createdSongId,
-          )
-          if (ensureGigSongError) return { error: ensureGigSongError }
+          if (ensureSongError) {
+            reportSupabaseError(ensureSongError)
+            rollbackSpecialAdd()
+            return
+          }
+          const { error: ensureGigSongError } = await ensureGigSongMembership(gigId, createdSongId)
+          if (ensureGigSongError) {
+            reportSupabaseError(ensureGigSongError)
+            rollbackSpecialAdd()
+            return
+          }
 
-          if (!existingSong && customSong) {
-            if (normalizedSingers.length > 0 && normalizedKey) {
-              const { error: keyInsertError } = await supabase.from('SetlistSongKeys').insert(
-                normalizedSingers.map((singer) => withBandId({
+          const djTags = ['Special Request', 'DJ Only']
+          const { data: existingTags, error: tagReadError } = await supabase
+            .from('SetlistSongTags')
+            .select('tag')
+            .eq('song_id', createdSongId)
+            .in('tag', djTags)
+          if (tagReadError) {
+            reportSupabaseError(tagReadError)
+            rollbackSpecialAdd()
+            return
+          }
+          const existingTagSet = new Set(
+            (existingTags ?? []).map((row) => String(row.tag ?? '').trim().toLowerCase()),
+          )
+          const missingTags = djTags.filter((tag) => !existingTagSet.has(tag.toLowerCase()))
+          if (missingTags.length > 0) {
+            const { error: tagInsertError } = await supabase.from('SetlistSongTags').insert(
+              missingTags.map((tag) =>
+                withBandId({
+                  id: createId(),
+                  song_id: createdSongId,
+                  tag,
+                }),
+              ),
+            )
+            if (tagInsertError) {
+              reportSupabaseError(tagInsertError)
+              rollbackSpecialAdd()
+              return
+            }
+          }
+
+          const { error: djInsertError } = await supabase.from('SetlistGigDjTracks').insert(
+            withBandId({
+              id: requestId,
+              gig_id: gigId,
+              sort_order: getOrderedSpecialRequests(gigId).length,
+              title: songTitle,
+              artist: normalizedArtist,
+              notes: specialNote,
+              source_type: getDjSourceTypeFromUrl(externalAudioUrl),
+              source_url: externalAudioUrl,
+              status: 'active',
+              metadata: { type: normalizedType, song_id: createdSongId },
+            }),
+          )
+          if (djInsertError) {
+            reportSupabaseError(djInsertError)
+            rollbackSpecialAdd()
+          }
+          return
+        }
+
+        const { error: ensureSongError } = await supabase.from('SetlistSongs').upsert(
+          withBandId({
+            id: createdSongId,
+            title: songTitle,
+            artist: normalizedArtist || existingSong?.artist || '',
+            audio_url: externalAudioUrl || existingSong?.youtubeUrl || null,
+            original_key: existingSong?.originalKey ?? null,
+            deleted_at: null,
+          }),
+          { onConflict: 'id' },
+        )
+        if (ensureSongError) {
+          reportSupabaseError(ensureSongError)
+          rollbackSpecialAdd()
+          return
+        }
+        const { error: ensureGigSongError } = await ensureGigSongMembership(gigId, createdSongId)
+        if (ensureGigSongError) {
+          reportSupabaseError(ensureGigSongError)
+          rollbackSpecialAdd()
+          return
+        }
+
+        if (!existingSong && customSong) {
+          if (normalizedSingers.length > 0 && normalizedKey) {
+            const { error: keyInsertError } = await supabase.from('SetlistSongKeys').insert(
+              normalizedSingers.map((singer) =>
+                withBandId({
                   id: createId(),
                   song_id: createdSongId,
                   singer_name: singer,
                   default_key: normalizedKey,
-                })),
-              )
-              if (keyInsertError) return { error: keyInsertError }
+                }),
+              ),
+            )
+            if (keyInsertError) {
+              reportSupabaseError(keyInsertError)
+              rollbackSpecialAdd()
+              return
             }
           }
+        }
 
-          const tagsToPersist = existingSong ? missingTagsForExistingSong : requestTags
-          if (tagsToPersist.length > 0) {
-            const { error: tagInsertError } = await supabase.from('SetlistSongTags').insert(
-              tagsToPersist.map((tag) => withBandId({
+        const tagsToPersist = existingSong ? missingTagsForExistingSong : requestTags
+        if (tagsToPersist.length > 0) {
+          const { error: tagInsertError } = await supabase.from('SetlistSongTags').insert(
+            tagsToPersist.map((tag) =>
+              withBandId({
                 id: createId(),
                 song_id: createdSongId,
                 tag,
-              })),
-            )
-            if (tagInsertError) return { error: tagInsertError }
-          }
-
-          const { error: requestInsertError } = await insertSpecialRequestRowWithFallback({
-            id: requestId,
-            gig_id: currentSetlist.id,
-            request_type: normalizedType,
-            song_title: songTitle,
-            song_id: createdSongId,
-            singers: normalizedSingers,
-            song_key: normalizedKey || null,
-            note: pendingSpecialNote.trim() || null,
-            dj_only: isPendingSpecialDjOnly,
-            external_audio_url: pendingSpecialExternalUrl.trim() || null,
-          })
-          if (requestInsertError) return { error: requestInsertError }
-          return syncSpecialRequestSingerKeys(
-            currentSetlist.id,
-            createdSongId,
-            normalizedSingers,
-            normalizedKey,
+              }),
+            ),
           )
-        })(),
-      )
-    }
+          if (tagInsertError) {
+            reportSupabaseError(tagInsertError)
+            rollbackSpecialAdd()
+            return
+          }
+        }
+
+        const { error: requestInsertError } = await insertSpecialRequestRowWithFallback({
+          id: requestId,
+          gig_id: gigId,
+          request_type: normalizedType,
+          song_title: songTitle,
+          song_id: createdSongId,
+          singers: normalizedSingers,
+          song_key: normalizedKey || null,
+          note: specialNote || null,
+          dj_only: isPendingSpecialDjOnly,
+          external_audio_url: externalAudioUrl || null,
+        })
+        if (requestInsertError) {
+          reportSupabaseError(requestInsertError)
+          rollbackSpecialAdd()
+          return
+        }
+        const { error: singerKeyError } = await syncSpecialRequestSingerKeys(
+          gigId,
+          createdSongId,
+          normalizedSingers,
+          normalizedKey,
+        )
+        if (singerKeyError) {
+          reportSupabaseError(singerKeyError)
+          rollbackSpecialAdd()
+        }
+      } finally {
+        endAppDataWrite()
+      }
+    })()
   }
 
   const hasDocsForSong = (songId?: string) => {
@@ -8046,6 +8543,8 @@ function App() {
 
   const loadSupabaseData = useCallback(async () => {
     if (!supabase || !activeBandId) return
+    const loadGeneration = ++loadSupabaseDataGenerationRef.current
+    const isStaleLoad = () => loadGeneration !== loadSupabaseDataGenerationRef.current
     setSupabaseError(null)
     const [
       songsRes,
@@ -8074,6 +8573,7 @@ function App() {
       supabase.from('SetlistGigMusicians').select('*').eq('band_id', activeBandId),
       supabase.from('SetlistGigNowPlaying').select('*').eq('band_id', activeBandId),
     ])
+    if (isStaleLoad()) return
 
     const canIgnoreDjTracksError = Boolean(
       djTracksRes.error &&
@@ -8577,26 +9077,33 @@ function App() {
         acc[row.gig_id] = row.song_id ?? null
         return acc
       }, {}) ?? {}
-    setNowPlayingByGig(nowPlayingMap)
-    setGigSongSectionOverrides(
-      Array.from(gigSectionOverrideMap.entries()).reduce<Record<string, Record<string, string[]>>>(
-        (acc, [gigId, bySong]) => {
-          acc[gigId] = bySong
-          return acc
-        },
-        {},
-      ),
-    )
-    setGigDeletedSectionSongs(
-      Array.from(gigDeletedSectionSongMap.entries()).reduce<Record<string, Record<string, string[]>>>(
-        (acc, [gigId, bySection]) => {
-          acc[gigId] = bySection
-          return acc
-        },
-        {},
-      ),
-    )
-    setSpecialRequestOrderByGig(specialOrderFromSupabase)
+    if (isStaleLoad()) return
+
+    // Skip secondary state writes while a local mutation is settling — full replace
+    // of section overrides / now-playing mid-write was a common revert flash.
+    const preserveCore = isAppWriteInFlight()
+    if (!preserveCore) {
+      setNowPlayingByGig(nowPlayingMap)
+      setGigSongSectionOverrides(
+        Array.from(gigSectionOverrideMap.entries()).reduce<Record<string, Record<string, string[]>>>(
+          (acc, [gigId, bySong]) => {
+            acc[gigId] = bySong
+            return acc
+          },
+          {},
+        ),
+      )
+      setGigDeletedSectionSongs(
+        Array.from(gigDeletedSectionSongMap.entries()).reduce<Record<string, Record<string, string[]>>>(
+          (acc, [gigId, bySection]) => {
+            acc[gigId] = bySection
+            return acc
+          },
+          {},
+        ),
+      )
+      setSpecialRequestOrderByGig(specialOrderFromSupabase)
+    }
 
     if (backfillSectionRows.length > 0 && supabase && activeBandId) {
       void supabase.from('SetlistSongTags').insert(backfillSectionRows.map((row) => withBandId(row)))
@@ -8610,22 +9117,24 @@ function App() {
         .in('tag', pollutedTagValues)
     }
 
+    if (isStaleLoad()) return
+
     setAppState((prev) => {
-      const preserveCore = isAppWriteInFlight()
+      const keepLocal = isAppWriteInFlight()
       return {
         ...prev,
-        songs: preserveCore ? prev.songs : songs,
-        setlists: preserveCore ? prev.setlists : setlists,
-        specialRequests: preserveCore ? prev.specialRequests : specialRequests,
-        tagsCatalog: preserveCore ? prev.tagsCatalog : tagsCatalog,
-        specialTypes: preserveCore ? prev.specialTypes : specialTypes,
-        singersCatalog: preserveCore ? prev.singersCatalog : singersCatalog,
-        documents: preserveCore ? prev.documents : documents,
-        charts: preserveCore ? prev.charts : charts,
-        musicians: preserveCore ? prev.musicians : musicians,
+        songs: keepLocal ? prev.songs : songs,
+        setlists: keepLocal ? prev.setlists : setlists,
+        specialRequests: keepLocal ? prev.specialRequests : specialRequests,
+        tagsCatalog: keepLocal ? prev.tagsCatalog : tagsCatalog,
+        specialTypes: keepLocal ? prev.specialTypes : specialTypes,
+        singersCatalog: keepLocal ? prev.singersCatalog : singersCatalog,
+        documents: keepLocal ? prev.documents : documents,
+        charts: keepLocal ? prev.charts : charts,
+        musicians: keepLocal ? prev.musicians : musicians,
         // Always preserve in-flight musician assignments if a musician write is settling.
         gigMusicians:
-          gigMusicianWriteInProgressRef.current || preserveCore
+          gigMusicianWriteGate.inProgressRef.current || keepLocal
             ? prev.gigMusicians
             : gigMusicians,
       }
@@ -8635,13 +9144,39 @@ function App() {
       setSelectedSetlistId((current) => current || setlists[0].id)
       setActiveGigId((current) => current || setlists[0].id)
     }
+
+    // Hydrate builder layout from SetlistGigs.ui_state when present (server wins per gig).
+    if (!preserveCore && gigsRes.data?.length) {
+      const nextBuild: Record<string, Record<string, boolean>> = {}
+      const nextSections: Record<string, string[]> = {}
+      const nextHiddenSections: Record<string, string[]> = {}
+      const nextHiddenSpecial: Record<string, boolean> = {}
+      const nextSectionStyles: Record<string, Record<string, string>> = {}
+      let hasUiState = false
+      gigsRes.data.forEach((row) => {
+        const ui = parseGigUiState((row as { ui_state?: unknown }).ui_state)
+        if (!ui) return
+        hasUiState = true
+        if (ui.buildComplete) nextBuild[row.id] = ui.buildComplete
+        if (ui.sections) nextSections[row.id] = ui.sections
+        if (ui.hiddenSections) nextHiddenSections[row.id] = ui.hiddenSections
+        if (typeof ui.hiddenSpecial === 'boolean') nextHiddenSpecial[row.id] = ui.hiddenSpecial
+        if (ui.sectionStyles) nextSectionStyles[row.id] = ui.sectionStyles
+      })
+      if (hasUiState) {
+        setBuildCompleteOverrides((prev) => ({ ...prev, ...nextBuild }))
+        setGigSetlistSections((prev) => ({ ...prev, ...nextSections }))
+        setGigHiddenSetlistSections((prev) => ({ ...prev, ...nextHiddenSections }))
+        setGigHiddenSpecialSection((prev) => ({ ...prev, ...nextHiddenSpecial }))
+        if (Object.keys(nextSectionStyles).length) {
+          setGigSectionStyles((prev) => ({ ...prev, ...nextSectionStyles }))
+        }
+      }
+    }
   }, [
     activeBandId,
-    getSectionDeleteKey,
     normalizeInstrumentName,
     parseDocumentInstruments,
-    parseGigSectionDeletedTag,
-    parseGigSectionTag,
   ])
 
   const loadNowPlaying = useCallback(async () => {
@@ -8682,22 +9217,38 @@ function App() {
       ],
     }))
     if (supabase) {
-      runSupabase(
-        supabase.from('SetlistSongs').insert(withBandId({
-          id: newId,
-          title,
-          artist: 'New Artist',
-          audio_url: null,
-        })),
-      )
-      runSupabase(
-        supabase.from('SetlistSongKeys').insert(withBandId({
-          id: createId(),
-          song_id: newId,
-          singer_name: 'Maya',
-          default_key: 'C',
-        })),
-      )
+      beginAppDataWrite()
+      void (async () => {
+        try {
+          const { error: songError } = await supabase.from('SetlistSongs').insert(
+            withBandId({
+              id: newId,
+              title,
+              artist: 'New Artist',
+              audio_url: null,
+            }),
+          )
+          if (songError) {
+            reportSupabaseError(songError)
+            undoLast()
+            return
+          }
+          const { error: keyError } = await supabase.from('SetlistSongKeys').insert(
+            withBandId({
+              id: createId(),
+              song_id: newId,
+              singer_name: 'Maya',
+              default_key: 'C',
+            }),
+          )
+          if (keyError) {
+            reportSupabaseError(keyError)
+            undoLast()
+          }
+        } finally {
+          endAppDataWrite()
+        }
+      })()
     }
     setPendingSpecialSong('')
   }
@@ -9180,37 +9731,17 @@ function App() {
     })
     .sort((a, b) => compareGigsByDateAsc(b, a))
 
-  const SESSION_WARNING_MS = SESSION_TIMEOUT_MS - 5 * 60 * 1000 // warn 5 min before expiry
-  const [showSessionExpiryWarning, setShowSessionExpiryWarning] = useState(false)
-
-  useEffect(() => {
-    if (!role) return
-    const updateActivity = () => {
-      localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()))
-      setShowSessionExpiryWarning(false)
-    }
-
-    const events = ['mousedown', 'keydown', 'touchstart', 'scroll']
-    events.forEach((event) => window.addEventListener(event, updateActivity))
-
-    const interval = window.setInterval(() => {
-      const lastActive = Number(localStorage.getItem(LAST_ACTIVE_KEY) ?? 0)
-      const elapsed = Date.now() - lastActive
-      if (elapsed > SESSION_TIMEOUT_MS) {
-        logger.log('session_expired')
-        logger.clearContext()
-        setRole(null)
-        setShowSessionExpiryWarning(false)
-      } else if (elapsed > SESSION_WARNING_MS) {
-        setShowSessionExpiryWarning(true)
-      }
-    }, 30_000)
-
-    return () => {
-      events.forEach((event) => window.removeEventListener(event, updateActivity))
-      window.clearInterval(interval)
-    }
-  }, [role, SESSION_WARNING_MS])
+  const handleLogoutRef = useRef(handleLogout)
+  handleLogoutRef.current = handleLogout
+  const { showWarning: showSessionExpiryWarning, extendSession } = useSessionTimeout({
+    timeoutMs: SESSION_TIMEOUT_MS,
+    warningMs: 5 * 60 * 1000,
+    enabled: Boolean(role),
+    onExpire: () => {
+      logger.log('session_expired')
+      void handleLogoutRef.current()
+    },
+  })
 
   useEffect(() => {
     return () => {
@@ -9624,8 +10155,7 @@ function App() {
           ...savedSongs.flatMap((song) => song.tags),
         ]),
       }))
-      setSelectedSetlistId(newGigId)
-      setActiveGigId(newGigId)
+      selectCurrentGig(newGigId)
       clearSharedSignupReturnView()
       setSharedImportStatus('Saved to your account.')
       setScreen('setlists')
@@ -9638,8 +10168,7 @@ function App() {
   }
 
   const openAssignedGigView = (setlistId: string) => {
-    setSelectedSetlistId(setlistId)
-    setActiveGigId(setlistId)
+    selectCurrentGig(setlistId)
     setPlaylistModalTab('setlist')
     setShowPlaylistModal(true)
     setShowSetlistModal(false)
@@ -9734,407 +10263,53 @@ function App() {
     setSharedPlaylistLoading(true)
     setSharedPlaylistError(null)
     setSharedPlaylistNotice(null)
-    void (async () => {
-      const [gigRes, gigSongsRes, specialReqRes, djTracksRes, gigMusiciansRes] = await Promise.all([
-        supabase
-          .from('SetlistGigs')
-          .select('id, band_id, gig_name, gig_date, venue_address')
-          .eq('id', setlistId)
-          .single(),
-        supabase
-          .from('SetlistGigSongs')
-          .select('id, song_id, sort_order')
-          .eq('gig_id', setlistId)
-          .order('sort_order', { ascending: true }),
-        supabase
-          .from('SetlistSpecialRequests')
-          .select('id, request_type, song_id, song_title, singers, song_key, external_audio_url, dj_only')
-          .eq('gig_id', setlistId),
-        supabase
-          .from('SetlistGigDjTracks')
-          .select('id, title, artist, notes, source_type, source_url, sort_order, status, metadata')
-          .eq('gig_id', setlistId)
-          .order('sort_order', { ascending: true }),
-        supabase
-          .from('SetlistGigMusicians')
-          .select('musician_id, status')
-          .eq('gig_id', setlistId),
-      ])
-      if (cancelled) return
-      const firstError = gigRes.error || gigSongsRes.error
-      if (firstError) {
-        if (parsedPayload) {
-          setSharedPlaylistNotice(
-            `Live refresh failed (${firstError.message ?? 'unknown error'}). Showing cached link data.`,
-          )
-          setSharedPlaylistLoading(false)
-          return
-        }
-        setSharedPlaylistError(firstError.message ?? 'Shared playlist failed to load.')
-        setSharedPlaylistView(null)
-        setSharedPlaylistLoading(false)
-        return
-      }
-      const gig = gigRes.data
-      if (!gig) {
-        setSharedPlaylistError('Gig not found for this share link.')
-        setSharedPlaylistView(null)
-        setSharedPlaylistLoading(false)
-        return
-      }
-      const orderedSongIds = (gigSongsRes.data ?? []).map((row) => row.song_id).filter(Boolean)
-      let songsQuery = supabase
-        .from('SetlistSongs')
-        .select('id, title, artist, audio_url, band_id')
-        .is('deleted_at', null)
-      if (orderedSongIds.length > 0) {
-        songsQuery = songsQuery.in('id', orderedSongIds)
-      } else {
-        songsQuery = songsQuery.eq('id', '__none__')
-      }
-      if (gig.band_id) {
-        songsQuery = songsQuery.eq('band_id', gig.band_id)
-      }
-      const songsRes = await songsQuery
-      if (cancelled) return
-      if (songsRes.error) {
-        if (parsedPayload) {
-          setSharedPlaylistNotice(
-            `Song refresh failed (${songsRes.error.message}). Showing cached link data.`,
-          )
-          setSharedPlaylistLoading(false)
-          return
-        }
-        setSharedPlaylistError(songsRes.error.message ?? 'Shared playlist songs failed to load.')
-        setSharedPlaylistView(null)
-        setSharedPlaylistLoading(false)
-        return
-      }
-      let sharedBandName = activeBandName || 'Band'
-      if (gig.band_id) {
-        const { data: bandRow } = await supabase
-          .from('bands')
-          .select('name')
-          .eq('id', gig.band_id)
-          .single()
-        if (bandRow?.name?.trim()) {
-          sharedBandName = bandRow.name.trim()
-        }
-      }
-      if (sharedBandNameParam) {
-        sharedBandName = sharedBandNameParam
-      }
-      const songsById = new Map((songsRes.data ?? []).map((song) => [song.id, song]))
-      const tagsRes = orderedSongIds.length
-        ? await supabase
-            .from('SetlistSongTags')
-            .select('song_id, tag')
-            .in('song_id', orderedSongIds)
-        : { data: [], error: null as { message?: string } | null }
-      if (cancelled) return
-      const loadGaps: string[] = []
-      if (specialReqRes.error) loadGaps.push('special requests')
-      if (djTracksRes.error) loadGaps.push('DJ tracks')
-      if (gigMusiciansRes.error) loadGaps.push('musicians')
-      if (tagsRes.error) loadGaps.push('sections')
-      const tagsBySong = new Map<string, string[]>()
-      const sharedGigSectionOverrides = new Map<string, string[]>()
-      ;(tagsRes.error ? [] : (tagsRes.data ?? [])).forEach((row) => {
-        if (row.tag.startsWith(GIG_SECTION_DELETED_TAG_PREFIX)) return
-        const gigSectionTag = parseGigSectionTag(row.tag)
-        if (gigSectionTag?.gigId === setlistId) {
-          const sections = sharedGigSectionOverrides.get(row.song_id) ?? []
-          const sectionKey = gigSectionTag.section.trim().toLowerCase()
-          if (
-            gigSectionTag.section.trim() &&
-            !sections.some((item) => item.trim().toLowerCase() === sectionKey)
-          ) {
-            sections.push(gigSectionTag.section)
-            sharedGigSectionOverrides.set(row.song_id, sections)
-          }
-          return
-        }
-        const list = tagsBySong.get(row.song_id) ?? []
-        list.push(row.tag)
-        tagsBySong.set(row.song_id, list)
-      })
-      const gigSingerKeyAssignments = new Map<string, Array<{ singer: string; key: string }>>()
-      const songDefaultKeysRes = orderedSongIds.length
-        ? await supabase
-            .from('SetlistSongKeys')
-            .select('song_id, singer_name, default_key')
-            .in('song_id', orderedSongIds)
-        : { data: [], error: null as { message?: string } | null }
-      const singerKeysRes = await supabase
-        .from('SetlistGigSingerKeys')
-        .select('song_id, singer_name, gig_key')
-        .eq('gig_id', setlistId)
-      if (cancelled) return
-      const mergedAssignmentsBySong = new Map<
-        string,
-        Map<string, { singer: string; key: string }>
-      >()
-      const sharedAllowedSingerSet = new Set<string>()
-      const activeGigMusicianIds = Array.from(
-        new Set(
-          (gigMusiciansRes.error ? [] : (gigMusiciansRes.data ?? []))
-            .filter((row) => (row.status ?? 'active') !== 'out')
-            .map((row) => row.musician_id)
-            .filter(Boolean),
-        ),
-      )
-      if (activeGigMusicianIds.length > 0) {
-        const { data: sharedMusicianRows, error: sharedMusiciansError } = await supabase
-          .from('SetlistMusicians')
-          .select('name, singer, instruments, deleted_at')
-          .in('id', activeGigMusicianIds)
-          .is('deleted_at', null)
-        if (!sharedMusiciansError) {
-          ;(sharedMusicianRows ?? []).forEach((row) => {
-            const instruments = Array.isArray(row.instruments) ? row.instruments : []
-            const hasVocalsInstrument = instruments.some(
-              (instrument): boolean =>
-                typeof instrument === 'string' && instrument.trim().toLowerCase() === 'vocals',
-            )
-            if (!row.singer && !hasVocalsInstrument) return
-            const normalizedName = (row.name ?? '').trim().toLowerCase()
-            if (!normalizedName) return
-            sharedAllowedSingerSet.add(normalizedName)
-          })
-        }
-      }
-      const shouldKeepSharedSinger = (singerName: string) => {
-        const normalizedSinger = singerName.trim().toLowerCase()
-        if (!normalizedSinger) return false
-        if (normalizedSinger === INSTRUMENTAL_LABEL.toLowerCase()) return true
-        if (sharedAllowedSingerSet.size === 0) return true
-        return sharedAllowedSingerSet.has(normalizedSinger)
-      }
-      if (!songDefaultKeysRes.error) {
-        ;(songDefaultKeysRes.data ?? []).forEach((row) => {
-          const singer = (row.singer_name ?? '').trim()
-          const cleanKey = (row.default_key ?? '').trim()
-          if (!singer || !cleanKey) return
-          if (!shouldKeepSharedSinger(singer)) return
-          const songMap = mergedAssignmentsBySong.get(row.song_id) ?? new Map()
-          songMap.set(singer.toLowerCase(), { singer, key: cleanKey })
-          mergedAssignmentsBySong.set(row.song_id, songMap)
-        })
-      }
-      if (!singerKeysRes.error) {
-        ;(singerKeysRes.data ?? []).forEach((row) => {
-          const singer = (row.singer_name ?? '').trim()
-          const cleanKey = (row.gig_key ?? '').trim()
-          if (!singer || !cleanKey) return
-          if (!shouldKeepSharedSinger(singer)) return
-          const songMap = mergedAssignmentsBySong.get(row.song_id) ?? new Map()
-          // Gig-specific key should win over song default assignment.
-          songMap.set(singer.toLowerCase(), { singer, key: cleanKey })
-          mergedAssignmentsBySong.set(row.song_id, songMap)
-        })
-      }
-      mergedAssignmentsBySong.forEach((singerMap, songId) => {
-        gigSingerKeyAssignments.set(songId, Array.from(singerMap.values()))
-      })
-      const sharedDisplayMap: Record<string, { title: string; singers: string[]; keys: string[] }> = {}
-      ;(gigSongsRes.data ?? []).forEach((row) => {
-        const baseSongId = (row.song_id ?? '').trim()
-        if (!baseSongId) return
-        const song = songsById.get(baseSongId)
-        const title = (song?.title ?? '').trim()
-        const assignments = gigSingerKeyAssignments.get(baseSongId) ?? []
-        const singers = Array.from(
-          new Set(assignments.map((item) => item.singer?.trim()).filter(Boolean) as string[]),
-        )
-        const keys = Array.from(
-          new Set(assignments.map((item) => item.key?.trim()).filter(Boolean) as string[]),
-        )
-        const payload = { title: title || 'Song selected', singers, keys }
-        sharedDisplayMap[baseSongId] = payload
-        const gigSongId = (row.id ?? '').trim()
-        if (gigSongId) {
-          sharedDisplayMap[gigSongId] = payload
-        }
-      })
-      setSharedSongDisplayByAnyId(sharedDisplayMap)
-      const orderedSongs = orderedSongIds
-        .map((songId) => songsById.get(songId))
-        .filter((song): song is NonNullable<(typeof songsRes.data)[number]> => Boolean(song))
-      const entries: PlaylistEntry[] = []
-      const byKey = new Map<string, PlaylistEntry>()
-      const uniqueList = (values: string[]) => {
-        const seen = new Set<string>()
-        const next: string[] = []
-        values.forEach((value) => {
-          const trimmed = value.trim()
-          if (!trimmed) return
-          const key = trimmed.toLowerCase()
-          if (seen.has(key)) return
-          seen.add(key)
-          next.push(trimmed)
-        })
-        return next
-      }
-      const addOrMerge = (entry: PlaylistEntry) => {
-        const existing = byKey.get(entry.key)
-        if (existing) {
-          const hasSpecialRequestTag = (tags: string[]) =>
-            tags.some((item) => {
-              const lower = item.trim().toLowerCase()
-              return lower === 'special request' || lower === 'special requests'
-            })
-          const treatAsSpecialRequest =
-            hasSpecialRequestTag(existing.tags) || hasSpecialRequestTag(entry.tags)
-          entry.tags.forEach((tag) => {
-            if (treatAsSpecialRequest && tag.trim().toLowerCase() === 'setlist') return
-            if (!existing.tags.some((item) => item.toLowerCase() === tag.toLowerCase())) {
-              existing.tags.push(tag)
-            }
-          })
-          if (treatAsSpecialRequest) {
-            existing.tags = existing.tags.filter((tag) => tag.trim().toLowerCase() !== 'setlist')
-          }
-          if (!existing.audioUrl && entry.audioUrl) {
-            existing.audioUrl = entry.audioUrl
-          }
-          ;(entry.assignmentSingers ?? []).forEach((singer) => {
-            const clean = singer.trim()
-            if (!clean) return
-            if (!(existing.assignmentSingers ?? []).some((item) => item.toLowerCase() === clean.toLowerCase())) {
-              existing.assignmentSingers = [...(existing.assignmentSingers ?? []), clean]
-            }
-          })
-          ;(entry.assignmentKeys ?? []).forEach((keyValue) => {
-            const clean = keyValue.trim()
-            if (!clean) return
-            if (!(existing.assignmentKeys ?? []).some((item) => item.toLowerCase() === clean.toLowerCase())) {
-              existing.assignmentKeys = [...(existing.assignmentKeys ?? []), clean]
-            }
-          })
-          return
-        }
-        const normalized = {
-          ...entry,
-          tags: uniqueList(entry.tags),
-          assignmentSingers: uniqueList(entry.assignmentSingers ?? []),
-          assignmentKeys: uniqueList(entry.assignmentKeys ?? []),
-        }
-        byKey.set(normalized.key, normalized)
-        entries.push(normalized)
-      }
-      ;(specialReqRes.error ? [] : (specialReqRes.data ?? [])).forEach((request) => {
-          const linkedSong = request.song_id ? songsById.get(request.song_id) : undefined
-          const key = `special-request:${request.id}`
-          const savedAssignments = request.song_id
-            ? gigSingerKeyAssignments.get(request.song_id) ?? []
-            : []
-          const savedSingers = uniqueList(savedAssignments.map((entry) => entry.singer))
-          const savedKeys = uniqueList(savedAssignments.map((entry) => entry.key))
-          const directSingers = uniqueList(request.singers ?? [])
-          const directKeys = request.song_key ? [request.song_key] : []
-          addOrMerge({
-            key,
-            title: linkedSong?.title || request.song_title || 'Special Request',
-            artist: linkedSong?.artist || '',
-            audioUrl: (request.external_audio_url || linkedSong?.audio_url || '').trim(),
-            tags: request.dj_only ? [request.request_type || 'DJ Only'] : ['Special Request'],
-            songId: request.song_id ?? undefined,
-            assignmentSingers: request.dj_only
-              ? ['DJ']
-              : directSingers.length
-                ? directSingers
-                : savedSingers,
-            assignmentKeys: request.dj_only
-              ? []
-              : directKeys.length
-                ? directKeys
-                : savedKeys,
-          })
-        })
-      ;(djTracksRes.error ? [] : (djTracksRes.data ?? []))
-        .filter((track) => track.status !== 'archived')
-        .forEach((track) => {
-          const metadata =
-            track.metadata && typeof track.metadata === 'object' ? (track.metadata as Record<string, unknown>) : null
-          const customType =
-            metadata && typeof metadata.type === 'string' ? metadata.type.trim() : ''
-          const metadataSongId =
-            metadata && typeof metadata.song_id === 'string' ? metadata.song_id.trim() : ''
-          const linkedSong = metadataSongId ? songsById.get(metadataSongId) : undefined
-          addOrMerge({
-            key: `dj-track:${track.id}`,
-            title: track.title || linkedSong?.title || 'DJ Track',
-            artist: track.artist || linkedSong?.artist || '',
-            audioUrl: (track.source_url || '').trim(),
-            tags: [customType || 'DJ Only'],
-            songId: metadataSongId || undefined,
-            assignmentSingers: ['DJ'],
-            assignmentKeys: [],
-          })
-        })
-      orderedSongs.forEach((song) => {
-        const overrideSections = sharedGigSectionOverrides.get(song.id)
-        const sectionTags = uniqueList(
-          (
-            overrideSections && overrideSections.length > 0
-              ? overrideSections
-              : (tagsBySong.get(song.id) ?? []).filter((tag) => isSetlistTypeTag(tag))
-          )
-            .map(normalizePlaylistSection)
-            .filter(Boolean),
-        )
-        const assignments = gigSingerKeyAssignments.get(song.id) ?? []
-        addOrMerge({
-          key: `song:${song.id}`,
-          title: song.title,
-          artist: song.artist ?? '',
-          audioUrl: (song.audio_url || '').trim(),
-          tags: sectionTags.length ? sectionTags : ['Setlist'],
-          songId: song.id,
-          assignmentSingers: uniqueList(assignments.map((entry) => entry.singer)),
-          assignmentKeys: uniqueList(assignments.map((entry) => entry.key)),
-        })
-      })
-      const isSpecialRequestEntry = (entry: PlaylistEntry) =>
-        entry.tags.some((tag) => {
-          const normalized = tag.trim().toLowerCase()
-          return normalized === 'special request' || normalized === 'special requests'
-        })
-      const playableEntries = entries.filter(
-        (entry) => Boolean(entry.audioUrl && entry.audioUrl.trim()) || isSpecialRequestEntry(entry),
-      )
-      setSharedPlaylistView({
-        setlistId: gig.id,
-        bandName: sharedBandName,
-        gigName: gig.gig_name,
-        date: typeof gig.gig_date === 'string' ? gig.gig_date.slice(0, 10) : '',
-        venueAddress: gig.venue_address ?? '',
-        musicians: sharedMusiciansParam,
-        entries: playableEntries,
-        allEntries: entries,
-      })
-      if (loadGaps.length > 0) {
-        setSharedPlaylistNotice(`Some parts could not load: ${loadGaps.join(', ')}.`)
-      } else {
-        setSharedPlaylistNotice(null)
-      }
-      setPlaylistIndex(Math.min(requestedIndex, Math.max(0, entries.length - 1)))
-      setPlaylistAutoAdvance(true)
-      setSharedWelcomeStep('cta')
-      setSharedWelcomeCompletedSetlistId((current) => (current === gig.id ? null : current))
-      setSharedPlaylistLoading(false)
-    })().catch((error) => {
-      if (cancelled) return
-      setSharedPlaylistError(
-        error instanceof Error ? error.message : 'Shared playlist failed to load.',
-      )
-      setSharedPlaylistView(null)
-      setSharedPlaylistLoading(false)
+    void loadSharedPlaylist({
+      client: supabase,
+      setlistId,
+      sharedBandNameParam,
+      sharedMusiciansParam,
+      fallbackBandName: activeBandName,
+      hasCachedPayload: Boolean(parsedPayload),
+      parseGigSectionTag,
+      isSetlistTypeTag,
+      normalizePlaylistSection,
     })
+      .then((result) => {
+        if (cancelled) return
+        if (!result.ok) {
+          if ('keepCached' in result) {
+            setSharedPlaylistNotice(result.notice ?? null)
+            setSharedPlaylistLoading(false)
+            return
+          }
+          setSharedPlaylistError(result.error)
+          setSharedPlaylistView(null)
+          setSharedPlaylistLoading(false)
+          return
+        }
+        setSharedSongDisplayByAnyId(result.displayMap)
+        setSharedPlaylistView(result.view)
+        setSharedPlaylistNotice(result.notice)
+        setPlaylistIndex(Math.min(requestedIndex, Math.max(0, result.entryCount - 1)))
+        setPlaylistAutoAdvance(true)
+        setSharedWelcomeStep('cta')
+        setSharedWelcomeCompletedSetlistId((current) =>
+          current === result.view.setlistId ? null : current,
+        )
+        setSharedPlaylistLoading(false)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setSharedPlaylistError(
+          error instanceof Error ? error.message : 'Shared playlist failed to load.',
+        )
+        setSharedPlaylistView(null)
+        setSharedPlaylistLoading(false)
+      })
     return () => {
       cancelled = true
     }
-  }, [activeBandName, isSetlistTypeTag, normalizePlaylistSection, parseGigSectionTag])
+  }, [activeBandName, isSetlistTypeTag, normalizePlaylistSection])
 
   useEffect(() => {
     if (!sharedPlaylistView) {
@@ -10574,11 +10749,61 @@ function App() {
   }, [gigSetlistSections])
 
   useEffect(() => {
+    localStorage.setItem('setlist_gig_section_styles', JSON.stringify(gigSectionStyles))
+  }, [gigSectionStyles])
+
+  useEffect(() => {
     localStorage.setItem(
       'setlist_hidden_gig_sections',
       JSON.stringify(gigHiddenSetlistSections),
     )
   }, [gigHiddenSetlistSections])
+
+  // Persist open-gig builder layout to Supabase so devices stay in sync.
+  useEffect(() => {
+    const client = supabase
+    if (!client || !activeBandId || !currentSetlist?.id) return
+    if (gigUiStateColumnMissingRef.current) return
+    const gigId = currentSetlist.id
+    const payload = buildGigUiStatePayload({
+      buildComplete: buildCompleteOverrides[gigId],
+      sections: gigSetlistSections[gigId],
+      hiddenSections: gigHiddenSetlistSections[gigId],
+      hiddenSpecial: gigHiddenSpecialSection[gigId],
+      sectionStyles: gigSectionStyles[gigId],
+    })
+    if (gigUiStatePersistTimerRef.current) {
+      window.clearTimeout(gigUiStatePersistTimerRef.current)
+    }
+    gigUiStatePersistTimerRef.current = window.setTimeout(() => {
+      void (async () => {
+        const { error } = await client
+          .from('SetlistGigs')
+          .update({ ui_state: payload })
+          .eq('id', gigId)
+        if (!error) return
+        if (/ui_state|schema cache|column/i.test(error.message ?? '')) {
+          gigUiStateColumnMissingRef.current = true
+          return
+        }
+        reportSupabaseError(error)
+      })()
+    }, 700)
+    return () => {
+      if (gigUiStatePersistTimerRef.current) {
+        window.clearTimeout(gigUiStatePersistTimerRef.current)
+        gigUiStatePersistTimerRef.current = null
+      }
+    }
+  }, [
+    activeBandId,
+    buildCompleteOverrides,
+    currentSetlist?.id,
+    gigHiddenSetlistSections,
+    gigHiddenSpecialSection,
+    gigSectionStyles,
+    gigSetlistSections,
+  ])
 
   useEffect(() => {
     localStorage.setItem(GIG_DELETED_SECTION_SONGS_KEY, JSON.stringify(gigDeletedSectionSongs))
@@ -10601,7 +10826,8 @@ function App() {
   }, [gigLastLockedSongByGig])
 
   useEffect(() => {
-    if (!activeGigId) return
+    const gigId = currentSetlist?.id || selectedSetlistId
+    if (!gigId) return
     // Only mirror server now-playing into the UI while Gig Mode is active.
     // Otherwise stale Up Next / "called" state resurrects during setlist building.
     if (!gigMode) {
@@ -10612,9 +10838,9 @@ function App() {
     }
     setAppState((prev) => ({
       ...prev,
-      currentSongId: nowPlayingByGig[activeGigId] ?? null,
+      currentSongId: nowPlayingByGig[gigId] ?? null,
     }))
-  }, [activeGigId, nowPlayingByGig, gigMode])
+  }, [currentSetlist?.id, selectedSetlistId, nowPlayingByGig, gigMode])
 
   useEffect(() => {
     if (!appState.currentSongId) return
@@ -10666,12 +10892,93 @@ function App() {
         void loadSupabaseData()
       }, 250)
     }
+    // Now-playing changes are frequent during Gig Mode — patch locally instead of
+    // reloading the entire band dataset (avoids builder flicker / lost edits).
+    const handleNowPlayingChange = (payload: {
+      eventType?: string
+      new?: { gig_id?: string; song_id?: string | null } | null
+      old?: { gig_id?: string; song_id?: string | null } | null
+    }) => {
+      if ((window as typeof window & { __SC_SUPPRESS_REALTIME__?: boolean }).__SC_SUPPRESS_REALTIME__) return
+      if (isAppWriteInFlight()) return
+      setNowPlayingByGig((prev) => {
+        const next = patchNowPlayingFromRealtime(prev, payload)
+        if (!next) {
+          void loadNowPlaying()
+          return prev
+        }
+        return next
+      })
+    }
+    const handleGigMusicianChange = (payload: {
+      eventType?: string
+      new?: {
+        gig_id?: string
+        musician_id?: string
+        status?: string | null
+        note?: string | null
+      } | null
+      old?: {
+        gig_id?: string
+        musician_id?: string
+        status?: string | null
+        note?: string | null
+      } | null
+    }) => {
+      if ((window as typeof window & { __SC_SUPPRESS_REALTIME__?: boolean }).__SC_SUPPRESS_REALTIME__) return
+      if (isAppWriteInFlight()) return
+      let needsFullReload = false
+      setAppState((prev) => {
+        const nextGigMusicians = patchGigMusiciansFromRealtime(prev.gigMusicians, payload)
+        if (!nextGigMusicians) {
+          needsFullReload = true
+          return prev
+        }
+        return { ...prev, gigMusicians: nextGigMusicians }
+      })
+      if (needsFullReload) handleRealtimeChange()
+    }
     const channel = client
       .channel('setlist-sync')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'SetlistSongs' },
-        handleRealtimeChange,
+        (payload: {
+          eventType?: string
+          new?: {
+            id?: string
+            title?: string
+            artist?: string | null
+            original_key?: string | null
+            audio_url?: string | null
+            youtube_video_id?: string | null
+            youtube_verified?: boolean | null
+            original_year?: number | null
+            genre?: string | null
+            deleted_at?: string | null
+          } | null
+          old?: {
+            id?: string
+            title?: string
+            artist?: string | null
+            deleted_at?: string | null
+          } | null
+        }) => {
+          if ((window as typeof window & { __SC_SUPPRESS_REALTIME__?: boolean }).__SC_SUPPRESS_REALTIME__) {
+            return
+          }
+          if (isAppWriteInFlight()) return
+          let needsFullReload = false
+          setAppState((prev) => {
+            const patched = patchSongsFromRealtime(prev.songs, prev.setlists, payload)
+            if (!patched) {
+              needsFullReload = true
+              return prev
+            }
+            return { ...prev, songs: patched.songs, setlists: patched.setlists }
+          })
+          if (needsFullReload) handleRealtimeChange()
+        },
       )
       .on(
         'postgres_changes',
@@ -10701,7 +11008,7 @@ function App() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'SetlistGigNowPlaying' },
-        handleRealtimeChange,
+        handleNowPlayingChange,
       )
       .on(
         'postgres_changes',
@@ -10716,7 +11023,55 @@ function App() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'SetlistDocuments' },
-        handleRealtimeChange,
+        (payload: {
+          eventType?: string
+          new?: {
+            id?: string
+            song_id?: string
+            doc_type?: string
+            instrument?: string | null
+            title?: string
+            file_url?: string | null
+            content?: string | null
+          } | null
+          old?: {
+            id?: string
+            song_id?: string
+            doc_type?: string
+            instrument?: string | null
+            title?: string
+            file_url?: string | null
+            content?: string | null
+          } | null
+        }) => {
+          if ((window as typeof window & { __SC_SUPPRESS_REALTIME__?: boolean }).__SC_SUPPRESS_REALTIME__) {
+            return
+          }
+          if (isAppWriteInFlight()) return
+          let needsFullReload = false
+          setAppState((prev) => {
+            const nextDocuments = patchDocumentsFromRealtime(
+              prev.documents,
+              payload,
+              (raw) => parseDocumentInstruments(raw).join('||'),
+            )
+            if (!nextDocuments) {
+              needsFullReload = true
+              return prev
+            }
+            const charts = nextDocuments
+              .filter((doc) => doc.type === 'Chart')
+              .map((doc) => ({
+                id: doc.id,
+                songId: doc.songId,
+                instrument: doc.instrument,
+                title: doc.title,
+                fileName: doc.url,
+              }))
+            return { ...prev, documents: nextDocuments, charts }
+          })
+          if (needsFullReload) handleRealtimeChange()
+        },
       )
       .on(
         'postgres_changes',
@@ -10726,7 +11081,7 @@ function App() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'SetlistGigMusicians' },
-        handleRealtimeChange,
+        handleGigMusicianChange,
       )
 
     channel.subscribe()
@@ -10738,7 +11093,7 @@ function App() {
       }
       void client.removeChannel(channel)
     }
-  }, [authUserId, loadSupabaseData])
+  }, [authUserId, loadNowPlaying, loadSupabaseData])
 
   useEffect(() => {
     const client = supabase
@@ -10978,10 +11333,10 @@ function App() {
   if (sharedPlaylistView || sharedPlaylistLoading || sharedPlaylistError) {
     return (
       <div
-        className={`shared-public-mode relative flex h-dvh max-h-dvh flex-col overflow-x-hidden overflow-y-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-3 pt-4 text-white sm:px-4 sm:pt-5 ${
+        className={`shared-public-mode relative flex h-[100dvh] max-h-[100dvh] flex-col overflow-x-hidden overflow-y-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-2 pt-[max(0.5rem,env(safe-area-inset-top))] text-white sm:px-4 sm:pt-5 ${
           sharedPublicTab === 'playlist'
             ? 'pb-0'
-            : 'pb-[calc(9rem+env(safe-area-inset-bottom))]'
+            : 'pb-0'
         } ${isIOSStandaloneMode ? 'shared-ios-standalone' : ''}`}
       >
         {showSharedInstrumentPrompt && (
@@ -11053,34 +11408,32 @@ function App() {
                 : 'pb-3 md:pb-[calc(3rem+env(safe-area-inset-bottom))]'
             }`}
           >
-            <div className="flex shrink-0 items-start justify-between gap-3">
+            <div className="flex shrink-0 items-center justify-between gap-2 pb-1">
               <div className="min-w-0 pr-2">
-                <h2 className="text-lg font-semibold">Active Setlist</h2>
+                <h2 className="truncate text-base font-semibold sm:text-lg">Active Setlist</h2>
               </div>
-              <div className="flex shrink-0 flex-col items-end gap-2 pt-1 text-right">
-                <div className="flex items-center justify-end gap-2">
-                  {installPrompt && !isInstalled && (
-                    <button
-                      type="button"
-                      className="min-h-[36px] shrink-0 whitespace-nowrap rounded-lg border border-teal-300/50 bg-teal-500/20 px-3 py-1.5 text-[11px] font-semibold text-teal-100"
-                      onClick={handleInstallClick}
-                    >
-                      {installAppLabel}
-                    </button>
-                  )}
+              <div className="flex shrink-0 items-center justify-end gap-2">
+                {installPrompt && !isInstalled && (
                   <button
                     type="button"
-                    className="min-h-[36px] min-w-[92px] shrink-0 whitespace-nowrap rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-[11px] font-semibold text-slate-200"
-                    onClick={() => {
-                      setInstrumentSelectionDraft(appState.instrument ?? [])
-                      setShowSharedInstrumentPrompt(true)
-                    }}
+                    className="min-h-[40px] shrink-0 whitespace-nowrap rounded-lg border border-teal-300/50 bg-teal-500/20 px-3 py-1.5 text-[11px] font-semibold text-teal-100"
+                    onClick={handleInstallClick}
                   >
-                    Instrument
+                    {installAppLabel}
                   </button>
-                </div>
+                )}
+                <button
+                  type="button"
+                  className="min-h-[40px] min-w-[92px] shrink-0 whitespace-nowrap rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-[11px] font-semibold text-slate-200"
+                  onClick={() => {
+                    setInstrumentSelectionDraft(appState.instrument ?? [])
+                    setShowSharedInstrumentPrompt(true)
+                  }}
+                >
+                  Instrument
+                </button>
                 {playlistShareStatus ? (
-                  <span className="max-w-[220px] text-[11px] text-teal-200">{playlistShareStatus}</span>
+                  <span className="max-w-[160px] truncate text-[11px] text-teal-200">{playlistShareStatus}</span>
                 ) : null}
               </div>
             </div>
@@ -11102,7 +11455,7 @@ function App() {
             {sharedPlaylistView && (
               <>
                 {sharedPublicTab === 'setlist' ? (
-                  <div className="shared-public-setlist-scroll mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain rounded-none bg-transparent p-0 pb-[calc(8.5rem+env(safe-area-inset-bottom))] md:mb-4 md:pb-4 sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4 sm:pb-[calc(2rem+env(safe-area-inset-bottom))]">
+                  <div className="shared-public-setlist-scroll mt-2 min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain rounded-none bg-transparent p-0 sm:mt-4 sm:rounded-2xl sm:bg-slate-950/50 sm:p-4 md:mb-4">
                     {sharedDocsLoading && (
                       <div className="mb-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
                         Loading charts and lyrics...
@@ -11115,7 +11468,7 @@ function App() {
                     )}
                     <div className="w-full bg-white shared-setlist-shell sm:p-6">
                       <div className="print-container shared-setlist-container">
-                        <div className="print-header">
+                        <div className="print-header shared-setlist-sticky-header">
                           <div className="print-band-name">
                             {sharedPlaylistView.bandName?.trim() || activeBandName || sharedPlaylistView.gigName || 'Band'}
                           </div>
@@ -11129,10 +11482,13 @@ function App() {
                           <div className="print-badge">Setlist</div>
                         </div>
                         <div className="print-layout">
-                          <div
-                            className={`print-section-box ${getPrintToneClass('musicians')} ${getPrintLayoutClass('musicians')}`}
-                          >
-                            <div className="print-section-title">Musicians</div>
+                          <details className={`print-section-box shared-musicians-details ${getPrintToneClass('musicians')} ${getPrintLayoutClass('musicians')}`}>
+                            <summary className="print-section-title cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+                              Musicians
+                              <span className="ml-2 text-[11px] font-normal opacity-70">
+                                ({sharedGigMusicians.length}) tap to expand
+                              </span>
+                            </summary>
                             <div className="print-grid">
                               {sharedGigMusicians.map((musician) => (
                                 <div key={`shared-musician-${musician.id}`} className="print-card">
@@ -11165,13 +11521,13 @@ function App() {
                                 <div className="print-empty">No musicians assigned.</div>
                               )}
                             </div>
-                          </div>
+                          </details>
                           {groupedPlaylistSections.map((group) => (
                             <div
                               key={`shared-pdf-section-${group.section}`}
                               className={`print-section-box ${getPrintToneClass(group.section)} ${getPrintLayoutClass(group.section)}`}
                             >
-                              <div className="print-section-title">{group.section}</div>
+                              <div className="print-section-title shared-setlist-section-sticky">{group.section}</div>
                               <div className="print-list">
                                 {group.items.map(({ entry: item }) => {
                                   const singerNames = Array.from(new Set(item.assignmentSingers ?? []))
@@ -11933,10 +12289,7 @@ function App() {
           <button
             type="button"
             className="ml-1 rounded-lg bg-teal-400/90 px-3 py-1 text-xs font-semibold text-slate-950"
-            onClick={() => {
-              localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()))
-              setShowSessionExpiryWarning(false)
-            }}
+            onClick={extendSession}
           >
             Stay logged in
           </button>
@@ -12143,8 +12496,7 @@ function App() {
                           <button
                             className="min-h-[44px] rounded-xl bg-teal-400/90 px-3 py-2 text-sm font-semibold text-slate-950"
                             onClick={() => {
-                              setSelectedSetlistId(setlist.id)
-                              setActiveGigId(setlist.id)
+                              selectCurrentGig(setlist.id)
                               exitGigMode()
                               setScreen('builder')
                             }}
@@ -12248,8 +12600,7 @@ function App() {
                           <button
                             className="min-h-[44px] rounded-xl bg-teal-400/90 px-3 py-2 text-sm font-semibold text-slate-950"
                             onClick={() => {
-                              setSelectedSetlistId(setlist.id)
-                              setActiveGigId(setlist.id)
+                              selectCurrentGig(setlist.id)
                               exitGigMode()
                               setScreen('builder')
                             }}
@@ -12978,7 +13329,7 @@ function App() {
                   <select
                     className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
                     value={activeGigId}
-                    onChange={(event) => setActiveGigId(event.target.value)}
+                    onChange={(event) => selectCurrentGig(event.target.value)}
                   >
                     {appState.setlists.map((gig) => (
                       <option key={gig.id} value={gig.id}>
@@ -13715,7 +14066,20 @@ function App() {
         <QuickAddSong
           gigId={currentSetlist.id}
           sortOrder={currentSetlist.songIds.length}
+          section={getSectionFromPanel(activeBuildPanel)}
+          styleTag={
+            getSectionFromPanel(activeBuildPanel)
+              ? resolveSectionStyleTag(
+                  currentSetlist.id,
+                  getSectionFromPanel(activeBuildPanel) ?? '',
+                )
+              : null
+          }
           onSongAdded={(songId, songTitle, songArtist) => {
+            const activeSection = getSectionFromPanel(activeBuildPanel)
+            const styleTag = activeSection
+              ? resolveSectionStyleTag(currentSetlist.id, activeSection)
+              : null
             beginAppDataWrite()
             commitChange('Quick add song', (prev) => {
               if (prev.songs.some((song) => song.id === songId)) {
@@ -13735,7 +14099,7 @@ function App() {
                     id: songId,
                     title: songTitle,
                     artist: songArtist,
-                    tags: [],
+                    tags: styleTag ? [styleTag] : [],
                     keys: [],
                     specialPlayedCount: 0,
                     youtubeVerified: false,
@@ -13747,8 +14111,16 @@ function App() {
                     ? { ...sl, songIds: [...sl.songIds, songId] }
                     : sl,
                 ),
+                tagsCatalog: styleTag
+                  ? Array.from(new Set([...prev.tagsCatalog, styleTag]))
+                  : prev.tagsCatalog,
               }
             })
+            if (activeSection) {
+              setSongsForGigSection(currentSetlist.id, [songId], activeSection, {
+                persist: false,
+              })
+            }
             endAppDataWrite()
           }}
         />
@@ -14215,23 +14587,36 @@ function App() {
                               className="rounded-full border border-red-400/40 px-3 py-1 text-xs text-red-200"
                               onClick={(event) => {
                                 event.stopPropagation()
+                                const idsToDelete = [...doc.sourceDocIds]
                                 commitChange('Delete document', (prev) => ({
                                   ...prev,
                                   documents: prev.documents.filter(
-                                    (item) => !doc.sourceDocIds.includes(item.id),
+                                    (item) => !idsToDelete.includes(item.id),
                                   ),
                                   charts: prev.charts.filter(
-                                    (item) => !doc.sourceDocIds.includes(item.id),
+                                    (item) => !idsToDelete.includes(item.id),
                                   ),
                                 }))
-                                if (supabase) {
-                                  const client = supabase
-                                  doc.sourceDocIds.forEach((id) => {
-                                    runSupabase(
-                                      client.from('SetlistDocuments').delete().eq('id', id),
-                                    )
-                                  })
-                                }
+                                if (!supabase) return
+                                const client = supabase
+                                beginAppDataWrite()
+                                void (async () => {
+                                  try {
+                                    for (const id of idsToDelete) {
+                                      const { error } = await client
+                                        .from('SetlistDocuments')
+                                        .delete()
+                                        .eq('id', id)
+                                      if (error) {
+                                        reportSupabaseError(error)
+                                        undoLast()
+                                        return
+                                      }
+                                    }
+                                  } finally {
+                                    endAppDataWrite()
+                                  }
+                                })()
                               }}
                             >
                               Delete
@@ -18826,9 +19211,27 @@ function App() {
                               type="button"
                               className="rounded-lg border border-white/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-200"
                               onClick={() => {
+                                const priorStyle =
+                                  resolveSectionStyleTag(currentSetlist.id, section) ||
+                                  inferSectionStyleTag(section)
                                 const nextName = window.prompt('Rename section', section)?.trim() ?? ''
                                 if (!nextName || nextName.toLowerCase() === section.toLowerCase()) return
                                 renameGigSetlistSectionLabel(section, nextName)
+                                if (!priorStyle && !inferSectionStyleTag(nextName) && currentSetlist) {
+                                  const picked =
+                                    window
+                                      .prompt(
+                                        'Style tag for imports (Dinner, Dance, Latin — leave blank to skip)',
+                                        '',
+                                      )
+                                      ?.trim() ?? ''
+                                  const known = SETLIST_STYLE_TAGS.find(
+                                    (tag) => tag.toLowerCase() === picked.toLowerCase(),
+                                  )
+                                  if (known) {
+                                    rememberSectionStyle(currentSetlist.id, nextName, known)
+                                  }
+                                }
                               }}
                             >
                               Rename
@@ -18870,12 +19273,18 @@ function App() {
                         )}
                       </div>
                       <p className="mt-1 text-xs text-slate-400">
-                        Songs tagged for {section.toLowerCase()}.
+                        {(() => {
+                          const style =
+                            resolveSectionStyleTag(currentSetlist.id, section) || section
+                          return style && style.toLowerCase() !== section.toLowerCase()
+                            ? `Pulls songs by ${style} tag (section title can be renamed).`
+                            : `Songs tagged for ${section.toLowerCase()}.`
+                        })()}
                       </p>
                       {!buildCompletion[completionKey] && !gigMode && (
                         <p className="mt-1 text-[10px] text-slate-500">
-                          Drag songs to reorder this section. Previous-gig imports use singers on this gig and
-                          pull their saved key history when available.
+                          Import matches Dinner/Dance/Latin library tags from prior gigs — section names do not
+                          need to match. Drag to reorder; singer keys follow this gig&apos;s roster.
                         </p>
                       )}
                       {!buildCompletion[completionKey] && !gigMode && (
@@ -18957,8 +19366,10 @@ function App() {
                         </div>
                       )}
                       <div className="mt-4 space-y-2">
-                        {sectionSongs.map((song) => {
+                        {sectionSongs.map((song, songIndex) => {
                             const isLockedInGigMode = gigMode && isGigSongLocked(song.id)
+                            const canReorderSong =
+                              !gigMode && !buildCompletion[completionKey] && sectionSongs.length > 1
                             return (
                             <div key={song.id} className="space-y-2">
                               {draggedSectionSongId &&
@@ -19109,6 +19520,36 @@ function App() {
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-2">
+                                  {canReorderSong && (
+                                    <div className="flex flex-col gap-1 md:hidden">
+                                      <button
+                                        type="button"
+                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200 disabled:opacity-30"
+                                        disabled={songIndex === 0}
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          nudgeSectionSong(section, song.id, -1)
+                                        }}
+                                        aria-label="Move song up"
+                                        title="Move up"
+                                      >
+                                        ▲
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 text-[12px] text-slate-200 disabled:opacity-30"
+                                        disabled={songIndex >= sectionSongs.length - 1}
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          nudgeSectionSong(section, song.id, 1)
+                                        }}
+                                        aria-label="Move song down"
+                                        title="Move down"
+                                      >
+                                        ▼
+                                      </button>
+                                    </div>
+                                  )}
                                   {song.youtubeUrl && (
                                     <button
                                       className="relative z-20 inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 text-[14px] text-slate-200"
@@ -19352,320 +19793,6 @@ function App() {
     </div>
     </AppProvider>
   )
-}
-
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-slate-950/60 p-3">
-      <div className="text-lg font-semibold">{value}</div>
-      <div className="text-[10px] uppercase tracking-wide text-slate-400">{label}</div>
-    </div>
-  )
-}
-
-function NavButton({
-  active,
-  onClick,
-  icon,
-  label,
-}: {
-  active: boolean
-  onClick: () => void
-  icon: ReactNode
-  label: string
-}) {
-  return (
-    <button
-      className={`flex min-h-[62px] min-w-0 flex-1 flex-col items-center justify-center rounded-2xl px-2 py-2 text-center ${
-        active ? 'bg-teal-400/20 text-teal-200' : 'text-slate-300'
-      }`}
-      onClick={onClick}
-    >
-      <span className="text-[1.65rem] leading-none">{icon}</span>
-      <span className="mt-1 text-xs font-semibold">{label}</span>
-    </button>
-  )
-}
-
-function safeDecodeURIComponent(value: string) {
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return value
-  }
-}
-
-function replaceHistorySearchParams(params: URLSearchParams) {
-  const next = params.toString()
-  const newUrl = `${window.location.pathname}${next ? `?${next}` : ''}${window.location.hash}`
-  window.history.replaceState({}, '', newUrl)
-}
-
-function encodeSharePayloadBase64Url(payload: unknown) {
-  const json = JSON.stringify(payload)
-  const bytes = new TextEncoder().encode(json)
-  let binary = ''
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte)
-  })
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
-}
-
-function decodeSharePayloadBase64Url(raw: string) {
-  const normalized = raw.replace(/-/g, '+').replace(/_/g, '/')
-  const padLength = normalized.length % 4 === 0 ? 0 : 4 - (normalized.length % 4)
-  const padded = `${normalized}${'='.repeat(padLength)}`
-  const binary = atob(padded)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  return new TextDecoder().decode(bytes)
-}
-
-function parseSharedPlaylistQuery(search: string) {
-  const params = new URLSearchParams(search)
-  if (params.get('playlist') !== '1') return null
-  const setlistId = sanitizeSharedText(params.get('setlist'), MAX_SHARED_ID_LENGTH)
-  if (!setlistId) return null
-  const requestedIndexRaw = Number.parseInt(params.get('item') ?? '0', 10)
-  const requestedIndex =
-    Number.isFinite(requestedIndexRaw) && requestedIndexRaw >= 0 ? requestedIndexRaw : 0
-  const sharedBandNameParam = sanitizeSharedText(
-    safeDecodeURIComponent(params.get('band') ?? ''),
-    MAX_SHARED_BAND_NAME_LENGTH,
-  )
-  const sharedMusiciansParam = parseSharedMusiciansPayload(params.get('musicians'))
-  const payloadEncoded = params.get('data')
-  const parsedPayload = payloadEncoded ? parseSharedPlaylistPayload(payloadEncoded) : null
-  return {
-    setlistId,
-    requestedIndex,
-    sharedBandNameParam,
-    sharedMusiciansParam,
-    parsedPayload,
-  }
-}
-
-const MAX_SHARED_PAYLOAD_PARAM_LENGTH = 200_000
-const MAX_SHARED_MUSICIANS_PARAM_LENGTH = 60_000
-const MAX_SHARED_PLAYLIST_ENTRIES = 1500
-const MAX_SHARED_MUSICIANS = 300
-const MAX_SHARED_ID_LENGTH = 120
-const MAX_SHARED_TITLE_LENGTH = 200
-const MAX_SHARED_ARTIST_LENGTH = 160
-const MAX_SHARED_URL_LENGTH = 4096
-const MAX_SHARED_TAGS_PER_ENTRY = 24
-const MAX_SHARED_ASSIGNMENTS_PER_ENTRY = 24
-const MAX_SHARED_BAND_NAME_LENGTH = 160
-const MAX_SHARED_GIG_NAME_LENGTH = 180
-const MAX_SHARED_DATE_LENGTH = 40
-const MAX_SHARED_VENUE_LENGTH = 240
-const MAX_SHARED_MUSICIAN_NAME_LENGTH = 140
-const MAX_SHARED_EMAIL_LENGTH = 254
-const MAX_SHARED_PHONE_LENGTH = 48
-const MAX_SHARED_INSTRUMENTS_PER_MUSICIAN = 16
-const MAX_SHARED_INSTRUMENT_LENGTH = 64
-
-function sanitizeSharedText(value: unknown, maxLength: number): string {
-  if (typeof value !== 'string') return ''
-  const trimmed = value.trim()
-  if (!trimmed) return ''
-  return trimmed.slice(0, maxLength)
-}
-
-function sanitizeSharedUrl(value: unknown, maxLength: number): string {
-  const trimmed = sanitizeSharedText(value, maxLength)
-  if (!trimmed) return ''
-  try {
-    const parsed = new URL(trimmed)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
-    return trimmed
-  } catch {
-    return ''
-  }
-}
-
-function sanitizeSharedStringArray(values: unknown, maxItems: number, maxItemLength: number): string[] {
-  if (!Array.isArray(values)) return []
-  const seen = new Set<string>()
-  const next: string[] = []
-  values.forEach((value) => {
-    if (next.length >= maxItems) return
-    const sanitized = sanitizeSharedText(value, maxItemLength)
-    if (!sanitized) return
-    const key = sanitized.toLowerCase()
-    if (seen.has(key)) return
-    seen.add(key)
-    next.push(sanitized)
-  })
-  return next
-}
-
-function sanitizePlaylistEntry(entry: unknown, index: number): PlaylistEntry | null {
-  if (!entry || typeof entry !== 'object') return null
-  const source = entry as Partial<PlaylistEntry>
-  const key = sanitizeSharedText(source.key, MAX_SHARED_ID_LENGTH) || `entry:${index}`
-  const title = sanitizeSharedText(source.title, MAX_SHARED_TITLE_LENGTH) || 'Untitled Song'
-  const artist = sanitizeSharedText(source.artist, MAX_SHARED_ARTIST_LENGTH)
-  const audioUrl = sanitizeSharedUrl(source.audioUrl, MAX_SHARED_URL_LENGTH)
-  const songId = sanitizeSharedText(source.songId, MAX_SHARED_ID_LENGTH)
-  const tags = sanitizeSharedStringArray(source.tags, MAX_SHARED_TAGS_PER_ENTRY, MAX_SHARED_TITLE_LENGTH)
-  const assignmentSingers = sanitizeSharedStringArray(
-    source.assignmentSingers,
-    MAX_SHARED_ASSIGNMENTS_PER_ENTRY,
-    MAX_SHARED_TITLE_LENGTH,
-  )
-  const assignmentKeys = sanitizeSharedStringArray(
-    source.assignmentKeys,
-    MAX_SHARED_ASSIGNMENTS_PER_ENTRY,
-    MAX_SHARED_TITLE_LENGTH,
-  )
-  return {
-    key,
-    title,
-    ...(artist ? { artist } : {}),
-    ...(audioUrl ? { audioUrl } : {}),
-    tags: tags.length ? tags : ['Setlist'],
-    ...(songId ? { songId } : {}),
-    ...(assignmentSingers.length ? { assignmentSingers } : {}),
-    ...(assignmentKeys.length ? { assignmentKeys } : {}),
-  }
-}
-
-function sanitizeMusician(entry: unknown, index: number): Musician | null {
-  if (!entry || typeof entry !== 'object') return null
-  const source = entry as Partial<Musician>
-  const id = sanitizeSharedText(source.id, MAX_SHARED_ID_LENGTH) || `musician:${index}`
-  const name = sanitizeSharedText(source.name, MAX_SHARED_MUSICIAN_NAME_LENGTH)
-  if (!name) return null
-  const roster = source.roster === 'sub' ? 'sub' : 'core'
-  const instruments = sanitizeSharedStringArray(
-    source.instruments,
-    MAX_SHARED_INSTRUMENTS_PER_MUSICIAN,
-    MAX_SHARED_INSTRUMENT_LENGTH,
-  )
-  const singer =
-    source.singer === 'male' || source.singer === 'female' || source.singer === 'other'
-      ? source.singer
-      : undefined
-  const email = sanitizeSharedText(source.email, MAX_SHARED_EMAIL_LENGTH)
-  const phone = sanitizeSharedText(source.phone, MAX_SHARED_PHONE_LENGTH)
-  return {
-    id,
-    name,
-    roster,
-    ...(email ? { email } : {}),
-    ...(phone ? { phone } : {}),
-    instruments,
-    ...(singer ? { singer } : {}),
-  }
-}
-
-function sanitizeMusiciansList(entries: unknown[]): Musician[] {
-  const cappedEntries = entries.length > MAX_SHARED_MUSICIANS ? entries.slice(0, MAX_SHARED_MUSICIANS) : entries
-  const deduped = new Map<string, Musician>()
-  cappedEntries.forEach((entry, index) => {
-    const sanitized = sanitizeMusician(entry, index)
-    if (!sanitized) return
-    const key = sanitized.id.toLowerCase()
-    if (deduped.has(key)) return
-    deduped.set(key, sanitized)
-  })
-  return Array.from(deduped.values())
-}
-
-function sanitizeSharedPlaylistView(view: SharedPlaylistView | null): SharedPlaylistView | null {
-  if (!view || typeof view !== 'object') return null
-  const setlistId = sanitizeSharedText(view.setlistId, MAX_SHARED_ID_LENGTH)
-  if (!setlistId) return null
-  const entriesRaw = Array.isArray(view.entries) ? view.entries : []
-  if (entriesRaw.length === 0 || entriesRaw.length > MAX_SHARED_PLAYLIST_ENTRIES) return null
-  const entries = entriesRaw
-    .map((entry, index) => sanitizePlaylistEntry(entry, index))
-    .filter((entry): entry is PlaylistEntry => Boolean(entry))
-  if (entries.length === 0) return null
-  const allEntriesRaw =
-    Array.isArray(view.allEntries) && view.allEntries.length > 0 ? view.allEntries : entriesRaw
-  const allEntries = allEntriesRaw
-    .map((entry, index) => sanitizePlaylistEntry(entry, index))
-    .filter((entry): entry is PlaylistEntry => Boolean(entry))
-  return {
-    setlistId,
-    bandName: sanitizeSharedText(view.bandName, MAX_SHARED_BAND_NAME_LENGTH) || undefined,
-    gigName: sanitizeSharedText(view.gigName, MAX_SHARED_GIG_NAME_LENGTH) || 'Shared Gig',
-    date: sanitizeSharedText(view.date, MAX_SHARED_DATE_LENGTH),
-    venueAddress: sanitizeSharedText(view.venueAddress, MAX_SHARED_VENUE_LENGTH) || undefined,
-    musicians: Array.isArray(view.musicians) ? sanitizeMusiciansList(view.musicians) : undefined,
-    entries,
-    allEntries: allEntries.length ? allEntries : entries,
-  }
-}
-
-function parseSharedPlaylistPayload(raw: string) {
-  if (!raw || raw.length > MAX_SHARED_PAYLOAD_PARAM_LENGTH) return null
-  const candidates = [raw, safeDecodeURIComponent(raw)]
-  for (const candidate of candidates) {
-    if (!candidate || candidate.length > MAX_SHARED_PAYLOAD_PARAM_LENGTH) continue
-    try {
-      const parsed = JSON.parse(candidate) as SharedPlaylistView
-      const sanitized = sanitizeSharedPlaylistView(parsed)
-      if (sanitized) return sanitized
-    } catch {
-      // Continue to base64 decode attempts.
-    }
-    try {
-      const decoded = decodeSharePayloadBase64Url(candidate)
-      const parsed = JSON.parse(decoded) as SharedPlaylistView
-      const sanitized = sanitizeSharedPlaylistView(parsed)
-      if (sanitized) return sanitized
-    } catch {
-      // Continue to next candidate.
-    }
-  }
-  return null
-}
-
-function parseSharedMusiciansPayload(raw: string | null) {
-  if (!raw) return []
-  if (raw.length > MAX_SHARED_MUSICIANS_PARAM_LENGTH) return []
-  const candidates = [raw, safeDecodeURIComponent(raw)]
-  for (const candidate of candidates) {
-    if (!candidate || candidate.length > MAX_SHARED_MUSICIANS_PARAM_LENGTH) continue
-    try {
-      const parsed = JSON.parse(candidate) as Musician[]
-      if (Array.isArray(parsed)) return sanitizeMusiciansList(parsed)
-    } catch {
-      // Continue to base64 decode attempts.
-    }
-    try {
-      const decoded = decodeSharePayloadBase64Url(candidate)
-      const parsed = JSON.parse(decoded) as Musician[]
-      if (Array.isArray(parsed)) return sanitizeMusiciansList(parsed)
-    } catch {
-      // Continue to next candidate.
-    }
-  }
-  return []
-}
-
-function openExternalUrlSafely(url: string) {
-  const sanitized = sanitizeSharedUrl(url, MAX_SHARED_URL_LENGTH)
-  if (!sanitized) return
-  window.open(sanitized, '_blank', 'noopener,noreferrer')
-}
-
-function getSpotifyEmbedUrl(url: string | null) {
-  try {
-    if (!url) return ''
-    const parsed = new URL(url)
-    if (parsed.hostname.includes('open.spotify.com')) {
-      return `https://open.spotify.com/embed${parsed.pathname}`
-    }
-  } catch {
-    return url ?? ''
-  }
-  return url ?? ''
 }
 
 export default App

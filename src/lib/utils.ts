@@ -46,6 +46,12 @@ export const parseOriginFromUrl = (value: string): string => {
   }
 }
 
+export function replaceHistorySearchParams(params: URLSearchParams) {
+  const next = params.toString()
+  const newUrl = `${window.location.pathname}${next ? `?${next}` : ''}${window.location.hash}`
+  window.history.replaceState({}, '', newUrl)
+}
+
 export const resolveAuthRedirectOrigin = (
   currentOrigin: string,
   configuredAppUrl: string,

@@ -50,6 +50,55 @@ export function getLibrarySeedTagsForSection(
   return [normalized]
 }
 
+export function isBareStyleSectionLabel(section: string): boolean {
+  const normalized = normalizeSetlistSectionLabel(section).toLowerCase()
+  return SETLIST_STYLE_TAGS.some((tag) => tag.toLowerCase() === normalized)
+}
+
+/**
+ * Map a leftover assignment (e.g. "Dinner") onto the current section label
+ * after a rename ("Dinner Set 1" / "Cocktail Hour"). Exact labels win.
+ * Bare style tags prefer "Style Set 1", then the first same-style section.
+ * Other stale labels remap only when exactly one same-style section exists.
+ */
+export function remapStaleSectionAssignment(
+  assignedSection: string,
+  currentSections: string[],
+  getStyle?: (section: string) => string | null | undefined,
+): string | null {
+  const assigned = normalizeSetlistSectionLabel(assignedSection)
+  if (!assigned) return null
+  const assignedLower = assigned.toLowerCase()
+  const normalizedCurrent = currentSections
+    .map((section) => normalizeSetlistSectionLabel(section))
+    .filter(Boolean)
+  const exact = normalizedCurrent.find((section) => section.toLowerCase() === assignedLower)
+  if (exact) return exact
+
+  const assignedStyle =
+    inferSectionStyleTag(assigned) ||
+    normalizeSetlistSectionLabel(getStyle?.(assigned) ?? '') ||
+    null
+  if (!assignedStyle) return null
+
+  const family = normalizedCurrent.filter((section) => {
+    const style =
+      normalizeSetlistSectionLabel(getStyle?.(section) ?? '') || inferSectionStyleTag(section)
+    return Boolean(style) && style.toLowerCase() === assignedStyle.toLowerCase()
+  })
+  if (family.length === 0) return null
+
+  if (isBareStyleSectionLabel(assigned)) {
+    const set1 = family.find(
+      (section) => section.toLowerCase() === `${assignedStyle.toLowerCase()} set 1`,
+    )
+    return set1 ?? family[0]
+  }
+
+  if (family.length === 1) return family[0]
+  return null
+}
+
 export function sectionsShareStyleFamily(
   sectionA: string,
   sectionB: string,

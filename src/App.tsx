@@ -106,11 +106,13 @@ import {
   getSectionDeleteKey,
   getSectionFromPanel,
   inferSectionStyleTag,
+  isBareStyleSectionLabel,
   makeGigSectionDeletedTag,
   makeGigSectionTag,
   normalizeSetlistSectionLabel,
   parseGigSectionDeletedTag,
   parseGigSectionTag,
+  remapStaleSectionAssignment,
   sectionsShareStyleFamily,
   SETLIST_STYLE_TAGS,
   setlistPanelKey,
@@ -688,6 +690,8 @@ function App() {
     selectedSongIds: string[]
   } | null>(null)
   const [sectionSaveStatus, setSectionSaveStatus] = useState<string | null>(null)
+  const [showRestoreGigConfirm, setShowRestoreGigConfirm] = useState(false)
+  const [restoreGigInProgress, setRestoreGigInProgress] = useState(false)
   const [showDeleteSetlistSectionConfirm, setShowDeleteSetlistSectionConfirm] = useState(false)
   const [pendingDeleteSetlistSection, setPendingDeleteSetlistSection] = useState<string | null>(null)
   const [gigHiddenSetlistSections, setGigHiddenSetlistSections] = useState<Record<string, string[]>>(
@@ -1252,22 +1256,45 @@ function App() {
       const normalizedSection = normalizeSetlistSectionLabel(section).toLowerCase()
       if (!normalizedSection) return false
       if (getDeletedSectionSongIds(gigId, section).has(song.id)) return false
-      if (!options.ignoreOverride) {
-        const overrideSections = getGigSongSections(gigId, song.id)
-        if (
-          overrideSections.some(
-            (overrideSection) => overrideSection.trim().toLowerCase() === normalizedSection,
-          )
-        ) {
-          return true
-        }
-        // Section membership is controlled by explicit gig assignments only.
-        // Song tags are reference metadata and should not route songs into sections.
-        return false
+      if (options.ignoreOverride) return false
+      const overrideSections = getGigSongSections(gigId, song.id)
+      if (
+        overrideSections.some(
+          (overrideSection) => overrideSection.trim().toLowerCase() === normalizedSection,
+        )
+      ) {
+        return true
       }
-      return false
+      // Leftover "Dinner"/"Dance"/"Latin" tags must still land in renamed
+      // columns like "Dinner Set 1" so Gig Mode does not look empty.
+      const savedSections = (gigSetlistSections[gigId] ?? [])
+        .map((label) => normalizeSetlistSectionLabel(label))
+        .filter(Boolean)
+      const fallbackSections = Array.from(
+        new Set(
+          Object.values(gigSongSectionOverrides[gigId] ?? {})
+            .flat()
+            .map((label) => normalizeSetlistSectionLabel(label))
+            .filter(Boolean),
+        ),
+      )
+      const currentSections = savedSections.length ? savedSections : fallbackSections
+      return overrideSections.some((overrideSection) => {
+        const remapped = remapStaleSectionAssignment(
+          overrideSection,
+          currentSections,
+          (label) => getStoredSectionStyle(gigId, label),
+        )
+        return remapped?.toLowerCase() === normalizedSection
+      })
     },
-    [getDeletedSectionSongIds, getGigSongSections],
+    [
+      getDeletedSectionSongIds,
+      getGigSongSections,
+      getStoredSectionStyle,
+      gigSetlistSections,
+      gigSongSectionOverrides,
+    ],
   )
   const normalizeTagIdentity = (value: string) =>
     value
@@ -1454,7 +1481,17 @@ function App() {
     const fromSongs = currentSetlist.songIds.flatMap((songId) => {
       const song = appState.songs.find((item) => item.id === songId)
       if (!song) return []
-      return getGigSongSections(currentSetlist.id, song.id)
+      return getGigSongSections(currentSetlist.id, song.id).map((label) => {
+        const remapped = remapStaleSectionAssignment(
+          label,
+          saved,
+          (section) => getStoredSectionStyle(currentSetlist.id, section),
+        )
+        if (remapped) return remapped
+        // Hide leftover bare style labels when a renamed family section exists.
+        if (isBareStyleSectionLabel(label) && saved.length > 0) return ''
+        return label
+      })
     })
     const seen = new Set<string>()
     const merged = [...saved, ...fromSongs]
@@ -1472,6 +1509,7 @@ function App() {
   }, [
     appState.songs,
     currentSetlist,
+    getStoredSectionStyle,
     gigHiddenSetlistSections,
     gigSetlistSections,
     getGigSongSections,
@@ -1732,6 +1770,20 @@ function App() {
       .filter((setlist) => setlist.id !== currentSetlist?.id)
       .sort((a, b) => b.date.localeCompare(a.date))
   }, [appState.setlists, currentSetlist?.id])
+  const preferredRestoreGig = useMemo(() => {
+    const withSongs = recentGigs.filter((gig) => gig.songIds.length > 0)
+    if (withSongs.length === 0) return null
+    const currentDate = currentSetlistDateISO
+    const currentWeekday = currentDate ? new Date(`${currentDate}T12:00:00`).getDay() : null
+    if (currentWeekday != null) {
+      const sameWeekday = withSongs.find((gig) => {
+        const date = normalizeGigDateISO(gig.date)
+        return date ? new Date(`${date}T12:00:00`).getDay() === currentWeekday : false
+      })
+      if (sameWeekday) return sameWeekday
+    }
+    return withSongs[0]
+  }, [currentSetlistDateISO, recentGigs])
 
   const buildCompletion = useMemo(() => {
     const base: Record<string, boolean> = {
@@ -5854,6 +5906,31 @@ function App() {
     }
   }
 
+  const restoreEmptySectionsFromLastGig = async () => {
+    if (!currentSetlist || !preferredRestoreGig) return
+    const sourceGigId = preferredRestoreGig.id
+    const sectionsToRestore = emptySetSections.length > 0 ? emptySetSections : orderedSetSections
+    setShowRestoreGigConfirm(false)
+    setRestoreGigInProgress(true)
+    setSectionSaveStatus('Restoring setlists from last gig...')
+    try {
+      for (const section of sectionsToRestore) {
+        const sourceSongIds = getSourceSectionSongIds(section, preferredRestoreGig)
+        if (sourceSongIds.length === 0) continue
+        const saved = await importSectionFromGig(section, sourceGigId, sourceSongIds)
+        if (!saved) {
+          setSectionSaveStatus(`Restore stopped at ${section}. Try that section again.`)
+          window.setTimeout(() => setSectionSaveStatus(null), 3600)
+          return
+        }
+      }
+      setSectionSaveStatus('Setlists restored from last gig.')
+      window.setTimeout(() => setSectionSaveStatus(null), 3200)
+    } finally {
+      setRestoreGigInProgress(false)
+    }
+  }
+
   const importSectionFromPaste = (
     section: string,
     text: string,
@@ -6057,6 +6134,30 @@ function App() {
       .filter((song): song is Song => Boolean(song))
       .filter((song) => songMatchesGigSection(song, section, currentSetlist.id))
   }, [appState.songs, currentSetlist, songMatchesGigSection])
+  const unassignedGigSongs = useMemo(() => {
+    if (!currentSetlist) return []
+    return currentSetlist.songIds
+      .map((songId) => appState.songs.find((song) => song.id === songId))
+      .filter((song): song is Song => Boolean(song))
+      .filter(
+        (song) =>
+          !orderedSetSections.some((section) =>
+            songMatchesGigSection(song, section, currentSetlist.id),
+          ),
+      )
+  }, [appState.songs, currentSetlist, orderedSetSections, songMatchesGigSection])
+  const emptySetSections = useMemo(
+    () => orderedSetSections.filter((section) => getSectionSongs(section).length === 0),
+    [getSectionSongs, orderedSetSections],
+  )
+  const showRestoreGigBanner = Boolean(
+    currentSetlist &&
+      preferredRestoreGig &&
+      !restoreGigInProgress &&
+      (emptySetSections.length > 0 || unassignedGigSongs.length > 0) &&
+      (currentSetlistDateISO === operationalTodayISO ||
+        (orderedSetSections.length > 0 && emptySetSections.length === orderedSetSections.length)),
+  )
   const manualSectionOrderSongs = useMemo(() => {
     if (!currentSetlist || !manualSectionOrderSection) return []
     return getSectionSongs(manualSectionOrderSection)
@@ -8861,6 +8962,21 @@ function App() {
         .filter((value) => value.includes(`${GIG_SECTION_TAG_PREFIX}`)),
     )
     const backfillSectionRows: Array<{ id: string; song_id: string; tag: string }> = []
+    const staleSectionTagDeletes: Array<{ song_id: string; tag: string }> = []
+    const uiSectionsByGig = new Map<string, string[]>()
+    const uiStylesByGig = new Map<string, Record<string, string>>()
+    ;(gigsRes.data ?? []).forEach((row) => {
+      const ui = parseGigUiState((row as { ui_state?: unknown }).ui_state)
+      if (ui?.sections?.length) {
+        uiSectionsByGig.set(
+          row.id,
+          ui.sections.map((section) => normalizeSetlistSectionLabel(section)).filter(Boolean),
+        )
+      }
+      if (ui?.sectionStyles && Object.keys(ui.sectionStyles).length) {
+        uiStylesByGig.set(row.id, ui.sectionStyles)
+      }
+    })
     const ensureKnownLegacySection = (
       knownSections: Map<string, string>,
       family: 'dance' | 'dinner' | 'latin',
@@ -8876,7 +8992,70 @@ function App() {
     }
     setlists.forEach((setlist) => {
       const existingBySong = gigSectionOverrideMap.get(setlist.id) ?? {}
+      const styleLookup = (section: string) => {
+        const byLabel = uiStylesByGig.get(setlist.id) ?? {}
+        const normalized = normalizeSetlistSectionLabel(section)
+        return (
+          normalizeSetlistSectionLabel(byLabel[normalized] ?? '') ||
+          normalizeSetlistSectionLabel(byLabel[section] ?? '') ||
+          inferSectionStyleTag(normalized)
+        )
+      }
+      const currentSections = Array.from(
+        new Set([
+          ...(uiSectionsByGig.get(setlist.id) ?? []),
+          ...Object.values(existingBySong)
+            .flat()
+            .map((section) => normalizeSetlistSectionLabel(section))
+            .filter(Boolean),
+        ]),
+      )
+      Object.entries(existingBySong).forEach(([songId, sections]) => {
+        const previous = (sections ?? [])
+          .map((section) => normalizeSetlistSectionLabel(section))
+          .filter(Boolean)
+        const nextSections = Array.from(
+          new Set(
+            previous
+              .map(
+                (section) =>
+                  remapStaleSectionAssignment(section, currentSections, styleLookup) || section,
+              )
+              .filter(Boolean),
+          ),
+        )
+        const changed =
+          nextSections.length !== previous.length ||
+          nextSections.some(
+            (section, index) => section.toLowerCase() !== (previous[index] ?? '').toLowerCase(),
+          )
+        if (!changed) return
+        existingBySong[songId] = nextSections
+        previous.forEach((oldSection) => {
+          if (nextSections.some((section) => section.toLowerCase() === oldSection.toLowerCase())) {
+            return
+          }
+          staleSectionTagDeletes.push({
+            song_id: songId,
+            tag: makeGigSectionTag(setlist.id, oldSection),
+          })
+        })
+        nextSections.forEach((section) => {
+          const sectionTag = makeGigSectionTag(setlist.id, section)
+          const dedupeKey = `${songId}::${sectionTag}`
+          if (existingGigSectionTags.has(dedupeKey)) return
+          existingGigSectionTags.add(dedupeKey)
+          backfillSectionRows.push({
+            id: createId(),
+            song_id: songId,
+            tag: sectionTag,
+          })
+        })
+      })
       const knownSections = new Map<string, string>()
+      currentSections.forEach((section) => {
+        knownSections.set(section.toLowerCase(), section)
+      })
       Object.values(existingBySong).forEach((sections) => {
         sections.forEach((section) => {
           const normalized = normalizeSetlistSectionLabel(section)
@@ -8924,6 +9103,14 @@ function App() {
         inferFamily('dance')
         inferFamily('dinner')
         inferFamily('latin')
+        currentSections.forEach((section) => {
+          const seeds = getLibrarySeedTagsForSection(section, styleLookup(section)).map((tag) =>
+            tag.toLowerCase(),
+          )
+          if (seeds.some((seed) => tagSet.has(seed))) {
+            addInferred(section)
+          }
+        })
         if (inferredSections.length === 0) return
         existingBySong[songId] = inferredSections
         inferredSections.forEach((section) => {
@@ -9107,6 +9294,18 @@ function App() {
 
     if (backfillSectionRows.length > 0 && supabase && activeBandId) {
       void supabase.from('SetlistSongTags').insert(backfillSectionRows.map((row) => withBandId(row)))
+    }
+    if (staleSectionTagDeletes.length > 0 && supabase && activeBandId) {
+      void Promise.all(
+        staleSectionTagDeletes.map((row) =>
+          supabase
+            .from('SetlistSongTags')
+            .delete()
+            .eq('band_id', activeBandId)
+            .eq('song_id', row.song_id)
+            .eq('tag', row.tag),
+        ),
+      )
     }
 
     if (pollutedTagValues.length > 0 && supabase && activeBandId) {
@@ -11277,6 +11476,7 @@ function App() {
       showAddSetlistModal ||
       showSectionAddSongsModal ||
       showDeleteSetlistSectionConfirm ||
+      showRestoreGigConfirm ||
       showSpecialRequestModal ||
       showSetlistModal ||
       showPrintPreview
@@ -11311,6 +11511,7 @@ function App() {
     showAddSetlistModal,
     showSectionAddSongsModal,
     showDeleteSetlistSectionConfirm,
+    showRestoreGigConfirm,
     showSpecialRequestModal,
     showSetlistModal,
     showPrintPreview,
@@ -12881,6 +13082,27 @@ function App() {
             <div
               className={`flex flex-col gap-6 ${isPastGigLockedForAdmin ? 'past-gig-locked-surface' : ''}`}
             >
+            {isAdmin && showRestoreGigBanner && preferredRestoreGig && (
+              <div className="rounded-3xl border border-amber-300/40 bg-amber-400/10 p-4">
+                <p className="text-sm font-semibold text-amber-100">
+                  {currentSetlistDateISO === operationalTodayISO
+                    ? "Tonight's setlists look empty."
+                    : 'These setlists look empty.'}
+                </p>
+                <p className="mt-1 text-xs text-amber-50/90">
+                  Restore songs from {preferredRestoreGig.gigName} · {preferredRestoreGig.date}
+                  {emptySetSections.length > 0
+                    ? ` into ${emptySetSections.join(', ')}.`
+                    : '.'}
+                </p>
+                <button
+                  className="mt-3 rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                  onClick={() => setShowRestoreGigConfirm(true)}
+                >
+                  Restore songs from last gig
+                </button>
+              </div>
+            )}
             {isAdmin && (
               <div className="grid gap-3 sm:grid-cols-2">
                 {[
@@ -13003,6 +13225,31 @@ function App() {
                     </div>
                   )
                 })}
+                {unassignedGigSongs.length > 0 && (
+                  <div className="rounded-3xl border border-amber-300/40 bg-amber-400/10 p-4 sm:col-span-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold text-amber-100">
+                        Unassigned songs ({unassignedGigSongs.length})
+                      </h3>
+                    </div>
+                    <p className="mt-1 text-[11px] text-amber-50/80">
+                      These are on this gig but not in a Dinner/Dance/Latin setlist yet.
+                    </p>
+                    <div className="mt-3 space-y-1.5">
+                      {unassignedGigSongs.slice(0, 12).map((song) => (
+                        <div key={`unassigned-card-${song.id}`} className="text-sm text-slate-100">
+                          {song.title}
+                          <span className="text-slate-400"> — {song.artist || 'Unknown'}</span>
+                        </div>
+                      ))}
+                      {unassignedGigSongs.length > 12 && (
+                        <div className="text-xs text-slate-400">
+                          +{unassignedGigSongs.length - 12} more
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <button
                   className="flex min-h-[96px] flex-col items-start justify-between rounded-3xl border border-dashed border-teal-300/50 bg-gradient-to-br from-teal-500/30 via-slate-900/40 to-slate-900/60 px-4 py-4 text-left text-white shadow-[0_0_18px_rgba(15,23,42,0.35)]"
                   onClick={() => {
@@ -15959,6 +16206,21 @@ function App() {
         </div>
       )}
 
+      {showRestoreGigConfirm && preferredRestoreGig && (
+        <ConfirmModal
+          title="Restore setlists from last gig?"
+          message={`This adds songs from ${preferredRestoreGig.gigName} (${preferredRestoreGig.date}) into empty sections on this gig. Existing songs stay in place.`}
+          confirmLabel={restoreGigInProgress ? 'Restoring…' : 'Restore songs'}
+          onCancel={() => setShowRestoreGigConfirm(false)}
+          onConfirm={() => {
+            if (restoreGigInProgress) return
+            void restoreEmptySectionsFromLastGig()
+          }}
+          zClass="z-[120]"
+          maxWidth="max-w-md"
+        />
+      )}
+
       {showDeleteSetlistSectionConfirm && (
         <div
           className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/80 px-4 py-6"
@@ -16722,6 +16984,19 @@ function App() {
                     </div>
                   </div>
                 ))}
+                {unassignedGigSongs.length > 0 && (
+                  <div className="rounded-3xl border border-amber-300/40 bg-amber-400/10 p-5">
+                    <h3 className="text-sm font-semibold text-amber-100">Unassigned songs</h3>
+                    <div className="mt-3 space-y-2">
+                      {unassignedGigSongs.map((song) => (
+                        <div key={`unassigned-print-${song.id}`} className="text-sm text-slate-100">
+                          {song.title}
+                          <span className="text-slate-400"> — {song.artist || 'Unknown'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -16854,6 +17129,27 @@ function App() {
                 </div>
               </div>
             </div>
+
+            {showRestoreGigBanner && preferredRestoreGig && (
+              <div className="border-b border-amber-300/30 bg-amber-400/10 px-5 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-amber-100">
+                      Setlists look empty for this gig.
+                    </p>
+                    <p className="text-xs text-amber-50/85">
+                      Restore from {preferredRestoreGig.gigName} · {preferredRestoreGig.date}
+                    </p>
+                  </div>
+                  <button
+                    className="rounded-xl bg-teal-400/90 px-4 py-2 text-sm font-semibold text-slate-950"
+                    onClick={() => setShowRestoreGigConfirm(true)}
+                  >
+                    Restore last gig
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div
               className="min-h-0 flex-1 overflow-auto px-4 pb-4 pt-4 md:px-6"
@@ -17192,6 +17488,43 @@ function App() {
                     </div>
                   )
                 })}
+                {unassignedGigSongs.length > 0 && (
+                  <div className="print-section-box gig-sheet-card md:min-w-[340px] md:w-[340px] md:shrink-0 md:snap-start">
+                    <div className="print-section-title">Unassigned</div>
+                    <div className="print-list">
+                      {unassignedGigSongs
+                        .filter((song) => {
+                          if (!gigSheetSongSearchQuery) return true
+                          const titleArtist = `${song.title} ${song.artist ?? ''}`.toLowerCase()
+                          return titleArtist.includes(gigSheetSongSearchQuery)
+                        })
+                        .map((song) => (
+                          <div
+                            key={`gig-sheet-unassigned-${song.id}`}
+                            role="button"
+                            tabIndex={0}
+                            className="print-row song-row gig-sheet-row cursor-pointer"
+                            onClick={() => markGigSongAsSelected(song.id)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                markGigSongAsSelected(song.id)
+                              }
+                            }}
+                          >
+                            <div className="gig-sheet-song-main">
+                              <div className="song-name text-slate-900">
+                                <span className="gig-sheet-title-inline">{song.title}</span>{' '}
+                                <span className="gig-sheet-artist-inline">
+                                  - {song.artist || 'Unknown'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
